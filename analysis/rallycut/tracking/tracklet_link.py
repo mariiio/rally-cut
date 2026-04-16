@@ -30,6 +30,10 @@ from typing import TYPE_CHECKING
 import cv2
 import numpy as np
 
+from rallycut.tracking.merge_veto import (
+    LEARNED_MERGE_VETO_COS,
+    learned_cosine_veto,
+)
 from rallycut.tracking.player_tracker import PlayerPosition
 
 if TYPE_CHECKING:
@@ -56,24 +60,6 @@ DEFAULT_MAX_MERGE_VELOCITY_METERS = float(
     os.environ.get("RALLYCUT_MAX_MERGE_VELOCITY_METERS", 2.5)
 )
 DEFAULT_MERGE_VELOCITY_WINDOW = 10  # Frames around junction to check
-
-# Session 6 — learned-head veto on same-team merges.
-# When a candidate merge pair has learned_store embeddings available on BOTH
-# sides, compute the median cosine similarity. If cos < LEARNED_MERGE_VETO_COS
-# the merge is rejected (cost set to 1.0). Default 0.0 → disabled →
-# byte-identical to pre-Session-6 behaviour.
-#
-# Rationale: raw BoT-SORT produces zero same-team swaps across 43 GT rallies
-# (tracks fragment, never swap). All SAME_TEAM_SWAPs observed in post-
-# processed audits are CREATED HERE by greedy appearance-merging when two
-# teammate fragments have similar HSV histograms. The veto catches exactly
-# those bad merges.
-LEARNED_MERGE_VETO_COS = float(
-    os.environ.get("LEARNED_MERGE_VETO_COS", "0.0")
-)
-LEARNED_MERGE_VETO_MIN_FRAMES = 5
-LEARNED_MERGE_VETO_MAX_SAMPLES = 30
-
 
 # Margin (metres) outside the court lines within which we still trust the
 # homography. Players chasing balls into the dead zone sit slightly outside
@@ -339,70 +325,6 @@ def _bhattacharyya_distance(hist1: np.ndarray, hist2: np.ndarray) -> float:
     return float(cv2.compareHist(hist1, hist2, cv2.HISTCMP_BHATTACHARYYA))
 
 
-def _segment_median_embedding(
-    learned_store: LearnedEmbeddingStore | None,
-    track_id: int,
-    frames: set[int],
-    min_frames: int = LEARNED_MERGE_VETO_MIN_FRAMES,
-    max_samples: int = LEARNED_MERGE_VETO_MAX_SAMPLES,
-) -> np.ndarray | None:
-    """Median learned-ReID embedding for a track over ``frames``, L2-renormed.
-
-    Returns None if the store is absent or fewer than ``min_frames`` valid
-    embeddings exist in the frame set. Samples up to ``max_samples``
-    uniformly-spaced frames when the fragment is longer (median over 30
-    crops is robust to occlusion-contaminated tails without quadratic cost).
-    """
-    if learned_store is None or not learned_store.has_data():
-        return None
-    sorted_frames = sorted(frames)
-    if not sorted_frames:
-        return None
-    if len(sorted_frames) > max_samples:
-        step = len(sorted_frames) / max_samples
-        sorted_frames = [sorted_frames[int(i * step)] for i in range(max_samples)]
-    vectors: list[np.ndarray] = []
-    for fn in sorted_frames:
-        emb = learned_store.get(track_id, fn)
-        if emb is not None:
-            vectors.append(emb)
-    if len(vectors) < min_frames:
-        return None
-    stack = np.stack(vectors).astype(np.float32)
-    med = np.median(stack, axis=0)
-    norm = float(np.linalg.norm(med))
-    if norm < 1e-8:
-        return None
-    normed: np.ndarray = (med / norm).astype(np.float32)
-    return normed
-
-
-def _learned_merge_would_veto(
-    learned_store: LearnedEmbeddingStore | None,
-    track_id_a: int,
-    track_id_b: int,
-    tracks: dict[int, dict],
-    threshold: float = LEARNED_MERGE_VETO_COS,
-) -> bool:
-    """Return True when the learned head says these two fragments are
-    different players — i.e. the merge would be a false-positive teammate
-    link. Abstain (return False = don't block) when embeddings are missing,
-    at either side, or when the feature is disabled (threshold ≤ 0).
-    """
-    if threshold <= 0.0:
-        return False
-    info_a = tracks.get(track_id_a)
-    info_b = tracks.get(track_id_b)
-    if info_a is None or info_b is None:
-        return False
-    emb_a = _segment_median_embedding(learned_store, track_id_a, info_a["frames"])
-    emb_b = _segment_median_embedding(learned_store, track_id_b, info_b["frames"])
-    if emb_a is None or emb_b is None:
-        return False
-    cos_sim = float(np.dot(emb_a, emb_b))
-    return cos_sim < threshold
-
-
 def _tracks_overlap_temporally(
     frames_a: set[int],
     frames_b: set[int],
@@ -494,8 +416,11 @@ def _greedy_merge(
             dist_matrix[best_j, best_i] = 1.0
             continue
 
-        if _learned_merge_would_veto(
-            learned_store, canonical, merged, tracks, learned_veto_threshold,
+        if learned_cosine_veto(
+            learned_store,
+            canonical, tracks[canonical]["frames"],
+            merged, tracks[merged]["frames"],
+            threshold=learned_veto_threshold,
         ):
             logger.info(
                 f"Tracklet link: blocked merge {merged} -> {canonical} "
@@ -623,8 +548,11 @@ def _swap_optimize(
                 positions, frag_tid, m_tid, calibrator=calibrator,
             ):
                 return False
-            if _learned_merge_would_veto(
-                learned_store, frag_tid, m_tid, tracks, learned_veto_threshold,
+            if learned_cosine_veto(
+                learned_store,
+                frag_tid, tracks[frag_tid]["frames"],
+                m_tid, tracks[m_tid]["frames"],
+                threshold=learned_veto_threshold,
             ):
                 return False
         return True

@@ -876,6 +876,7 @@ class TestLearnedMergeVeto:
     def test_merge_vetoed_on_different_learned_embeddings(self) -> None:
         """Orthogonal learned embeddings at threshold 0.5 trigger veto."""
         from rallycut.tracking import tracklet_link as tl
+        from rallycut.tracking.merge_veto import learned_cosine_veto
         positions, color_store, learned = self._setup_mergeable_pair()
         rng = np.random.default_rng(1)
         vec_a = rng.standard_normal(128)
@@ -885,13 +886,14 @@ class TestLearnedMergeVeto:
 
         # Build track summary from positions BEFORE any mutation.
         tracks = tl._compute_track_summary(positions)
-        assert tl._learned_merge_would_veto(learned, 1, 2, tracks, 0.5) is True
+        assert learned_cosine_veto(learned, 1, tracks[1]["frames"], 2, tracks[2]["frames"], threshold=0.5) is True
         # Threshold 0 (default env) → disabled, never vetoes.
-        assert tl._learned_merge_would_veto(learned, 1, 2, tracks, 0.0) is False
+        assert learned_cosine_veto(learned, 1, tracks[1]["frames"], 2, tracks[2]["frames"], threshold=0.0) is False
 
     def test_merge_allowed_on_matching_learned_embeddings(self) -> None:
         """Same-player fragments (matching learned embeddings) should merge."""
         from rallycut.tracking import tracklet_link as tl
+        from rallycut.tracking.merge_veto import learned_cosine_veto
         positions, color_store, learned = self._setup_mergeable_pair()
         rng = np.random.default_rng(2)
         vec = rng.standard_normal(128)
@@ -900,11 +902,12 @@ class TestLearnedMergeVeto:
 
         tracks = tl._compute_track_summary(positions)
         # Very high threshold (0.99): matching vectors (cos≈1) should still pass.
-        assert tl._learned_merge_would_veto(learned, 1, 2, tracks, 0.99) is False
+        assert learned_cosine_veto(learned, 1, tracks[1]["frames"], 2, tracks[2]["frames"], threshold=0.99) is False
 
     def test_veto_abstains_on_insufficient_embeddings(self) -> None:
         """Fewer than MIN_FRAMES embeddings on either side → abstain (no veto)."""
         from rallycut.tracking import tracklet_link as tl
+        from rallycut.tracking.merge_veto import learned_cosine_veto
         positions, color_store, learned = self._setup_mergeable_pair()
         rng = np.random.default_rng(3)
         # Only 2 embeddings on track 1 (below MIN_FRAMES=5).
@@ -912,17 +915,18 @@ class TestLearnedMergeVeto:
         _seed_learned(learned, 2, range(60, 110), rng.standard_normal(128))
 
         tracks = tl._compute_track_summary(positions)
-        assert tl._learned_merge_would_veto(learned, 1, 2, tracks, 0.5) is False
+        assert learned_cosine_veto(learned, 1, tracks[1]["frames"], 2, tracks[2]["frames"], threshold=0.5) is False
 
     def test_veto_abstains_when_store_missing_or_empty(self) -> None:
         """No learned_store or empty store → never veto."""
         from rallycut.tracking import tracklet_link as tl
         from rallycut.tracking.color_repair import LearnedEmbeddingStore
+        from rallycut.tracking.merge_veto import learned_cosine_veto
         positions, _color_store, _ = self._setup_mergeable_pair()
         tracks = tl._compute_track_summary(positions)
-        assert tl._learned_merge_would_veto(None, 1, 2, tracks, 0.5) is False
+        assert learned_cosine_veto(None, 1, tracks[1]["frames"], 2, tracks[2]["frames"], threshold=0.5) is False
         empty = LearnedEmbeddingStore()
-        assert tl._learned_merge_would_veto(empty, 1, 2, tracks, 0.5) is False
+        assert learned_cosine_veto(empty, 1, tracks[1]["frames"], 2, tracks[2]["frames"], threshold=0.5) is False
 
     def test_veto_end_to_end_blocks_merge(self) -> None:
         """Full link_tracklets_by_appearance call with distinct embeddings
@@ -930,6 +934,7 @@ class TestLearnedMergeVeto:
         """
         import importlib
 
+        import rallycut.tracking.merge_veto as mv
         import rallycut.tracking.tracklet_link as tl
         positions, color_store, learned = self._setup_mergeable_pair()
         rng = np.random.default_rng(4)
@@ -940,6 +945,9 @@ class TestLearnedMergeVeto:
         import os
         os.environ["LEARNED_MERGE_VETO_COS"] = "0.5"
         try:
+            # Reload merge_veto first so its module-level constant re-reads the env var,
+            # then reload tracklet_link so its re-imported constant is up to date.
+            mv = importlib.reload(mv)
             tl = importlib.reload(tl)
             from rallycut.tracking.tracklet_link import (
                 link_tracklets_by_appearance as link_reloaded,
@@ -953,4 +961,5 @@ class TestLearnedMergeVeto:
             assert merges == 0, "veto should have blocked the merge"
         finally:
             os.environ.pop("LEARNED_MERGE_VETO_COS", None)
-            importlib.reload(tl)  # restore default (threshold=0)
+            importlib.reload(mv)  # restore default (threshold=0)
+            importlib.reload(tl)
