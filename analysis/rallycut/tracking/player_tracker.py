@@ -1587,6 +1587,15 @@ class PlayerTracker:
                 )
 
                 # Step 0c: Appearance-based tracklet linking
+                # NOTE: the court-plane velocity gate in tracklet_link.py is
+                # wired for `calibrator=` but is INACTIVE by default — the
+                # 2026-04-16 sweep (see memory/player_tracking_audit_...)
+                # measured a net NO-GO: per-rally regressions exceeded the
+                # 0.5pp ship gate on 5-7 rallies at every threshold 1.5-10 m.
+                # Wins on pred-exchange-swap rallies (fad29c31, 209be896)
+                # are real but so are losses on edge-case calibrations.
+                # Re-activate by passing calibrator=court_calibrator once the
+                # regression class is addressed (see NO-GO memo for follow-up).
                 positions, num_appearance_links = link_tracklets_by_appearance(
                     positions, color_store,
                     appearance_store=appearance_store,

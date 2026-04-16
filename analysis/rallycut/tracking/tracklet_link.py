@@ -24,6 +24,7 @@ general MOT linking because we know the target track count.
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING
 
 import cv2
@@ -32,6 +33,7 @@ import numpy as np
 from rallycut.tracking.player_tracker import PlayerPosition
 
 if TYPE_CHECKING:
+    from rallycut.court.calibration import CourtCalibrator
     from rallycut.tracking.appearance_descriptor import AppearanceDescriptorStore
     from rallycut.tracking.color_repair import ColorHistogramStore
 
@@ -44,33 +46,115 @@ DEFAULT_MIN_TRACK_FRAMES = 5  # Minimum frames in a track to participate in link
 # Velocity gate: reject merges where the junction between fragments creates
 # displacement exceeding this threshold within the window. Prevents merging
 # same-appearance fragments from different players at different court positions.
-DEFAULT_MAX_MERGE_VELOCITY = 0.20  # Max displacement across junction
+DEFAULT_MAX_MERGE_VELOCITY = 0.20  # Max displacement across junction (image-plane fallback)
+# Court-plane threshold in metres: ~2.5m over 10 frames ≈ 7.5 m/s (Olympic
+# sprint cap). Removes image-plane scale-dependence (0.10 normalized means ~1m
+# at the net but >3m at the baseline — a single image-plane constant cannot
+# serve both regimes). Env override `RALLYCUT_MAX_MERGE_VELOCITY_METERS` is
+# supported for threshold sweeps without code changes.
+DEFAULT_MAX_MERGE_VELOCITY_METERS = float(
+    os.environ.get("RALLYCUT_MAX_MERGE_VELOCITY_METERS", 2.5)
+)
 DEFAULT_MERGE_VELOCITY_WINDOW = 10  # Frames around junction to check
+
+
+# Margin (metres) outside the court lines within which we still trust the
+# homography. Players chasing balls into the dead zone sit slightly outside
+# the court rectangle; pure homography extrapolation is reliable within a
+# couple metres. Beyond that (e.g. the far-sideline "audience" region just
+# above the trapezoid's top edge) projections drift toward the vanishing
+# point and a single image-y pixel can span tens of metres of projected y.
+COURT_FOOT_TRUST_MARGIN_M = 2.0
+
+
+def _foot_court_coord(
+    calibrator: CourtCalibrator, p: PlayerPosition,
+) -> tuple[float, float]:
+    # Foot = bbox bottom (``y + height/2``) — the only image-y that lies on
+    # the court floor for a standing player.
+    fx, fy = p.x, p.y + p.height / 2
+    return calibrator.image_to_court((fx, fy), 0, 0)
+
+
+def _court_displacement_meters(
+    calibrator: CourtCalibrator,
+    pa: PlayerPosition,
+    pb: PlayerPosition,
+) -> float:
+    """Euclidean court-plane distance in metres between two player footprints.
+
+    Uses the bbox foot location (``y + height/2``) rather than the bbox
+    center, because court calibration trapezoids cover only the court floor.
+    Center-y projections for standing players fall above the trapezoid's
+    far baseline and extrapolate to wildly out-of-court coordinates; foot-y
+    projections land in the calibrated region where the homography is
+    reliable.
+
+    Caller is responsible for checking both points land inside the trusted
+    region via ``_both_feet_in_court`` — outside that region the homography
+    extrapolates and the return value is not physically meaningful.
+    """
+    cax, cay = _foot_court_coord(calibrator, pa)
+    cbx, cby = _foot_court_coord(calibrator, pb)
+    dx, dy = cbx - cax, cby - cay
+    return float((dx * dx + dy * dy) ** 0.5)
+
+
+def _both_feet_in_court(
+    calibrator: CourtCalibrator,
+    pa: PlayerPosition,
+    pb: PlayerPosition,
+    margin_m: float = COURT_FOOT_TRUST_MARGIN_M,
+) -> bool:
+    """Both foot projections land within court + margin (trusted region).
+
+    Short-height detections (partial players, shallow bboxes) yield little
+    foot-adjustment and their centers stay above the trapezoid — those
+    must fall back to image-plane.
+    """
+    return (
+        calibrator.is_point_in_court(
+            _foot_court_coord(calibrator, pa), margin=margin_m,
+        )
+        and calibrator.is_point_in_court(
+            _foot_court_coord(calibrator, pb), margin=margin_m,
+        )
+    )
 
 
 def _would_create_velocity_anomaly(
     positions: list[PlayerPosition],
     tid_a: int,
     tid_b: int,
-    max_displacement: float = DEFAULT_MAX_MERGE_VELOCITY,
+    max_displacement_image: float = DEFAULT_MAX_MERGE_VELOCITY,
     window: int = DEFAULT_MERGE_VELOCITY_WINDOW,
+    *,
+    calibrator: CourtCalibrator | None = None,
+    max_displacement_meters: float = DEFAULT_MAX_MERGE_VELOCITY_METERS,
 ) -> bool:
     """Check if merging two tracks would create impossible velocity at the junction.
 
     Examines positions from both tracks near the temporal boundary where
     they meet. If any pair of positions within `window` frames has
-    displacement exceeding `max_displacement`, the merge is rejected.
+    displacement exceeding the threshold, the merge is rejected.
 
-    This catches merges of same-appearance fragments from different
-    players — they look similar (low Bhattacharyya distance) but are
-    at different court positions, so merging creates a teleport.
+    When a calibrated ``calibrator`` is passed, thresholds are applied in
+    court-plane metres (``max_displacement_meters``), removing the
+    scale-dependence of normalized image-plane distances. Otherwise falls
+    back to image-plane Euclidean distance (``max_displacement_image``) —
+    the original behaviour, preserved bit-exact.
 
     Args:
         positions: All positions (with original track IDs).
         tid_a: First track ID.
         tid_b: Second track ID.
-        max_displacement: Maximum allowed displacement in the window.
+        max_displacement_image: Image-plane fallback threshold (normalized
+            0-1 Euclidean distance). Used when calibrator is None / uncalibrated.
         window: Number of frames around the junction to check.
+        calibrator: Optional court calibrator. When calibrated, positions are
+            projected to court metres and distances compared to
+            ``max_displacement_meters``.
+        max_displacement_meters: Court-plane threshold (metres).
 
     Returns:
         True if the merge would create a velocity anomaly.
@@ -88,6 +172,43 @@ def _would_create_velocity_anomaly(
     if not pos_a or not pos_b:
         return False
 
+    court_gate_enabled = (
+        calibrator is not None
+        and calibrator.is_calibrated
+        and os.environ.get("RALLYCUT_DISABLE_COURT_VELOCITY_GATE", "0") != "1"
+    )
+
+    def _image_dist(pa: PlayerPosition, pb: PlayerPosition) -> float:
+        dx = pb.x - pa.x
+        dy = pb.y - pa.y
+        return float((dx * dx + dy * dy) ** 0.5)
+
+    additive_mode = os.environ.get("RALLYCUT_COURT_GATE_ADDITIVE", "0") == "1"
+
+    def _exceeds_gate(pa: PlayerPosition, pb: PlayerPosition) -> bool:
+        """True if pair displacement exceeds the applicable velocity gate.
+
+        Per-pair regime: court-plane when both foot projections land in the
+        trusted (court + margin) region; image-plane fallback when either
+        foot lies in the homography extrapolation regime (above the
+        trapezoid's far baseline, common for short-height detections).
+
+        Additive mode (``RALLYCUT_COURT_GATE_ADDITIVE=1``): image-plane
+        always active; court-plane adds rejections on top when points are
+        in-court. Strictly stricter than image-plane alone.
+        """
+        if additive_mode and _image_dist(pa, pb) > max_displacement_image:
+            return True
+        if (
+            court_gate_enabled
+            and calibrator is not None
+            and _both_feet_in_court(calibrator, pa, pb)
+        ):
+            return _court_displacement_meters(
+                calibrator, pa, pb,
+            ) > max_displacement_meters
+        return _image_dist(pa, pb) > max_displacement_image
+
     # Determine temporal order: which track ends first?
     if pos_a[-1].frame_number <= pos_b[0].frame_number:
         earlier, later = pos_a, pos_b
@@ -103,21 +224,16 @@ def _would_create_velocity_anomaly(
                 frame_gap = abs(pb.frame_number - pa.frame_number)
                 if frame_gap > window or frame_gap == 0:
                     continue
-                dx = pb.x - pa.x
-                dy = pb.y - pa.y
-                if (dx * dx + dy * dy) ** 0.5 > max_displacement:
+                if _exceeds_gate(pa, pb):
                     return True
         return False
 
     # Check endpoint displacement regardless of gap size.
-    # Two fragments of the same player can't be >max_displacement apart
+    # Two fragments of the same player can't be >threshold apart
     # at their nearest temporal boundary.
     end_pos = earlier[-1]
     start_pos = later[0]
-    dx = start_pos.x - end_pos.x
-    dy = start_pos.y - end_pos.y
-    endpoint_dist = (dx * dx + dy * dy) ** 0.5
-    if endpoint_dist > max_displacement:
+    if _exceeds_gate(end_pos, start_pos):
         return True
 
     # Also check sliding window near the junction for short-gap merges
@@ -128,9 +244,7 @@ def _would_create_velocity_anomaly(
             frame_gap = abs(pb.frame_number - pa.frame_number)
             if frame_gap > window or frame_gap == 0:
                 continue
-            dx = pb.x - pa.x
-            dy = pb.y - pa.y
-            if (dx * dx + dy * dy) ** 0.5 > max_displacement:
+            if _exceeds_gate(pa, pb):
                 return True
 
     return False
@@ -236,6 +350,7 @@ def _greedy_merge(
     merge_distance_threshold: float,
     max_overlap_frames: int,
     target_track_count: int | None,
+    calibrator: CourtCalibrator | None = None,
 ) -> tuple[dict[int, int], int]:
     """Greedy hierarchical merging: always merge the closest valid pair.
 
@@ -285,7 +400,9 @@ def _greedy_merge(
             dist_matrix[best_j, best_i] = 1.0
             continue
 
-        if _would_create_velocity_anomaly(positions, canonical, merged):
+        if _would_create_velocity_anomaly(
+            positions, canonical, merged, calibrator=calibrator,
+        ):
             logger.debug(
                 f"Tracklet link: blocked merge {merged} -> {canonical} "
                 f"(velocity anomaly at junction)"
@@ -356,6 +473,7 @@ def _swap_optimize(
     positions: list[PlayerPosition],
     merge_distance_threshold: float,
     max_overlap_frames: int,
+    calibrator: CourtCalibrator | None = None,
 ) -> dict[int, int]:
     """Improve greedy partition by reassigning fragments to better groups.
 
@@ -405,7 +523,9 @@ def _swap_optimize(
                 max_allowed_overlap=max_overlap_frames,
             ):
                 return False
-            if _would_create_velocity_anomaly(positions, frag_tid, m_tid):
+            if _would_create_velocity_anomaly(
+                positions, frag_tid, m_tid, calibrator=calibrator,
+            ):
                 return False
         return True
 
@@ -482,6 +602,7 @@ def _greedy_then_optimize(
     merge_distance_threshold: float,
     max_overlap_frames: int,
     target_track_count: int,
+    calibrator: CourtCalibrator | None = None,
 ) -> tuple[dict[int, int], int]:
     """Run greedy merging, then optimize with pairwise swaps.
 
@@ -500,12 +621,14 @@ def _greedy_then_optimize(
     id_mapping, num_merges = _greedy_merge(
         hist_ids, n, dist_matrix, tracks, avg_hists, positions,
         merge_distance_threshold, max_overlap_frames, target_track_count,
+        calibrator=calibrator,
     )
 
     if num_merges > 0:
         id_mapping = _swap_optimize(
             id_mapping, hist_ids, n, orig_dist, orig_tracks,
             positions, merge_distance_threshold, max_overlap_frames,
+            calibrator=calibrator,
         )
 
     return id_mapping, num_merges
@@ -521,6 +644,7 @@ def link_tracklets_by_appearance(
     team_assignments: dict[int, int] | None = None,
     appearance_store: AppearanceDescriptorStore | None = None,
     max_overlap_frames: int = 15,
+    calibrator: CourtCalibrator | None = None,
 ) -> tuple[list[PlayerPosition], int]:
     """Link fragmented tracklets using appearance similarity.
 
@@ -665,6 +789,7 @@ def link_tracklets_by_appearance(
             merge_distance_threshold,
             max_overlap_frames,
             target_track_count,
+            calibrator=calibrator,
         )
     else:
         id_mapping, num_merges = _greedy_merge(
@@ -677,6 +802,7 @@ def link_tracklets_by_appearance(
             merge_distance_threshold,
             max_overlap_frames,
             target_track_count,
+            calibrator=calibrator,
         )
 
     if num_merges == 0:
