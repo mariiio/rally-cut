@@ -1599,19 +1599,23 @@ class PlayerTracker:
                 )
 
                 # Step 0c: Appearance-based tracklet linking
-                # NOTE: the court-plane velocity gate in tracklet_link.py is
-                # wired for `calibrator=` but is INACTIVE by default — the
-                # 2026-04-16 sweep (see memory/player_tracking_audit_...)
-                # measured a net NO-GO: per-rally regressions exceeded the
-                # 0.5pp ship gate on 5-7 rallies at every threshold 1.5-10 m.
-                # Wins on pred-exchange-swap rallies (fad29c31, 209be896)
-                # are real but so are losses on edge-case calibrations.
-                # Re-activate by passing calibrator=court_calibrator once the
-                # regression class is addressed (see NO-GO memo for follow-up).
+                # Session 6 — env-var-gated learned-head + court-plane-velocity
+                # vetoes. `LEARNED_MERGE_VETO_COS>0` blocks merges where the
+                # Session-3 head says two fragments are different players (the
+                # primary lever — Session 4's raw-BoT-SORT audit showed 0 real
+                # swaps, all same-team swaps observed downstream are CREATED
+                # by this greedy appearance merger). `ENABLE_COURT_VELOCITY_GATE=1`
+                # re-enables the 2026-04-16-dormant velocity veto; combined
+                # with the learned veto, the false-rejection class that killed
+                # velocity-alone can be recovered.
+                _enable_velocity_gate = (
+                    os.environ.get("ENABLE_COURT_VELOCITY_GATE", "0") == "1"
+                )
                 positions, num_appearance_links = link_tracklets_by_appearance(
                     positions, color_store,
                     appearance_store=appearance_store,
                     learned_store=learned_store,
+                    calibrator=court_calibrator if _enable_velocity_gate else None,
                 )
 
             # Step 1: Stabilize track IDs

@@ -496,6 +496,20 @@ def _compute_tracker_config_hash() -> str:
     # results for apples-to-apples baseline comparison.
     if os.environ.get("ENABLE_OCCLUSION_RESOLVER", "0") == "1":
         config_parts.append("occlusion_resolver:True")
+    # Session 6 — learned-head merge veto in tracklet_link runs entirely
+    # during post-processing (doesn't change what's CACHED — raw positions
+    # + learned_store + color_store are all threshold-invariant). A
+    # threshold sweep therefore SHARES one raw cache across all values;
+    # the hash only marks enabled/disabled, not the numeric threshold.
+    # Default (disabled) preserves the pre-Session-6 cache key byte-
+    # identically with Session-4-era caches.
+    learned_merge_veto_cos = float(
+        os.environ.get("LEARNED_MERGE_VETO_COS", "0.0")
+    )
+    if learned_merge_veto_cos > 0:
+        config_parts.append("merge_veto:enabled")
+    if os.environ.get("ENABLE_COURT_VELOCITY_GATE", "0") == "1":
+        config_parts.append("court_velocity_gate:True")
     config_str = "|".join(config_parts)
     return hashlib.sha256(config_str.encode()).hexdigest()[:16]
 
