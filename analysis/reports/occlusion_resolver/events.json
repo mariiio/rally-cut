@@ -1,0 +1,1965 @@
+{
+  "version": 1,
+  "schema": "rallycut-session5-convergence-events-v1",
+  "window_frames": 30,
+  "separation_gap": 10,
+  "num_sample_crops": 8,
+  "min_window_frames": 6,
+  "n_rallies": 43,
+  "n_rallies_with_events": 15,
+  "n_events": 21,
+  "events": [
+    {
+      "event_id": "rsw000_gt1gt3_T1T4_f460",
+      "rally_id": "21a9b203-dc92-48dc-8f19-d94835e0e226",
+      "video_id": "0a383519-ecaa-411a-8e5e-e0aadc835725",
+      "track_a": 1,
+      "track_b": 4,
+      "team": 1,
+      "start_frame": 457,
+      "end_frame": 463,
+      "duration_frames": 7,
+      "crossed_switch": true,
+      "audit_same_team_switches": [
+        460
+      ],
+      "pre_frames_a": [
+        427,
+        431,
+        435,
+        439,
+        443,
+        447,
+        451,
+        456
+      ],
+      "pre_frames_b": [
+        427,
+        431,
+        435,
+        439,
+        443,
+        447,
+        451,
+        456
+      ],
+      "post_frames_a": [
+        473,
+        477,
+        481,
+        485,
+        490,
+        494,
+        498,
+        503
+      ],
+      "post_frames_b": [
+        473,
+        477,
+        481,
+        485,
+        490,
+        494,
+        498,
+        503
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/pre_a_T1_F00427.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/pre_a_T1_F00431.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/pre_a_T1_F00435.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/pre_a_T1_F00439.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/pre_a_T1_F00443.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/pre_a_T1_F00447.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/pre_a_T1_F00451.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/pre_a_T1_F00456.jpg"
+        ],
+        "pre_b": [
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/pre_b_T4_F00427.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/pre_b_T4_F00431.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/pre_b_T4_F00435.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/pre_b_T4_F00439.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/pre_b_T4_F00443.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/pre_b_T4_F00447.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/pre_b_T4_F00451.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/pre_b_T4_F00456.jpg"
+        ],
+        "post_a": [
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/post_a_T1_F00473.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/post_a_T1_F00477.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/post_a_T1_F00481.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/post_a_T1_F00485.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/post_a_T1_F00490.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/post_a_T1_F00494.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/post_a_T1_F00498.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/post_a_T1_F00503.jpg"
+        ],
+        "post_b": [
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/post_b_T4_F00473.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/post_b_T4_F00477.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/post_b_T4_F00481.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/post_b_T4_F00485.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/post_b_T4_F00490.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/post_b_T4_F00494.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/post_b_T4_F00498.jpg",
+          "crops/21a9b203-dc92-48dc-8f19-d94835e0e226/rsw000_gt1gt3_T1T4_f460/post_b_T4_F00503.jpg"
+        ]
+      },
+      "court_split_y": 0.42707432666714207,
+      "difficulty_score": 8.0,
+      "source": "retrack_audit_swap"
+    },
+    {
+      "event_id": "rsw000_gt1gt4_T1T24_f246",
+      "rally_id": "29cb4e29-d6c8-4c6f-b369-bedc3afba3b9",
+      "video_id": "304df1bf-1027-4815-b5b9-76bf55780b07",
+      "track_a": 1,
+      "track_b": 24,
+      "team": 0,
+      "start_frame": 243,
+      "end_frame": 249,
+      "duration_frames": 7,
+      "crossed_switch": true,
+      "audit_same_team_switches": [
+        246
+      ],
+      "pre_frames_a": [
+        213,
+        217,
+        221,
+        225,
+        229,
+        233,
+        237,
+        242
+      ],
+      "pre_frames_b": [
+        213,
+        217,
+        221,
+        225,
+        229,
+        233,
+        237,
+        242
+      ],
+      "post_frames_a": [
+        259,
+        263,
+        267,
+        271,
+        276,
+        280,
+        284,
+        289
+      ],
+      "post_frames_b": [
+        259,
+        263,
+        267,
+        271,
+        276,
+        280,
+        284,
+        289
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/pre_a_T1_F00213.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/pre_a_T1_F00217.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/pre_a_T1_F00221.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/pre_a_T1_F00225.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/pre_a_T1_F00229.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/pre_a_T1_F00233.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/pre_a_T1_F00237.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/pre_a_T1_F00242.jpg"
+        ],
+        "pre_b": [
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/pre_b_T24_F00213.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/pre_b_T24_F00217.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/pre_b_T24_F00221.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/pre_b_T24_F00225.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/pre_b_T24_F00229.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/pre_b_T24_F00233.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/pre_b_T24_F00237.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/pre_b_T24_F00242.jpg"
+        ],
+        "post_a": [
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/post_a_T1_F00259.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/post_a_T1_F00263.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/post_a_T1_F00267.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/post_a_T1_F00271.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/post_a_T1_F00276.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/post_a_T1_F00280.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/post_a_T1_F00284.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/post_a_T1_F00289.jpg"
+        ],
+        "post_b": [
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/post_b_T24_F00259.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/post_b_T24_F00263.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/post_b_T24_F00267.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/post_b_T24_F00271.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/post_b_T24_F00276.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/post_b_T24_F00280.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/post_b_T24_F00284.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/rsw000_gt1gt4_T1T24_f246/post_b_T24_F00289.jpg"
+        ]
+      },
+      "court_split_y": 0.5064233891809845,
+      "difficulty_score": 8.0,
+      "source": "retrack_audit_swap"
+    },
+    {
+      "event_id": "rsw000_gt2gt3_T2T3_f244",
+      "rally_id": "53ca3586-1751-4dec-94f2-f996651e7126",
+      "video_id": "601d4a69-b6e9-4b7c-9bd4-2511d282dc5e",
+      "track_a": 2,
+      "track_b": 3,
+      "team": 1,
+      "start_frame": 241,
+      "end_frame": 247,
+      "duration_frames": 7,
+      "crossed_switch": true,
+      "audit_same_team_switches": [
+        244
+      ],
+      "pre_frames_a": [
+        211,
+        215,
+        219,
+        223,
+        227,
+        231,
+        235,
+        240
+      ],
+      "pre_frames_b": [
+        211,
+        215,
+        219,
+        223,
+        227,
+        231,
+        235,
+        240
+      ],
+      "post_frames_a": [
+        257,
+        261,
+        265,
+        269,
+        274,
+        278,
+        282,
+        287
+      ],
+      "post_frames_b": [
+        257,
+        261,
+        265,
+        269,
+        274,
+        278,
+        282,
+        287
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/pre_a_T2_F00211.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/pre_a_T2_F00215.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/pre_a_T2_F00219.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/pre_a_T2_F00223.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/pre_a_T2_F00227.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/pre_a_T2_F00231.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/pre_a_T2_F00235.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/pre_a_T2_F00240.jpg"
+        ],
+        "pre_b": [
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/pre_b_T3_F00211.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/pre_b_T3_F00215.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/pre_b_T3_F00219.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/pre_b_T3_F00223.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/pre_b_T3_F00227.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/pre_b_T3_F00231.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/pre_b_T3_F00235.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/pre_b_T3_F00240.jpg"
+        ],
+        "post_a": [
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/post_a_T2_F00257.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/post_a_T2_F00261.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/post_a_T2_F00265.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/post_a_T2_F00269.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/post_a_T2_F00274.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/post_a_T2_F00278.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/post_a_T2_F00282.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/post_a_T2_F00287.jpg"
+        ],
+        "post_b": [
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/post_b_T3_F00257.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/post_b_T3_F00261.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/post_b_T3_F00265.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/post_b_T3_F00269.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/post_b_T3_F00274.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/post_b_T3_F00278.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/post_b_T3_F00282.jpg",
+          "crops/53ca3586-1751-4dec-94f2-f996651e7126/rsw000_gt2gt3_T2T3_f244/post_b_T3_F00287.jpg"
+        ]
+      },
+      "court_split_y": 0.5443713749298571,
+      "difficulty_score": 8.0,
+      "source": "retrack_audit_swap"
+    },
+    {
+      "event_id": "rsw000_gt3gt4_T3T14_f263",
+      "rally_id": "209be896-b680-44dc-bf31-693f4e287149",
+      "video_id": "7ba71fc4-5348-471c-b38d-8dfd029208e4",
+      "track_a": 3,
+      "track_b": 14,
+      "team": 1,
+      "start_frame": 260,
+      "end_frame": 266,
+      "duration_frames": 7,
+      "crossed_switch": true,
+      "audit_same_team_switches": [
+        263
+      ],
+      "pre_frames_a": [
+        230,
+        234,
+        238,
+        242,
+        246,
+        250,
+        254,
+        259
+      ],
+      "pre_frames_b": [
+        230,
+        234,
+        238,
+        242,
+        246,
+        250,
+        254,
+        259
+      ],
+      "post_frames_a": [
+        276,
+        280,
+        284,
+        288,
+        293,
+        297,
+        301,
+        306
+      ],
+      "post_frames_b": [
+        276,
+        280,
+        284,
+        288,
+        293,
+        297,
+        301,
+        306
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/pre_a_T3_F00230.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/pre_a_T3_F00234.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/pre_a_T3_F00238.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/pre_a_T3_F00242.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/pre_a_T3_F00246.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/pre_a_T3_F00250.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/pre_a_T3_F00254.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/pre_a_T3_F00259.jpg"
+        ],
+        "pre_b": [
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/pre_b_T14_F00230.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/pre_b_T14_F00234.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/pre_b_T14_F00238.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/pre_b_T14_F00242.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/pre_b_T14_F00246.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/pre_b_T14_F00250.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/pre_b_T14_F00254.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/pre_b_T14_F00259.jpg"
+        ],
+        "post_a": [
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/post_a_T3_F00276.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/post_a_T3_F00280.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/post_a_T3_F00284.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/post_a_T3_F00288.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/post_a_T3_F00293.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/post_a_T3_F00297.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/post_a_T3_F00301.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/post_a_T3_F00306.jpg"
+        ],
+        "post_b": [
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/post_b_T14_F00276.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/post_b_T14_F00280.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/post_b_T14_F00284.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/post_b_T14_F00288.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/post_b_T14_F00293.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/post_b_T14_F00297.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/post_b_T14_F00301.jpg",
+          "crops/209be896-b680-44dc-bf31-693f4e287149/rsw000_gt3gt4_T3T14_f263/post_b_T14_F00306.jpg"
+        ]
+      },
+      "court_split_y": 0.5733125315028398,
+      "difficulty_score": 8.0,
+      "source": "retrack_audit_swap"
+    },
+    {
+      "event_id": "rsw000_gt2gt3_T2T25_f141",
+      "rally_id": "5e2e58fb-3e83-4437-9028-2d2c9af0c8fb",
+      "video_id": "edc81438-10bc-431d-ae88-5c609f3fae93",
+      "track_a": 2,
+      "track_b": 25,
+      "team": 0,
+      "start_frame": 138,
+      "end_frame": 144,
+      "duration_frames": 7,
+      "crossed_switch": true,
+      "audit_same_team_switches": [
+        141
+      ],
+      "pre_frames_a": [
+        108,
+        112,
+        116,
+        120,
+        124,
+        128,
+        132,
+        137
+      ],
+      "pre_frames_b": [
+        108,
+        112,
+        116,
+        120,
+        124,
+        128,
+        132,
+        137
+      ],
+      "post_frames_a": [
+        154,
+        158,
+        162,
+        166,
+        171,
+        175,
+        179,
+        184
+      ],
+      "post_frames_b": [
+        154,
+        158,
+        162,
+        166,
+        171,
+        175,
+        179,
+        184
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/pre_a_T2_F00108.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/pre_a_T2_F00112.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/pre_a_T2_F00116.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/pre_a_T2_F00120.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/pre_a_T2_F00124.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/pre_a_T2_F00128.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/pre_a_T2_F00132.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/pre_a_T2_F00137.jpg"
+        ],
+        "pre_b": [
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/pre_b_T25_F00108.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/pre_b_T25_F00112.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/pre_b_T25_F00116.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/pre_b_T25_F00120.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/pre_b_T25_F00124.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/pre_b_T25_F00128.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/pre_b_T25_F00132.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/pre_b_T25_F00137.jpg"
+        ],
+        "post_a": [
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/post_a_T2_F00154.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/post_a_T2_F00158.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/post_a_T2_F00162.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/post_a_T2_F00166.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/post_a_T2_F00171.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/post_a_T2_F00175.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/post_a_T2_F00179.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/post_a_T2_F00184.jpg"
+        ],
+        "post_b": [
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/post_b_T25_F00154.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/post_b_T25_F00158.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/post_b_T25_F00162.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/post_b_T25_F00166.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/post_b_T25_F00171.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/post_b_T25_F00175.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/post_b_T25_F00179.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/rsw000_gt2gt3_T2T25_f141/post_b_T25_F00184.jpg"
+        ]
+      },
+      "court_split_y": 0.5522349661024756,
+      "difficulty_score": 8.0,
+      "source": "retrack_audit_swap"
+    },
+    {
+      "event_id": "e000_T4T24_f195-201",
+      "rally_id": "29cb4e29-d6c8-4c6f-b369-bedc3afba3b9",
+      "video_id": "304df1bf-1027-4815-b5b9-76bf55780b07",
+      "track_a": 4,
+      "track_b": 24,
+      "team": 1,
+      "start_frame": 195,
+      "end_frame": 201,
+      "duration_frames": 7,
+      "crossed_switch": false,
+      "audit_same_team_switches": [],
+      "pre_frames_a": [
+        165,
+        169,
+        173,
+        177,
+        181,
+        185,
+        189,
+        194
+      ],
+      "pre_frames_b": [
+        165,
+        169,
+        173,
+        177,
+        181,
+        185,
+        189,
+        194
+      ],
+      "post_frames_a": [
+        211,
+        215,
+        219,
+        223,
+        228,
+        232,
+        236,
+        241
+      ],
+      "post_frames_b": [
+        211,
+        215,
+        219,
+        223,
+        228,
+        232,
+        236,
+        241
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/pre_a_T4_F00165.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/pre_a_T4_F00169.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/pre_a_T4_F00173.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/pre_a_T4_F00177.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/pre_a_T4_F00181.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/pre_a_T4_F00185.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/pre_a_T4_F00189.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/pre_a_T4_F00194.jpg"
+        ],
+        "pre_b": [
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/pre_b_T24_F00165.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/pre_b_T24_F00169.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/pre_b_T24_F00173.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/pre_b_T24_F00177.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/pre_b_T24_F00181.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/pre_b_T24_F00185.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/pre_b_T24_F00189.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/pre_b_T24_F00194.jpg"
+        ],
+        "post_a": [
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/post_a_T4_F00211.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/post_a_T4_F00215.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/post_a_T4_F00219.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/post_a_T4_F00223.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/post_a_T4_F00228.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/post_a_T4_F00232.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/post_a_T4_F00236.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/post_a_T4_F00241.jpg"
+        ],
+        "post_b": [
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/post_b_T24_F00211.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/post_b_T24_F00215.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/post_b_T24_F00219.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/post_b_T24_F00223.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/post_b_T24_F00228.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/post_b_T24_F00232.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/post_b_T24_F00236.jpg",
+          "crops/29cb4e29-d6c8-4c6f-b369-bedc3afba3b9/e000_T4T24_f195-201/post_b_T24_F00241.jpg"
+        ]
+      },
+      "court_split_y": 0.5064233891809845,
+      "difficulty_score": 8.0,
+      "source": "db_convergence"
+    },
+    {
+      "event_id": "e000_T2T4_f348-356",
+      "rally_id": "e84deef3-56b1-4f5d-81aa-2924ad1c440e",
+      "video_id": "3ad271bd-b94d-4d63-86ec-4ecbe5dbfeac",
+      "track_a": 2,
+      "track_b": 4,
+      "team": 1,
+      "start_frame": 348,
+      "end_frame": 356,
+      "duration_frames": 9,
+      "crossed_switch": false,
+      "audit_same_team_switches": [],
+      "pre_frames_a": [
+        318,
+        322,
+        326,
+        330,
+        334,
+        338,
+        342,
+        347
+      ],
+      "pre_frames_b": [
+        318,
+        322,
+        326,
+        330,
+        334,
+        338,
+        342,
+        347
+      ],
+      "post_frames_a": [
+        366,
+        370,
+        374,
+        378,
+        383,
+        387,
+        391,
+        396
+      ],
+      "post_frames_b": [
+        366,
+        370,
+        374,
+        378,
+        383,
+        387,
+        391,
+        396
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/pre_a_T2_F00318.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/pre_a_T2_F00322.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/pre_a_T2_F00326.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/pre_a_T2_F00330.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/pre_a_T2_F00334.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/pre_a_T2_F00338.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/pre_a_T2_F00342.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/pre_a_T2_F00347.jpg"
+        ],
+        "pre_b": [
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/pre_b_T4_F00318.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/pre_b_T4_F00322.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/pre_b_T4_F00326.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/pre_b_T4_F00330.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/pre_b_T4_F00334.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/pre_b_T4_F00338.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/pre_b_T4_F00342.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/pre_b_T4_F00347.jpg"
+        ],
+        "post_a": [
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/post_a_T2_F00366.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/post_a_T2_F00370.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/post_a_T2_F00374.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/post_a_T2_F00378.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/post_a_T2_F00383.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/post_a_T2_F00387.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/post_a_T2_F00391.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/post_a_T2_F00396.jpg"
+        ],
+        "post_b": [
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/post_b_T4_F00366.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/post_b_T4_F00370.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/post_b_T4_F00374.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/post_b_T4_F00378.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/post_b_T4_F00383.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/post_b_T4_F00387.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/post_b_T4_F00391.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e000_T2T4_f348-356/post_b_T4_F00396.jpg"
+        ]
+      },
+      "court_split_y": 0.5040465142875008,
+      "difficulty_score": 8.0,
+      "source": "db_convergence"
+    },
+    {
+      "event_id": "e001_T2T4_f377-385",
+      "rally_id": "e84deef3-56b1-4f5d-81aa-2924ad1c440e",
+      "video_id": "3ad271bd-b94d-4d63-86ec-4ecbe5dbfeac",
+      "track_a": 2,
+      "track_b": 4,
+      "team": 1,
+      "start_frame": 377,
+      "end_frame": 385,
+      "duration_frames": 9,
+      "crossed_switch": false,
+      "audit_same_team_switches": [],
+      "pre_frames_a": [
+        347,
+        351,
+        355,
+        359,
+        363,
+        367,
+        371,
+        376
+      ],
+      "pre_frames_b": [
+        347,
+        351,
+        355,
+        359,
+        363,
+        367,
+        371,
+        376
+      ],
+      "post_frames_a": [
+        395,
+        396,
+        398,
+        400,
+        401,
+        403,
+        405,
+        407
+      ],
+      "post_frames_b": [
+        395,
+        398,
+        401,
+        404,
+        407,
+        410,
+        413,
+        417
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/pre_a_T2_F00347.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/pre_a_T2_F00351.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/pre_a_T2_F00355.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/pre_a_T2_F00359.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/pre_a_T2_F00363.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/pre_a_T2_F00367.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/pre_a_T2_F00371.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/pre_a_T2_F00376.jpg"
+        ],
+        "pre_b": [
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/pre_b_T4_F00347.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/pre_b_T4_F00351.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/pre_b_T4_F00355.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/pre_b_T4_F00359.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/pre_b_T4_F00363.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/pre_b_T4_F00367.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/pre_b_T4_F00371.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/pre_b_T4_F00376.jpg"
+        ],
+        "post_a": [
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/post_a_T2_F00395.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/post_a_T2_F00396.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/post_a_T2_F00398.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/post_a_T2_F00400.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/post_a_T2_F00401.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/post_a_T2_F00403.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/post_a_T2_F00405.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/post_a_T2_F00407.jpg"
+        ],
+        "post_b": [
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/post_b_T4_F00395.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/post_b_T4_F00398.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/post_b_T4_F00401.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/post_b_T4_F00404.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/post_b_T4_F00407.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/post_b_T4_F00410.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/post_b_T4_F00413.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e001_T2T4_f377-385/post_b_T4_F00417.jpg"
+        ]
+      },
+      "court_split_y": 0.5040465142875008,
+      "difficulty_score": 8.0,
+      "source": "db_convergence"
+    },
+    {
+      "event_id": "e000_T3T4_f105-110",
+      "rally_id": "1f87460b-62d4-4af8-a106-f0a9c3d40d03",
+      "video_id": "4cd680c7-2333-4dab-9fed-159f064a9e8c",
+      "track_a": 3,
+      "track_b": 4,
+      "team": 1,
+      "start_frame": 105,
+      "end_frame": 110,
+      "duration_frames": 6,
+      "crossed_switch": false,
+      "audit_same_team_switches": [],
+      "pre_frames_a": [
+        75,
+        79,
+        83,
+        87,
+        91,
+        95,
+        99,
+        104
+      ],
+      "pre_frames_b": [
+        75,
+        79,
+        83,
+        87,
+        91,
+        95,
+        99,
+        104
+      ],
+      "post_frames_a": [
+        120,
+        124,
+        128,
+        132,
+        137,
+        141,
+        145,
+        150
+      ],
+      "post_frames_b": [
+        120,
+        122,
+        125,
+        128,
+        131,
+        134,
+        137,
+        140
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/pre_a_T3_F00075.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/pre_a_T3_F00079.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/pre_a_T3_F00083.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/pre_a_T3_F00087.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/pre_a_T3_F00091.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/pre_a_T3_F00095.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/pre_a_T3_F00099.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/pre_a_T3_F00104.jpg"
+        ],
+        "pre_b": [
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/pre_b_T4_F00075.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/pre_b_T4_F00079.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/pre_b_T4_F00083.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/pre_b_T4_F00087.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/pre_b_T4_F00091.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/pre_b_T4_F00095.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/pre_b_T4_F00099.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/pre_b_T4_F00104.jpg"
+        ],
+        "post_a": [
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/post_a_T3_F00120.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/post_a_T3_F00124.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/post_a_T3_F00128.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/post_a_T3_F00132.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/post_a_T3_F00137.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/post_a_T3_F00141.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/post_a_T3_F00145.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/post_a_T3_F00150.jpg"
+        ],
+        "post_b": [
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/post_b_T4_F00120.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/post_b_T4_F00122.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/post_b_T4_F00125.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/post_b_T4_F00128.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/post_b_T4_F00131.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/post_b_T4_F00134.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/post_b_T4_F00137.jpg",
+          "crops/1f87460b-62d4-4af8-a106-f0a9c3d40d03/e000_T3T4_f105-110/post_b_T4_F00140.jpg"
+        ]
+      },
+      "court_split_y": 0.5664045435823968,
+      "difficulty_score": 8.0,
+      "source": "db_convergence"
+    },
+    {
+      "event_id": "e000_T2T3_f179-183",
+      "rally_id": "de7136d1-bcff-4453-8234-1ba99d6d929e",
+      "video_id": "601d4a69-b6e9-4b7c-9bd4-2511d282dc5e",
+      "track_a": 2,
+      "track_b": 3,
+      "team": 1,
+      "start_frame": 179,
+      "end_frame": 183,
+      "duration_frames": 5,
+      "crossed_switch": false,
+      "audit_same_team_switches": [],
+      "pre_frames_a": [
+        149,
+        153,
+        157,
+        161,
+        165,
+        169,
+        173,
+        178
+      ],
+      "pre_frames_b": [
+        149,
+        153,
+        157,
+        161,
+        165,
+        169,
+        173,
+        178
+      ],
+      "post_frames_a": [
+        193,
+        197,
+        201,
+        205,
+        210,
+        214,
+        218,
+        223
+      ],
+      "post_frames_b": [
+        193,
+        197,
+        201,
+        205,
+        210,
+        214,
+        218,
+        223
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/pre_a_T2_F00149.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/pre_a_T2_F00153.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/pre_a_T2_F00157.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/pre_a_T2_F00161.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/pre_a_T2_F00165.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/pre_a_T2_F00169.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/pre_a_T2_F00173.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/pre_a_T2_F00178.jpg"
+        ],
+        "pre_b": [
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/pre_b_T3_F00149.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/pre_b_T3_F00153.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/pre_b_T3_F00157.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/pre_b_T3_F00161.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/pre_b_T3_F00165.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/pre_b_T3_F00169.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/pre_b_T3_F00173.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/pre_b_T3_F00178.jpg"
+        ],
+        "post_a": [
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/post_a_T2_F00193.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/post_a_T2_F00197.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/post_a_T2_F00201.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/post_a_T2_F00205.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/post_a_T2_F00210.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/post_a_T2_F00214.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/post_a_T2_F00218.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/post_a_T2_F00223.jpg"
+        ],
+        "post_b": [
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/post_b_T3_F00193.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/post_b_T3_F00197.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/post_b_T3_F00201.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/post_b_T3_F00205.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/post_b_T3_F00210.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/post_b_T3_F00214.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/post_b_T3_F00218.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e000_T2T3_f179-183/post_b_T3_F00223.jpg"
+        ]
+      },
+      "court_split_y": 0.5439659428066916,
+      "difficulty_score": 8.0,
+      "source": "db_convergence"
+    },
+    {
+      "event_id": "e001_T2T3_f325-345",
+      "rally_id": "de7136d1-bcff-4453-8234-1ba99d6d929e",
+      "video_id": "601d4a69-b6e9-4b7c-9bd4-2511d282dc5e",
+      "track_a": 2,
+      "track_b": 3,
+      "team": 1,
+      "start_frame": 325,
+      "end_frame": 345,
+      "duration_frames": 21,
+      "crossed_switch": false,
+      "audit_same_team_switches": [],
+      "pre_frames_a": [
+        295,
+        299,
+        303,
+        307,
+        311,
+        315,
+        319,
+        324
+      ],
+      "pre_frames_b": [
+        295,
+        299,
+        303,
+        307,
+        311,
+        315,
+        319,
+        324
+      ],
+      "post_frames_a": [
+        355,
+        359,
+        363,
+        367,
+        372,
+        376,
+        380,
+        385
+      ],
+      "post_frames_b": [
+        355,
+        359,
+        363,
+        367,
+        372,
+        376,
+        380,
+        385
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/pre_a_T2_F00295.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/pre_a_T2_F00299.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/pre_a_T2_F00303.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/pre_a_T2_F00307.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/pre_a_T2_F00311.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/pre_a_T2_F00315.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/pre_a_T2_F00319.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/pre_a_T2_F00324.jpg"
+        ],
+        "pre_b": [
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/pre_b_T3_F00295.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/pre_b_T3_F00299.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/pre_b_T3_F00303.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/pre_b_T3_F00307.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/pre_b_T3_F00311.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/pre_b_T3_F00315.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/pre_b_T3_F00319.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/pre_b_T3_F00324.jpg"
+        ],
+        "post_a": [
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/post_a_T2_F00355.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/post_a_T2_F00359.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/post_a_T2_F00363.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/post_a_T2_F00367.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/post_a_T2_F00372.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/post_a_T2_F00376.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/post_a_T2_F00380.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/post_a_T2_F00385.jpg"
+        ],
+        "post_b": [
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/post_b_T3_F00355.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/post_b_T3_F00359.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/post_b_T3_F00363.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/post_b_T3_F00367.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/post_b_T3_F00372.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/post_b_T3_F00376.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/post_b_T3_F00380.jpg",
+          "crops/de7136d1-bcff-4453-8234-1ba99d6d929e/e001_T2T3_f325-345/post_b_T3_F00385.jpg"
+        ]
+      },
+      "court_split_y": 0.5439659428066916,
+      "difficulty_score": 8.0,
+      "source": "db_convergence"
+    },
+    {
+      "event_id": "e000_T1T2_f171-176",
+      "rally_id": "d4938222-0bf9-41f2-987f-e1b5c1055d2d",
+      "video_id": "ae81fff5-a80e-4f77-8315-2e3377ce7737",
+      "track_a": 1,
+      "track_b": 2,
+      "team": 0,
+      "start_frame": 171,
+      "end_frame": 176,
+      "duration_frames": 6,
+      "crossed_switch": false,
+      "audit_same_team_switches": [],
+      "pre_frames_a": [
+        141,
+        145,
+        149,
+        153,
+        157,
+        161,
+        165,
+        170
+      ],
+      "pre_frames_b": [
+        141,
+        145,
+        149,
+        153,
+        157,
+        161,
+        165,
+        170
+      ],
+      "post_frames_a": [
+        186,
+        190,
+        194,
+        198,
+        203,
+        207,
+        211,
+        216
+      ],
+      "post_frames_b": [
+        186,
+        190,
+        194,
+        198,
+        203,
+        207,
+        211,
+        216
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/pre_a_T1_F00141.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/pre_a_T1_F00145.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/pre_a_T1_F00149.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/pre_a_T1_F00153.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/pre_a_T1_F00157.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/pre_a_T1_F00161.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/pre_a_T1_F00165.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/pre_a_T1_F00170.jpg"
+        ],
+        "pre_b": [
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/pre_b_T2_F00141.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/pre_b_T2_F00145.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/pre_b_T2_F00149.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/pre_b_T2_F00153.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/pre_b_T2_F00157.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/pre_b_T2_F00161.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/pre_b_T2_F00165.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/pre_b_T2_F00170.jpg"
+        ],
+        "post_a": [
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/post_a_T1_F00186.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/post_a_T1_F00190.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/post_a_T1_F00194.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/post_a_T1_F00198.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/post_a_T1_F00203.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/post_a_T1_F00207.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/post_a_T1_F00211.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/post_a_T1_F00216.jpg"
+        ],
+        "post_b": [
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/post_b_T2_F00186.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/post_b_T2_F00190.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/post_b_T2_F00194.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/post_b_T2_F00198.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/post_b_T2_F00203.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/post_b_T2_F00207.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/post_b_T2_F00211.jpg",
+          "crops/d4938222-0bf9-41f2-987f-e1b5c1055d2d/e000_T1T2_f171-176/post_b_T2_F00216.jpg"
+        ]
+      },
+      "court_split_y": 0.5899127211173897,
+      "difficulty_score": 8.0,
+      "source": "db_convergence"
+    },
+    {
+      "event_id": "e000_T1T2_f666-670",
+      "rally_id": "72c8229b-2993-4310-9b61-cd6162cc27fa",
+      "video_id": "b097dd2a-6953-4e0e-a603-5be3552f462e",
+      "track_a": 1,
+      "track_b": 2,
+      "team": 0,
+      "start_frame": 666,
+      "end_frame": 670,
+      "duration_frames": 5,
+      "crossed_switch": false,
+      "audit_same_team_switches": [],
+      "pre_frames_a": [
+        636,
+        640,
+        644,
+        648,
+        652,
+        656,
+        660,
+        665
+      ],
+      "pre_frames_b": [
+        636,
+        640,
+        644,
+        648,
+        652,
+        656,
+        660,
+        665
+      ],
+      "post_frames_a": [
+        680,
+        684,
+        688,
+        692,
+        697,
+        701,
+        705,
+        710
+      ],
+      "post_frames_b": [
+        680,
+        683,
+        686,
+        689,
+        692,
+        695,
+        698,
+        702
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/pre_a_T1_F00636.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/pre_a_T1_F00640.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/pre_a_T1_F00644.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/pre_a_T1_F00648.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/pre_a_T1_F00652.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/pre_a_T1_F00656.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/pre_a_T1_F00660.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/pre_a_T1_F00665.jpg"
+        ],
+        "pre_b": [
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/pre_b_T2_F00636.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/pre_b_T2_F00640.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/pre_b_T2_F00644.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/pre_b_T2_F00648.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/pre_b_T2_F00652.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/pre_b_T2_F00656.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/pre_b_T2_F00660.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/pre_b_T2_F00665.jpg"
+        ],
+        "post_a": [
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/post_a_T1_F00680.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/post_a_T1_F00684.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/post_a_T1_F00688.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/post_a_T1_F00692.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/post_a_T1_F00697.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/post_a_T1_F00701.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/post_a_T1_F00705.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/post_a_T1_F00710.jpg"
+        ],
+        "post_b": [
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/post_b_T2_F00680.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/post_b_T2_F00683.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/post_b_T2_F00686.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/post_b_T2_F00689.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/post_b_T2_F00692.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/post_b_T2_F00695.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/post_b_T2_F00698.jpg",
+          "crops/72c8229b-2993-4310-9b61-cd6162cc27fa/e000_T1T2_f666-670/post_b_T2_F00702.jpg"
+        ]
+      },
+      "court_split_y": 0.539343358724107,
+      "difficulty_score": 8.0,
+      "source": "db_convergence"
+    },
+    {
+      "event_id": "e000_T1T2_f126-136",
+      "rally_id": "fad29c31-6e2a-4a8d-86f1-9064b2f1f425",
+      "video_id": "c6e4c876-beca-4cb8-9cce-4a4fc70553f1",
+      "track_a": 1,
+      "track_b": 2,
+      "team": 0,
+      "start_frame": 126,
+      "end_frame": 136,
+      "duration_frames": 11,
+      "crossed_switch": false,
+      "audit_same_team_switches": [],
+      "pre_frames_a": [
+        96,
+        100,
+        104,
+        108,
+        112,
+        116,
+        120,
+        125
+      ],
+      "pre_frames_b": [
+        96,
+        100,
+        104,
+        108,
+        112,
+        116,
+        120,
+        125
+      ],
+      "post_frames_a": [
+        146,
+        150,
+        154,
+        158,
+        163,
+        167,
+        171,
+        176
+      ],
+      "post_frames_b": [
+        146,
+        150,
+        154,
+        158,
+        163,
+        167,
+        171,
+        176
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/pre_a_T1_F00096.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/pre_a_T1_F00100.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/pre_a_T1_F00104.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/pre_a_T1_F00108.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/pre_a_T1_F00112.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/pre_a_T1_F00116.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/pre_a_T1_F00120.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/pre_a_T1_F00125.jpg"
+        ],
+        "pre_b": [
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/pre_b_T2_F00096.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/pre_b_T2_F00100.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/pre_b_T2_F00104.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/pre_b_T2_F00108.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/pre_b_T2_F00112.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/pre_b_T2_F00116.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/pre_b_T2_F00120.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/pre_b_T2_F00125.jpg"
+        ],
+        "post_a": [
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/post_a_T1_F00146.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/post_a_T1_F00150.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/post_a_T1_F00154.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/post_a_T1_F00158.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/post_a_T1_F00163.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/post_a_T1_F00167.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/post_a_T1_F00171.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/post_a_T1_F00176.jpg"
+        ],
+        "post_b": [
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/post_b_T2_F00146.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/post_b_T2_F00150.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/post_b_T2_F00154.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/post_b_T2_F00158.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/post_b_T2_F00163.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/post_b_T2_F00167.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/post_b_T2_F00171.jpg",
+          "crops/fad29c31-6e2a-4a8d-86f1-9064b2f1f425/e000_T1T2_f126-136/post_b_T2_F00176.jpg"
+        ]
+      },
+      "court_split_y": 0.4664260221796226,
+      "difficulty_score": 8.0,
+      "source": "db_convergence"
+    },
+    {
+      "event_id": "e000_T4T25_f107-117",
+      "rally_id": "5e2e58fb-3e83-4437-9028-2d2c9af0c8fb",
+      "video_id": "edc81438-10bc-431d-ae88-5c609f3fae93",
+      "track_a": 4,
+      "track_b": 25,
+      "team": 1,
+      "start_frame": 107,
+      "end_frame": 117,
+      "duration_frames": 11,
+      "crossed_switch": false,
+      "audit_same_team_switches": [],
+      "pre_frames_a": [
+        77,
+        81,
+        85,
+        89,
+        93,
+        97,
+        101,
+        106
+      ],
+      "pre_frames_b": [
+        77,
+        81,
+        85,
+        89,
+        93,
+        97,
+        101,
+        106
+      ],
+      "post_frames_a": [
+        127,
+        131,
+        135,
+        139,
+        144,
+        148,
+        152,
+        157
+      ],
+      "post_frames_b": [
+        127,
+        131,
+        135,
+        139,
+        144,
+        148,
+        152,
+        157
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/pre_a_T4_F00077.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/pre_a_T4_F00081.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/pre_a_T4_F00085.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/pre_a_T4_F00089.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/pre_a_T4_F00093.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/pre_a_T4_F00097.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/pre_a_T4_F00101.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/pre_a_T4_F00106.jpg"
+        ],
+        "pre_b": [
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/pre_b_T25_F00077.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/pre_b_T25_F00081.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/pre_b_T25_F00085.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/pre_b_T25_F00089.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/pre_b_T25_F00093.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/pre_b_T25_F00097.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/pre_b_T25_F00101.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/pre_b_T25_F00106.jpg"
+        ],
+        "post_a": [
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/post_a_T4_F00127.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/post_a_T4_F00131.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/post_a_T4_F00135.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/post_a_T4_F00139.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/post_a_T4_F00144.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/post_a_T4_F00148.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/post_a_T4_F00152.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/post_a_T4_F00157.jpg"
+        ],
+        "post_b": [
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/post_b_T25_F00127.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/post_b_T25_F00131.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/post_b_T25_F00135.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/post_b_T25_F00139.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/post_b_T25_F00144.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/post_b_T25_F00148.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/post_b_T25_F00152.jpg",
+          "crops/5e2e58fb-3e83-4437-9028-2d2c9af0c8fb/e000_T4T25_f107-117/post_b_T25_F00157.jpg"
+        ]
+      },
+      "court_split_y": 0.5522349661024756,
+      "difficulty_score": 8.0,
+      "source": "db_convergence"
+    },
+    {
+      "event_id": "e000_T3T17_f845-878",
+      "rally_id": "d474b2ad-17e7-4c70-96f6-e52a38533d18",
+      "video_id": "fb83f876-7288-44ce-b8e4-4151bc7da4df",
+      "track_a": 3,
+      "track_b": 17,
+      "team": 1,
+      "start_frame": 845,
+      "end_frame": 878,
+      "duration_frames": 34,
+      "crossed_switch": false,
+      "audit_same_team_switches": [],
+      "pre_frames_a": [
+        815,
+        819,
+        823,
+        827,
+        831,
+        835,
+        839,
+        844
+      ],
+      "pre_frames_b": [
+        815,
+        819,
+        823,
+        827,
+        831,
+        835,
+        839,
+        844
+      ],
+      "post_frames_a": [
+        888,
+        892,
+        896,
+        900,
+        905,
+        909,
+        913,
+        918
+      ],
+      "post_frames_b": [
+        888,
+        892,
+        896,
+        900,
+        905,
+        909,
+        913,
+        918
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/pre_a_T3_F00815.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/pre_a_T3_F00819.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/pre_a_T3_F00823.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/pre_a_T3_F00827.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/pre_a_T3_F00831.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/pre_a_T3_F00835.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/pre_a_T3_F00839.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/pre_a_T3_F00844.jpg"
+        ],
+        "pre_b": [
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/pre_b_T17_F00815.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/pre_b_T17_F00819.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/pre_b_T17_F00823.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/pre_b_T17_F00827.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/pre_b_T17_F00831.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/pre_b_T17_F00835.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/pre_b_T17_F00839.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/pre_b_T17_F00844.jpg"
+        ],
+        "post_a": [
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/post_a_T3_F00888.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/post_a_T3_F00892.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/post_a_T3_F00896.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/post_a_T3_F00900.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/post_a_T3_F00905.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/post_a_T3_F00909.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/post_a_T3_F00913.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/post_a_T3_F00918.jpg"
+        ],
+        "post_b": [
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/post_b_T17_F00888.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/post_b_T17_F00892.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/post_b_T17_F00896.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/post_b_T17_F00900.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/post_b_T17_F00905.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/post_b_T17_F00909.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/post_b_T17_F00913.jpg",
+          "crops/d474b2ad-17e7-4c70-96f6-e52a38533d18/e000_T3T17_f845-878/post_b_T17_F00918.jpg"
+        ]
+      },
+      "court_split_y": 0.5785295438626293,
+      "difficulty_score": 8.0,
+      "source": "db_convergence"
+    },
+    {
+      "event_id": "e000_T3T19_f269-273",
+      "rally_id": "d724bbf0-bd0c-44e8-93d5-135aa07df5a1",
+      "video_id": "23b662ba-99e0-47d6-a9ac-90bb6fa9bdd1",
+      "track_a": 3,
+      "track_b": 19,
+      "team": 1,
+      "start_frame": 269,
+      "end_frame": 273,
+      "duration_frames": 5,
+      "crossed_switch": false,
+      "audit_same_team_switches": [],
+      "pre_frames_a": [
+        263,
+        264,
+        265,
+        266,
+        267,
+        268
+      ],
+      "pre_frames_b": [
+        239,
+        243,
+        247,
+        251,
+        255,
+        259,
+        263,
+        268
+      ],
+      "post_frames_a": [
+        283,
+        287,
+        291,
+        295,
+        299,
+        303,
+        307,
+        311
+      ],
+      "post_frames_b": [
+        283,
+        287,
+        291,
+        295,
+        299,
+        303,
+        307,
+        311
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/pre_a_T3_F00263.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/pre_a_T3_F00264.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/pre_a_T3_F00265.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/pre_a_T3_F00266.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/pre_a_T3_F00267.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/pre_a_T3_F00268.jpg"
+        ],
+        "pre_b": [
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/pre_b_T19_F00239.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/pre_b_T19_F00243.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/pre_b_T19_F00247.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/pre_b_T19_F00251.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/pre_b_T19_F00255.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/pre_b_T19_F00259.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/pre_b_T19_F00263.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/pre_b_T19_F00268.jpg"
+        ],
+        "post_a": [
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/post_a_T3_F00283.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/post_a_T3_F00287.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/post_a_T3_F00291.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/post_a_T3_F00295.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/post_a_T3_F00299.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/post_a_T3_F00303.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/post_a_T3_F00307.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/post_a_T3_F00311.jpg"
+        ],
+        "post_b": [
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/post_b_T19_F00283.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/post_b_T19_F00287.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/post_b_T19_F00291.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/post_b_T19_F00295.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/post_b_T19_F00299.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/post_b_T19_F00303.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/post_b_T19_F00307.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e000_T3T19_f269-273/post_b_T19_F00311.jpg"
+        ]
+      },
+      "court_split_y": 0.4775803147928961,
+      "difficulty_score": 6.0,
+      "source": "db_convergence"
+    },
+    {
+      "event_id": "e000_T2T3_f211-222",
+      "rally_id": "0a376585-6670-431b-a2ad-0b041e4f439d",
+      "video_id": "edc81438-10bc-431d-ae88-5c609f3fae93",
+      "track_a": 2,
+      "track_b": 3,
+      "team": 1,
+      "start_frame": 211,
+      "end_frame": 222,
+      "duration_frames": 12,
+      "crossed_switch": false,
+      "audit_same_team_switches": [],
+      "pre_frames_a": [
+        181,
+        185,
+        189,
+        193,
+        197,
+        201,
+        205,
+        210
+      ],
+      "pre_frames_b": [
+        181,
+        185,
+        189,
+        193,
+        197,
+        201,
+        205,
+        210
+      ],
+      "post_frames_a": [
+        232,
+        233,
+        234,
+        235,
+        236,
+        237
+      ],
+      "post_frames_b": [
+        232,
+        233,
+        234,
+        235,
+        236,
+        237
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/pre_a_T2_F00181.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/pre_a_T2_F00185.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/pre_a_T2_F00189.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/pre_a_T2_F00193.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/pre_a_T2_F00197.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/pre_a_T2_F00201.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/pre_a_T2_F00205.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/pre_a_T2_F00210.jpg"
+        ],
+        "pre_b": [
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/pre_b_T3_F00181.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/pre_b_T3_F00185.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/pre_b_T3_F00189.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/pre_b_T3_F00193.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/pre_b_T3_F00197.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/pre_b_T3_F00201.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/pre_b_T3_F00205.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/pre_b_T3_F00210.jpg"
+        ],
+        "post_a": [
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/post_a_T2_F00232.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/post_a_T2_F00233.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/post_a_T2_F00234.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/post_a_T2_F00235.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/post_a_T2_F00236.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/post_a_T2_F00237.jpg"
+        ],
+        "post_b": [
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/post_b_T3_F00232.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/post_b_T3_F00233.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/post_b_T3_F00234.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/post_b_T3_F00235.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/post_b_T3_F00236.jpg",
+          "crops/0a376585-6670-431b-a2ad-0b041e4f439d/e000_T2T3_f211-222/post_b_T3_F00237.jpg"
+        ]
+      },
+      "court_split_y": 0.5479559411544885,
+      "difficulty_score": 6.0,
+      "source": "db_convergence"
+    },
+    {
+      "event_id": "e000_T1T9_f351-357",
+      "rally_id": "a43fb033-44fc-42bf-98d2-af34d5d6a9bb",
+      "video_id": "16458e78-d30d-425c-805b-f9957d469a7c",
+      "track_a": 1,
+      "track_b": 9,
+      "team": 0,
+      "start_frame": 351,
+      "end_frame": 357,
+      "duration_frames": 7,
+      "crossed_switch": false,
+      "audit_same_team_switches": [],
+      "pre_frames_a": [
+        321,
+        325,
+        329,
+        333,
+        337,
+        341,
+        345,
+        350
+      ],
+      "pre_frames_b": [
+        321,
+        325,
+        329,
+        333,
+        337,
+        341,
+        345,
+        350
+      ],
+      "post_frames_a": [],
+      "post_frames_b": [],
+      "crops": {
+        "pre_a": [
+          "crops/a43fb033-44fc-42bf-98d2-af34d5d6a9bb/e000_T1T9_f351-357/pre_a_T1_F00321.jpg",
+          "crops/a43fb033-44fc-42bf-98d2-af34d5d6a9bb/e000_T1T9_f351-357/pre_a_T1_F00325.jpg",
+          "crops/a43fb033-44fc-42bf-98d2-af34d5d6a9bb/e000_T1T9_f351-357/pre_a_T1_F00329.jpg",
+          "crops/a43fb033-44fc-42bf-98d2-af34d5d6a9bb/e000_T1T9_f351-357/pre_a_T1_F00333.jpg",
+          "crops/a43fb033-44fc-42bf-98d2-af34d5d6a9bb/e000_T1T9_f351-357/pre_a_T1_F00337.jpg",
+          "crops/a43fb033-44fc-42bf-98d2-af34d5d6a9bb/e000_T1T9_f351-357/pre_a_T1_F00341.jpg",
+          "crops/a43fb033-44fc-42bf-98d2-af34d5d6a9bb/e000_T1T9_f351-357/pre_a_T1_F00345.jpg",
+          "crops/a43fb033-44fc-42bf-98d2-af34d5d6a9bb/e000_T1T9_f351-357/pre_a_T1_F00350.jpg"
+        ],
+        "pre_b": [
+          "crops/a43fb033-44fc-42bf-98d2-af34d5d6a9bb/e000_T1T9_f351-357/pre_b_T9_F00321.jpg",
+          "crops/a43fb033-44fc-42bf-98d2-af34d5d6a9bb/e000_T1T9_f351-357/pre_b_T9_F00325.jpg",
+          "crops/a43fb033-44fc-42bf-98d2-af34d5d6a9bb/e000_T1T9_f351-357/pre_b_T9_F00329.jpg",
+          "crops/a43fb033-44fc-42bf-98d2-af34d5d6a9bb/e000_T1T9_f351-357/pre_b_T9_F00333.jpg",
+          "crops/a43fb033-44fc-42bf-98d2-af34d5d6a9bb/e000_T1T9_f351-357/pre_b_T9_F00337.jpg",
+          "crops/a43fb033-44fc-42bf-98d2-af34d5d6a9bb/e000_T1T9_f351-357/pre_b_T9_F00341.jpg",
+          "crops/a43fb033-44fc-42bf-98d2-af34d5d6a9bb/e000_T1T9_f351-357/pre_b_T9_F00345.jpg",
+          "crops/a43fb033-44fc-42bf-98d2-af34d5d6a9bb/e000_T1T9_f351-357/pre_b_T9_F00350.jpg"
+        ],
+        "post_a": [],
+        "post_b": []
+      },
+      "court_split_y": 0.4845015400320333,
+      "difficulty_score": 0.0,
+      "source": "db_convergence"
+    },
+    {
+      "event_id": "e001_T3T19_f294-311",
+      "rally_id": "d724bbf0-bd0c-44e8-93d5-135aa07df5a1",
+      "video_id": "23b662ba-99e0-47d6-a9ac-90bb6fa9bdd1",
+      "track_a": 3,
+      "track_b": 19,
+      "team": 1,
+      "start_frame": 294,
+      "end_frame": 311,
+      "duration_frames": 18,
+      "crossed_switch": false,
+      "audit_same_team_switches": [],
+      "pre_frames_a": [
+        264,
+        268,
+        272,
+        276,
+        280,
+        284,
+        288,
+        293
+      ],
+      "pre_frames_b": [
+        264,
+        268,
+        272,
+        276,
+        280,
+        284,
+        288,
+        293
+      ],
+      "post_frames_a": [],
+      "post_frames_b": [],
+      "crops": {
+        "pre_a": [
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e001_T3T19_f294-311/pre_a_T3_F00264.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e001_T3T19_f294-311/pre_a_T3_F00268.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e001_T3T19_f294-311/pre_a_T3_F00272.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e001_T3T19_f294-311/pre_a_T3_F00276.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e001_T3T19_f294-311/pre_a_T3_F00280.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e001_T3T19_f294-311/pre_a_T3_F00284.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e001_T3T19_f294-311/pre_a_T3_F00288.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e001_T3T19_f294-311/pre_a_T3_F00293.jpg"
+        ],
+        "pre_b": [
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e001_T3T19_f294-311/pre_b_T19_F00264.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e001_T3T19_f294-311/pre_b_T19_F00268.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e001_T3T19_f294-311/pre_b_T19_F00272.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e001_T3T19_f294-311/pre_b_T19_F00276.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e001_T3T19_f294-311/pre_b_T19_F00280.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e001_T3T19_f294-311/pre_b_T19_F00284.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e001_T3T19_f294-311/pre_b_T19_F00288.jpg",
+          "crops/d724bbf0-bd0c-44e8-93d5-135aa07df5a1/e001_T3T19_f294-311/pre_b_T19_F00293.jpg"
+        ],
+        "post_a": [],
+        "post_b": []
+      },
+      "court_split_y": 0.4775803147928961,
+      "difficulty_score": 0.0,
+      "source": "db_convergence"
+    },
+    {
+      "event_id": "e002_T2T4_f396-407",
+      "rally_id": "e84deef3-56b1-4f5d-81aa-2924ad1c440e",
+      "video_id": "3ad271bd-b94d-4d63-86ec-4ecbe5dbfeac",
+      "track_a": 2,
+      "track_b": 4,
+      "team": 1,
+      "start_frame": 396,
+      "end_frame": 407,
+      "duration_frames": 12,
+      "crossed_switch": false,
+      "audit_same_team_switches": [],
+      "pre_frames_a": [
+        366,
+        370,
+        374,
+        378,
+        382,
+        386,
+        390,
+        395
+      ],
+      "pre_frames_b": [
+        366,
+        370,
+        374,
+        378,
+        382,
+        386,
+        390,
+        395
+      ],
+      "post_frames_a": [],
+      "post_frames_b": [
+        417
+      ],
+      "crops": {
+        "pre_a": [
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e002_T2T4_f396-407/pre_a_T2_F00366.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e002_T2T4_f396-407/pre_a_T2_F00370.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e002_T2T4_f396-407/pre_a_T2_F00374.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e002_T2T4_f396-407/pre_a_T2_F00378.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e002_T2T4_f396-407/pre_a_T2_F00382.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e002_T2T4_f396-407/pre_a_T2_F00386.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e002_T2T4_f396-407/pre_a_T2_F00390.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e002_T2T4_f396-407/pre_a_T2_F00395.jpg"
+        ],
+        "pre_b": [
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e002_T2T4_f396-407/pre_b_T4_F00366.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e002_T2T4_f396-407/pre_b_T4_F00370.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e002_T2T4_f396-407/pre_b_T4_F00374.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e002_T2T4_f396-407/pre_b_T4_F00378.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e002_T2T4_f396-407/pre_b_T4_F00382.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e002_T2T4_f396-407/pre_b_T4_F00386.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e002_T2T4_f396-407/pre_b_T4_F00390.jpg",
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e002_T2T4_f396-407/pre_b_T4_F00395.jpg"
+        ],
+        "post_a": [],
+        "post_b": [
+          "crops/e84deef3-56b1-4f5d-81aa-2924ad1c440e/e002_T2T4_f396-407/post_b_T4_F00417.jpg"
+        ]
+      },
+      "court_split_y": 0.5040465142875008,
+      "difficulty_score": 0.0,
+      "source": "db_convergence"
+    }
+  ]
+}
