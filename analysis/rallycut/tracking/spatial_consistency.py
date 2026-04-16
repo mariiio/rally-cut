@@ -15,7 +15,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from rallycut.tracking.appearance_descriptor import AppearanceDescriptorStore
-from rallycut.tracking.color_repair import ColorHistogramStore
+from rallycut.tracking.color_repair import ColorHistogramStore, LearnedEmbeddingStore
 from rallycut.tracking.player_tracker import PlayerPosition
 
 logger = logging.getLogger(__name__)
@@ -51,6 +51,7 @@ def enforce_spatial_consistency(
     video_fps: float = 30.0,
     drift_detection: bool = True,
     drift_max_displacement: float = DEFAULT_DRIFT_MAX_DISPLACEMENT,
+    learned_store: LearnedEmbeddingStore | None = None,
 ) -> tuple[list[PlayerPosition], SpatialConsistencyResult]:
     """Enforce spatial consistency on all tracks.
 
@@ -112,6 +113,8 @@ def enforce_spatial_consistency(
                     color_store.rekey(track_id, new_id, split_frame)
                 if appearance_store is not None:
                     appearance_store.rekey(track_id, new_id, split_frame)
+                if learned_store is not None:
+                    learned_store.rekey(track_id, new_id, split_frame)
 
                 result.jump_splits += 1
                 result.jump_details.append((track_id, new_id, split_frame))
@@ -158,6 +161,8 @@ def enforce_spatial_consistency(
                 color_store.rekey(track_id, new_id, split_frame)
             if appearance_store is not None:
                 appearance_store.rekey(track_id, new_id, split_frame)
+            if learned_store is not None:
+                learned_store.rekey(track_id, new_id, split_frame)
 
             result.drift_splits += 1
             result.drift_details.append(

@@ -28,7 +28,7 @@ from rallycut.tracking.appearance_descriptor import (
     MultiRegionDescriptor,
 )
 from rallycut.tracking.ball_tracker import BallPosition
-from rallycut.tracking.color_repair import ColorHistogramStore
+from rallycut.tracking.color_repair import ColorHistogramStore, LearnedEmbeddingStore
 from rallycut.tracking.player_tracker import PlayerPosition
 
 logger = logging.getLogger(__name__)
@@ -47,6 +47,9 @@ class CachedRetrackData:
     video_width: int
     video_height: int
     frame_count: int
+    # Session 4 — head SHA pinned to detect checkpoint drift. Empty string
+    # when learned ReID was disabled at extraction time.
+    head_sha: str = ""
 
 
 def _serialize_positions(positions: list[PlayerPosition]) -> list[dict[str, Any]]:
@@ -222,14 +225,22 @@ class RetrackCache:
         rally_id: str,
         config_hash: str,
     ) -> (
-        tuple[CachedRetrackData, ColorHistogramStore, AppearanceDescriptorStore]
+        tuple[
+            CachedRetrackData,
+            ColorHistogramStore,
+            AppearanceDescriptorStore,
+            LearnedEmbeddingStore | None,
+        ]
         | None
     ):
         """Load cached rally data and appearance stores.
 
         Returns:
-            (CachedRetrackData, ColorHistogramStore, AppearanceDescriptorStore)
-            or None if not cached or corrupt.
+            (CachedRetrackData, ColorHistogramStore, AppearanceDescriptorStore,
+             LearnedEmbeddingStore | None) or None if not cached or corrupt.
+            The fourth element is None when the cache was written without
+            learned-ReID embeddings (i.e. ``WEIGHT_LEARNED_REID`` was 0 at
+            extraction time).
         """
         prefix = self._key_prefix(rally_id, config_hash)
         meta_path = self._meta_path(prefix)
@@ -270,6 +281,7 @@ class RetrackCache:
                 video_width=meta["video_width"],
                 video_height=meta["video_height"],
                 frame_count=meta["frame_count"],
+                head_sha=meta.get("head_sha", ""),
             )
 
             # Load appearance arrays
@@ -278,8 +290,16 @@ class RetrackCache:
 
             color_store = _deserialize_color_store(all_arrays)
             appearance_store = _deserialize_appearance_store(all_arrays)
+            learned_arrays = {
+                k: v for k, v in all_arrays.items() if k.startswith("l_")
+            }
+            learned_store = (
+                LearnedEmbeddingStore.deserialize(learned_arrays)
+                if learned_arrays
+                else None
+            )
 
-            return data, color_store, appearance_store
+            return data, color_store, appearance_store, learned_store
 
         except (json.JSONDecodeError, KeyError, TypeError, ValueError) as e:
             logger.warning(f"Failed to load retrack cache for {rally_id[:8]}: {e}")
@@ -290,6 +310,7 @@ class RetrackCache:
         data: CachedRetrackData,
         color_store: ColorHistogramStore | None,
         appearance_store: AppearanceDescriptorStore | None,
+        learned_store: LearnedEmbeddingStore | None = None,
     ) -> None:
         """Store rally data and appearance stores in cache."""
         prefix = self._key_prefix(data.rally_id, data.config_hash)
@@ -306,6 +327,7 @@ class RetrackCache:
                 "video_width": data.video_width,
                 "video_height": data.video_height,
                 "frame_count": data.frame_count,
+                "head_sha": data.head_sha,
             }
             with open(self._meta_path(prefix), "w") as f:
                 json.dump(meta, f)
@@ -316,6 +338,8 @@ class RetrackCache:
                 arrays.update(_serialize_color_store(color_store))
             if appearance_store is not None:
                 arrays.update(_serialize_appearance_store(appearance_store))
+            if learned_store is not None and learned_store.has_data():
+                arrays.update(learned_store.serialize())
 
             np.savez_compressed(self._appearance_path(prefix), **arrays)  # type: ignore[arg-type]
 

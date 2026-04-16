@@ -90,6 +90,17 @@ def evaluate_tracking(
         "--clear-retrack-cache",
         help="Clear retrack cache before running",
     ),
+    audit_out: Path = typer.Option(
+        None,
+        "--audit-out",
+        help=(
+            "Emit per-rally audit JSON (same schema as "
+            "`reports/tracking_audit/reid_debug`) to this directory. "
+            "Requires --retrack. Used by the Session-4 learned-ReID gate "
+            "script to re-audit the in-memory retrack output without "
+            "writing predictions back to DB."
+        ),
+    ),
 ) -> None:
     """Evaluate player and ball tracking predictions against ground truth.
 
@@ -148,8 +159,13 @@ def evaluate_tracking(
             per_player=per_player,
             analyze_errors=analyze_errors,
             output=output,
+            audit_out=audit_out,
         )
         return
+
+    if audit_out is not None:
+        console.print("[red]Error:[/red] --audit-out requires --retrack")
+        raise typer.Exit(1)
 
     from rallycut.evaluation.tracking.ball_metrics import (
         aggregate_ball_metrics,
@@ -434,10 +450,12 @@ def evaluate_tracking(
 def _compute_tracker_config_hash() -> str:
     """Compute a hash of the detection-phase config for cache invalidation.
 
-    Captures everything that affects YOLO+BoT-SORT output (Phase 1).
+    Captures everything that affects YOLO+BoT-SORT output (Phase 1) and
+    whether learned-ReID embeddings were extracted in the frame loop.
     Post-processing config is deliberately excluded — that's what we iterate on.
     """
     import hashlib
+    import os
 
     from rallycut.tracking.player_tracker import (
         DEFAULT_CONFIDENCE,
@@ -446,6 +464,16 @@ def _compute_tracker_config_hash() -> str:
         DEFAULT_IOU,
         DEFAULT_TRACKER,
         MODEL_NAME,
+    )
+    from rallycut.tracking.reid_embeddings import HEAD_SHA
+
+    # Session 4 — learned-ReID extraction changes what lives in
+    # the cache (embedding arrays + head_sha pin). Invalidate when toggled
+    # or when the head checkpoint changes. Weight VALUE is NOT in the hash:
+    # downstream cost uses it multiplicatively; stored embeddings are
+    # weight-invariant, so a sweep over {0.05..0.20} reuses one cache.
+    learned_reid_enabled = (
+        float(os.environ.get("WEIGHT_LEARNED_REID", "0.0")) > 0
     )
 
     config_parts = [
@@ -456,6 +484,11 @@ def _compute_tracker_config_hash() -> str:
         f"tracker={DEFAULT_TRACKER}",
         f"roi={DEFAULT_COURT_ROI}",
     ]
+    # Only append the learned-ReID fragment when enabled — preserves the
+    # pre-integration hash byte-identically for the W=0 control so the
+    # existing 54 MB retrack cache is reused.
+    if learned_reid_enabled:
+        config_parts.append(f"learned_reid:True:{HEAD_SHA}")
     config_str = "|".join(config_parts)
     return hashlib.sha256(config_str.encode()).hexdigest()[:16]
 
@@ -471,6 +504,7 @@ def _run_retrack_evaluation(
     per_player: bool,
     analyze_errors: bool,
     output: Path | None,
+    audit_out: Path | None = None,
 ) -> None:
     """Re-run tracking pipeline on GT rallies and evaluate.
 
@@ -607,7 +641,9 @@ def _run_retrack_evaluation(
             if retrack_cache is not None:
                 cache_entry = retrack_cache.get(rally.rally_id, config_hash)
                 if cache_entry is not None:
-                    cached_data, color_store, appearance_store = cache_entry
+                    cached_data, color_store, appearance_store, learned_store = (
+                        cache_entry
+                    )
                     tracking_result = PlayerTracker.apply_post_processing(
                         positions=cached_data.positions,
                         raw_positions=list(cached_data.positions),
@@ -624,6 +660,7 @@ def _run_retrack_evaluation(
                             cached_data.video_fps
                         ),
                         court_calibrator=court_calibrator,
+                        learned_store=learned_store,
                     )
                     elapsed = time_mod.time() - rally_start
                     console.print(
@@ -656,6 +693,8 @@ def _run_retrack_evaluation(
                     tracking_result, raw_data = result_tuple
 
                     # Cache the raw data
+                    from rallycut.tracking.reid_embeddings import HEAD_SHA
+
                     cache_data = CachedRetrackData(
                         rally_id=rally.rally_id,
                         video_id=rally.video_id,
@@ -666,11 +705,15 @@ def _run_retrack_evaluation(
                         video_width=tracking_result.video_width,
                         video_height=tracking_result.video_height,
                         frame_count=tracking_result.frame_count,
+                        head_sha=(
+                            HEAD_SHA if raw_data.learned_store is not None else ""
+                        ),
                     )
                     retrack_cache.put(
                         cache_data,
                         raw_data.color_store,
                         raw_data.appearance_store,
+                        raw_data.learned_store,
                     )
                 else:
                     # Run tracking without caching
@@ -690,6 +733,36 @@ def _run_retrack_evaluation(
             # Evaluate against GT
             if tracking_result is None:
                 continue
+
+            # Session 4 — optionally emit per-rally audit JSON alongside the
+            # retrack output so the gate script can re-derive identity-swap
+            # counts without writing to DB. Schema matches
+            # `reports/tracking_audit/reid_debug/*.json` so
+            # `_load_events_from_audit` parses it unchanged.
+            if audit_out is not None:
+                import json as _json
+
+                from rallycut.evaluation.tracking.audit import build_rally_audit
+
+                audit_out.mkdir(parents=True, exist_ok=True)
+                try:
+                    rally_audit = build_rally_audit(
+                        rally_id=rally.rally_id,
+                        video_id=rally.video_id,
+                        ground_truth=rally.ground_truth,
+                        predictions=tracking_result,
+                        raw_positions=None,
+                        iou_threshold=iou_threshold,
+                    )
+                    audit_path = audit_out / f"{rally.rally_id}.json"
+                    with open(audit_path, "w") as f:
+                        _json.dump(rally_audit.to_dict(), f, indent=2)
+                except Exception as audit_exc:  # noqa: BLE001
+                    console.print(
+                        f"  [yellow]audit emit failed for "
+                        f"{rally.rally_id[:8]}: {audit_exc}[/yellow]"
+                    )
+
             eval_result = evaluate_rally(
                 rally_id=rally.rally_id,
                 ground_truth=rally.ground_truth,

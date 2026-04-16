@@ -191,6 +191,162 @@ class ColorHistogramStore:
         self._track_ids = {tid for tid, _ in self._histograms}
 
 
+class LearnedEmbeddingStore:
+    """Stores per-frame 128-d learned-ReID embeddings keyed by (track_id, frame_number).
+
+    API mirrors ColorHistogramStore so global_identity, stabilize_track_ids,
+    tracklet_link, color-split, and apply_post_processing can keep this store
+    in sync with the color_store via parallel calls.
+
+    Embeddings are L2-normalized float32 arrays produced by
+    ``reid_embeddings.extract_learned_embeddings`` (frozen DINOv2 ViT-S/14
+    backbone → trained MLP head 384→192→128).
+    """
+
+    def __init__(self) -> None:
+        self._embeddings: dict[tuple[int, int], np.ndarray] = {}
+        self._track_ids: set[int] = set()
+
+    def add(self, track_id: int, frame_number: int, embedding: np.ndarray) -> None:
+        """Store an embedding (shape (128,), L2-norm float32) for (track, frame)."""
+        self._embeddings[(track_id, frame_number)] = embedding
+        self._track_ids.add(track_id)
+
+    def get(self, track_id: int, frame_number: int) -> np.ndarray | None:
+        """Retrieve an embedding, or None if not stored."""
+        return self._embeddings.get((track_id, frame_number))
+
+    def get_track_embeddings(
+        self, track_id: int
+    ) -> list[tuple[int, np.ndarray]]:
+        """Get all embeddings for a track, sorted by frame number."""
+        items = [
+            (fn, emb)
+            for (tid, fn), emb in self._embeddings.items()
+            if tid == track_id
+        ]
+        items.sort(key=lambda x: x[0])
+        return items
+
+    def has_data(self) -> bool:
+        """Check if any embeddings are stored."""
+        return len(self._embeddings) > 0
+
+    def track_ids(self) -> set[int]:
+        """Get all track IDs with stored embeddings."""
+        return set(self._track_ids)
+
+    def rekey(self, old_id: int, new_id: int, from_frame: int) -> None:
+        """Reassign embeddings from old_id to new_id starting at from_frame."""
+        keys_to_move = [
+            (tid, fn)
+            for (tid, fn) in self._embeddings
+            if tid == old_id and fn >= from_frame
+        ]
+        for key in keys_to_move:
+            emb = self._embeddings.pop(key)
+            self._embeddings[(new_id, key[1])] = emb
+
+        if keys_to_move:
+            self._track_ids.add(new_id)
+            if not any(tid == old_id for tid, _ in self._embeddings):
+                self._track_ids.discard(old_id)
+
+    def swap(self, track_a: int, track_b: int, from_frame: int) -> None:
+        """Exchange embeddings between two tracks from from_frame onward."""
+        a_keys = [
+            (tid, fn)
+            for (tid, fn) in self._embeddings
+            if tid == track_a and fn >= from_frame
+        ]
+        b_keys = [
+            (tid, fn)
+            for (tid, fn) in self._embeddings
+            if tid == track_b and fn >= from_frame
+        ]
+
+        a_entries = {fn: self._embeddings.pop((track_a, fn)) for _, fn in a_keys}
+        b_entries = {fn: self._embeddings.pop((track_b, fn)) for _, fn in b_keys}
+
+        for fn, emb in a_entries.items():
+            self._embeddings[(track_b, fn)] = emb
+        for fn, emb in b_entries.items():
+            self._embeddings[(track_a, fn)] = emb
+
+        self._track_ids.discard(track_a)
+        self._track_ids.discard(track_b)
+        if any(tid == track_a for tid, _ in self._embeddings):
+            self._track_ids.add(track_a)
+        if any(tid == track_b for tid, _ in self._embeddings):
+            self._track_ids.add(track_b)
+
+    def remap_ids(self, id_mapping: dict[int, int]) -> None:
+        """Apply a bulk ID remapping (old_id -> new_id) to all embeddings."""
+        if not id_mapping:
+            return
+
+        keys_to_move: list[tuple[tuple[int, int], int]] = []
+        for (tid, fn) in self._embeddings:
+            if tid in id_mapping:
+                keys_to_move.append(((tid, fn), id_mapping[tid]))
+
+        for old_key, new_tid in keys_to_move:
+            emb = self._embeddings.pop(old_key)
+            self._embeddings[(new_tid, old_key[1])] = emb
+
+        self._track_ids = {tid for tid, _ in self._embeddings}
+
+    def shift_frames(self, offset: int) -> None:
+        """Shift all frame numbers by offset (e.g., -start_frame for 0-basing)."""
+        if offset == 0:
+            return
+        new_embeddings: dict[tuple[int, int], np.ndarray] = {}
+        for (tid, fn), emb in self._embeddings.items():
+            new_embeddings[(tid, fn + offset)] = emb
+        self._embeddings = new_embeddings
+
+    def remap_per_frame(
+        self, remap_keys: dict[tuple[int, int], int],
+    ) -> None:
+        """Apply per-frame ID remapping: (old_track_id, frame) -> new_id."""
+        if not remap_keys:
+            return
+
+        keys_to_move: list[tuple[tuple[int, int], int]] = []
+        for key in list(self._embeddings):
+            if key in remap_keys:
+                keys_to_move.append((key, remap_keys[key]))
+
+        for old_key, new_tid in keys_to_move:
+            emb = self._embeddings.pop(old_key)
+            self._embeddings[(new_tid, old_key[1])] = emb
+
+        self._track_ids = {tid for tid, _ in self._embeddings}
+
+    def serialize(self) -> dict[str, np.ndarray]:
+        """Serialize to a flat dict of ``l_<track>_<frame>`` → (128,) float32.
+
+        Used by the retrack cache (``retrack_cache.py``) so ``--retrack --cached``
+        runs can reuse embeddings without re-running the backbone+head. Empty
+        dict when no data stored.
+        """
+        return {
+            f"l_{tid}_{fn}": emb.astype(np.float32)
+            for (tid, fn), emb in self._embeddings.items()
+        }
+
+    @classmethod
+    def deserialize(cls, data: dict[str, np.ndarray]) -> LearnedEmbeddingStore:
+        """Reconstruct from the dict produced by ``serialize``."""
+        store = cls()
+        for key, emb in data.items():
+            if not key.startswith("l_"):
+                continue
+            _, tid_str, fn_str = key.split("_", 2)
+            store.add(int(tid_str), int(fn_str), emb)
+        return store
+
+
 def extract_shorts_histogram(
     frame: np.ndarray,
     bbox: tuple[float, float, float, float],
@@ -257,6 +413,7 @@ def split_tracks_by_color(
     ema_alpha: float = DEFAULT_EMA_ALPHA,
     min_template_frames: int = DEFAULT_MIN_TEMPLATE_FRAMES,
     max_passes: int = DEFAULT_MAX_PASSES,
+    learned_store: LearnedEmbeddingStore | None = None,
 ) -> tuple[list[PlayerPosition], int]:
     """Split tracks at points where shorts color changes abruptly.
 
@@ -315,6 +472,8 @@ def split_tracks_by_color(
 
                 # Rekey histogram store
                 color_store.rekey(track_id, new_id, split_frame)
+                if learned_store is not None:
+                    learned_store.rekey(track_id, new_id, split_frame)
 
                 logger.info(
                     f"Color split: track {track_id} at frame {split_frame} "

@@ -51,6 +51,10 @@ debug_*/
 # Diagnostic outputs (regeneratable audit logs, plots, artifacts)
 outputs/
 reports/tracking_audit/
+reports/within_team_reid/eval_cache/
+reports/within_team_reid/thumbs/
+reports/within_team_reid/sweep/
+reports/within_team_reid/contact_sheet.html
 
 # Training artifacts (large, regeneratable)
 reid_training_data/

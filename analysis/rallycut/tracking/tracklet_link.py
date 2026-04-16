@@ -35,7 +35,7 @@ from rallycut.tracking.player_tracker import PlayerPosition
 if TYPE_CHECKING:
     from rallycut.court.calibration import CourtCalibrator
     from rallycut.tracking.appearance_descriptor import AppearanceDescriptorStore
-    from rallycut.tracking.color_repair import ColorHistogramStore
+    from rallycut.tracking.color_repair import ColorHistogramStore, LearnedEmbeddingStore
 
 logger = logging.getLogger(__name__)
 
@@ -645,6 +645,7 @@ def link_tracklets_by_appearance(
     appearance_store: AppearanceDescriptorStore | None = None,
     max_overlap_frames: int = 15,
     calibrator: CourtCalibrator | None = None,
+    learned_store: LearnedEmbeddingStore | None = None,
 ) -> tuple[list[PlayerPosition], int]:
     """Link fragmented tracklets using appearance similarity.
 
@@ -858,6 +859,8 @@ def link_tracklets_by_appearance(
     color_store.remap_ids(resolved_mapping)
     if appearance_store is not None:
         appearance_store.remap_ids(resolved_mapping)
+    if learned_store is not None:
+        learned_store.remap_ids(resolved_mapping)
 
     remaining_tracks = len({p.track_id for p in positions if p.track_id >= 0})
     logger.info(
@@ -884,6 +887,7 @@ def relink_spatial_splits(
     appearance_store: AppearanceDescriptorStore | None = None,
     max_gap: int = SPATIAL_RELINK_MAX_GAP,
     max_distance: float = SPATIAL_RELINK_MAX_DISTANCE,
+    learned_store: LearnedEmbeddingStore | None = None,
 ) -> tuple[list[PlayerPosition], int]:
     """Reconnect fragments that are trivially the same player by position.
 
@@ -1007,6 +1011,8 @@ def relink_spatial_splits(
     color_store.remap_ids(resolved_mapping)
     if appearance_store is not None:
         appearance_store.remap_ids(resolved_mapping)
+    if learned_store is not None:
+        learned_store.remap_ids(resolved_mapping)
 
     num_relinks = len(id_mapping)
     logger.info(
@@ -1037,6 +1043,7 @@ def relink_primary_fragments(
     max_gap: int = PRIMARY_RELINK_MAX_GAP,
     max_distance: float = PRIMARY_RELINK_MAX_DISTANCE,
     max_appearance: float = PRIMARY_RELINK_MAX_APPEARANCE,
+    learned_store: LearnedEmbeddingStore | None = None,
 ) -> tuple[list[PlayerPosition], list[int], int]:
     """Link non-primary fragments into primary tracks by spatial proximity.
 
@@ -1190,6 +1197,8 @@ def relink_primary_fragments(
     color_store.remap_ids(id_mapping)
     if appearance_store is not None:
         appearance_store.remap_ids(id_mapping)
+    if learned_store is not None:
+        learned_store.remap_ids(id_mapping)
 
     num_relinks = len(id_mapping)
     logger.info(

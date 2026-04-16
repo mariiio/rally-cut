@@ -1334,6 +1334,9 @@ def main() -> int:
                         help="Diff one rally's dashboard output vs DB-stored production output and exit.")
     parser.add_argument("--limit", type=int, default=None,
                         help="Process only the first N rallies (debug).")
+    parser.add_argument("--output", type=Path, default=None, metavar="PATH",
+                        help="Optional explicit output JSON path. Default: "
+                             "outputs/production_eval/run_<timestamp>.json")
     args = parser.parse_args()
 
     analysis_root = Path(__file__).resolve().parent.parent
@@ -1425,10 +1428,14 @@ def main() -> int:
     _print_summary(agg, n_loaded, n_eval, last_rejections, warning, last_score_metrics)
 
     # Write JSON.
-    out_dir = analysis_root / "outputs" / "production_eval"
-    out_dir.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now().strftime("%Y-%m-%d-%H%M%S")
-    out_path = out_dir / f"run_{stamp}.json"
+    if args.output is not None:
+        out_path = args.output
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        out_dir = analysis_root / "outputs" / "production_eval"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / f"run_{stamp}.json"
 
     # Regroup per_class:: keys under a nested dict for a cleaner schema.
     metrics_out: dict[str, Any] = {}

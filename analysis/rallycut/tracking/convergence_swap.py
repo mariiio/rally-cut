@@ -29,6 +29,7 @@ import numpy as np
 from rallycut.tracking.color_repair import (
     ColorHistogramStore,
     ConvergencePeriod,
+    LearnedEmbeddingStore,
     detect_convergence_periods,
 )
 from rallycut.tracking.player_tracker import PlayerPosition
@@ -466,6 +467,7 @@ def detect_convergence_swaps(
     color_store: ColorHistogramStore | None = None,
     upstream_split_y: float | None = None,
     upstream_teams: dict[int, int] | None = None,
+    learned_store: LearnedEmbeddingStore | None = None,
 ) -> tuple[list[PlayerPosition], int]:
     """Detect and fix cross-team ID swaps at convergence points.
 
@@ -631,6 +633,8 @@ def detect_convergence_swaps(
 
         if color_store is not None:
             color_store.swap(cand.track_a, cand.track_b, cand.swap_frame)
+        if learned_store is not None:
+            learned_store.swap(cand.track_a, cand.track_b, cand.swap_frame)
 
         if swapped > 0:
             swapped_tracks.add(cand.track_a)

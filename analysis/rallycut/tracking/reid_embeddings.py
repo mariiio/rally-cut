@@ -423,3 +423,121 @@ def extract_crops_from_video(
         logger.info("Extracted %d reference crops for player %d", len(crops), pid)
 
     return crops_by_player
+
+
+# ---------------------------------------------------------------------------
+# Within-team ReID head (Session 4 — trained MLP 384→192→128 over frozen DINOv2)
+# ---------------------------------------------------------------------------
+
+
+HEAD_CHECKPOINT_PATH = (
+    Path(__file__).resolve().parents[2] / "weights" / "within_team_reid" / "best.pt"
+)
+
+
+def _compute_head_sha() -> str:
+    """SHA-12 of the checkpoint file for retrack-cache invalidation.
+
+    Empty string if the file is missing — treated as ``learned_reid:disabled``.
+    """
+    import hashlib
+
+    if not HEAD_CHECKPOINT_PATH.is_file():
+        return ""
+    h = hashlib.sha256(HEAD_CHECKPOINT_PATH.read_bytes())
+    return h.hexdigest()[:12]
+
+
+HEAD_SHA = _compute_head_sha()
+
+_head_cache: dict[str, nn.Module | None] = {}
+_head_load_warned = False
+
+
+def _get_head(device: str) -> nn.Module | None:
+    """Load the trained MLP head (Session 3 V3 epoch 2) lazily, once per device.
+
+    Returns None on any failure (missing file, state-dict mismatch, import
+    error). Callers treat None as "learned ReID disabled" — no crash.
+    """
+    global _head_load_warned
+    cache_key = f"within_team_reid:{device}"
+    if cache_key in _head_cache:
+        return _head_cache[cache_key]
+
+    try:
+        from training.within_team_reid.model.head import MLPHead
+    except Exception as exc:  # noqa: BLE001
+        if not _head_load_warned:
+            logger.warning(
+                "Within-team ReID head: MLPHead import failed (%s); "
+                "learned-ReID cost will be disabled.", exc,
+            )
+            _head_load_warned = True
+        _head_cache[cache_key] = None
+        return None
+
+    if not HEAD_CHECKPOINT_PATH.is_file():
+        if not _head_load_warned:
+            logger.warning(
+                "Within-team ReID head: checkpoint not found at %s; "
+                "learned-ReID cost will be disabled.", HEAD_CHECKPOINT_PATH,
+            )
+            _head_load_warned = True
+        _head_cache[cache_key] = None
+        return None
+
+    try:
+        ckpt = torch.load(HEAD_CHECKPOINT_PATH, map_location=device, weights_only=False)
+        head = MLPHead()
+        head.load_state_dict(ckpt["head_state_dict"])
+        head.to(device).eval()
+        for p in head.parameters():
+            p.requires_grad_(False)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "Within-team ReID head: load failed (%s); learned-ReID cost disabled.",
+            exc,
+        )
+        _head_cache[cache_key] = None
+        return None
+
+    logger.info(
+        "Within-team ReID head loaded on %s (sha=%s, params=%d)",
+        device, HEAD_SHA, sum(p.numel() for p in head.parameters()),
+    )
+    _head_cache[cache_key] = head
+    return head
+
+
+def extract_learned_embeddings(
+    crops: list[NDArray[np.uint8]],
+    device: str | None = None,
+) -> NDArray[np.floating]:
+    """Extract Session-3 128-d within-team embeddings from BGR crops.
+
+    Pipeline: DINOv2 ViT-S/14 (frozen, shared singleton) → 2-layer MLP head →
+    L2-normalize. Returns ``(N, 128)`` float32. Returns empty ``(0, 128)`` if
+    the head is unavailable (checkpoint missing, import failed) — callers
+    must handle the empty case by skipping the learned-ReID path for that
+    frame.
+    """
+    if not crops:
+        return np.empty((0, 128), dtype=np.float32)
+
+    if device is None:
+        device = _default_device()
+
+    head = _get_head(device)
+    if head is None:
+        return np.empty((0, 128), dtype=np.float32)
+
+    feats_384 = extract_backbone_features(crops, device=device)
+    if feats_384.shape[0] == 0:
+        return np.empty((0, 128), dtype=np.float32)
+
+    with torch.inference_mode():
+        x = torch.from_numpy(feats_384).to(device)
+        out = head(x)
+    result: NDArray[np.floating] = out.cpu().numpy().astype(np.float32)
+    return result

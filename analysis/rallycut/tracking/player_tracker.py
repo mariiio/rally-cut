@@ -26,7 +26,10 @@ if TYPE_CHECKING:
     from rallycut.court.detector import CourtDetectionInsights
     from rallycut.tracking.appearance_descriptor import AppearanceDescriptorStore
     from rallycut.tracking.ball_tracker import BallPosition
-    from rallycut.tracking.color_repair import ColorHistogramStore
+    from rallycut.tracking.color_repair import (
+        ColorHistogramStore,
+        LearnedEmbeddingStore,
+    )
     from rallycut.tracking.player_filter import PlayerFilterConfig
     from rallycut.tracking.quality_report import TrackingQualityReport
 
@@ -851,6 +854,7 @@ class TrackingRawData:
     positions: list[PlayerPosition]
     color_store: ColorHistogramStore | None = None
     appearance_store: AppearanceDescriptorStore | None = None
+    learned_store: LearnedEmbeddingStore | None = None
 
 
 class PlayerTracker:
@@ -1424,6 +1428,7 @@ class PlayerTracker:
         court_detection_insights: CourtDetectionInsights | None = None,
         skip_global_identity: bool = False,
         processing_time_ms: float = 0.0,
+        learned_store: LearnedEmbeddingStore | None = None,
     ) -> PlayerTrackingResult:
         """Apply full post-processing pipeline to raw BoT-SORT output.
 
@@ -1480,6 +1485,8 @@ class PlayerTracker:
             color_store = copy.deepcopy(color_store)
         if appearance_store is not None:
             appearance_store = copy.deepcopy(appearance_store)
+        if learned_store is not None:
+            learned_store = copy.deepcopy(learned_store)
 
         court_split_y: float | None = None
         primary_track_ids: list[int] = []
@@ -1528,6 +1535,7 @@ class PlayerTracker:
                 appearance_store=appearance_store,
                 video_fps=video_fps,
                 drift_detection=False,
+                learned_store=learned_store,
             )
             num_jump_splits = consistency_result.jump_splits
 
@@ -1538,6 +1546,7 @@ class PlayerTracker:
                 positions,
                 color_store=color_store,
                 appearance_store=appearance_store,
+                learned_store=learned_store,
             )
             num_height_swaps = height_swap_result.swaps
 
@@ -1548,7 +1557,8 @@ class PlayerTracker:
                 )
 
                 positions, num_color_splits = split_tracks_by_color(
-                    positions, color_store
+                    positions, color_store,
+                    learned_store=learned_store,
                 )
 
                 # Step 0b2: Spatial re-link
@@ -1560,6 +1570,7 @@ class PlayerTracker:
                 positions, num_spatial_relinks = relink_spatial_splits(
                     positions, color_store,
                     appearance_store=appearance_store,
+                    learned_store=learned_store,
                 )
 
                 # Step 0b3: Relaxed fragment linking for primary tracks
@@ -1583,6 +1594,7 @@ class PlayerTracker:
                         pre_primary_ids,
                         color_store,
                         appearance_store=appearance_store,
+                        learned_store=learned_store,
                     )
                 )
 
@@ -1599,6 +1611,7 @@ class PlayerTracker:
                 positions, num_appearance_links = link_tracklets_by_appearance(
                     positions, color_store,
                     appearance_store=appearance_store,
+                    learned_store=learned_store,
                 )
 
             # Step 1: Stabilize track IDs
@@ -1610,6 +1623,8 @@ class PlayerTracker:
                     color_store.remap_ids(id_mapping)
                 if appearance_store is not None:
                     appearance_store.remap_ids(id_mapping)
+                if learned_store is not None:
+                    learned_store.remap_ids(id_mapping)
 
             player_filter = PlayerFilter(
                 ball_positions=ball_positions,
@@ -1715,6 +1730,7 @@ class PlayerTracker:
                     color_store,
                     court_split_y=split_y,
                     appearance_store=appearance_store,
+                    learned_store=learned_store,
                 )
                 _num_global_segments = global_result.num_segments
                 _num_global_remapped = global_result.num_remapped
@@ -1731,6 +1747,8 @@ class PlayerTracker:
                             color_store.remap_per_frame(remap_keys)
                         if appearance_store is not None:
                             appearance_store.remap_per_frame(remap_keys)
+                        if learned_store is not None:
+                            learned_store.remap_per_frame(remap_keys)
                 if not global_result.skipped:
                     logger.info(
                         f"Global identity: {global_result.num_segments} "
@@ -1756,6 +1774,7 @@ class PlayerTracker:
                         color_store=color_store,
                         upstream_split_y=split_y,
                         upstream_teams=team_assignments,
+                        learned_store=learned_store,
                     )
                 )
 
@@ -1829,6 +1848,8 @@ class PlayerTracker:
                 color_store.shift_frames(-start_frame)
             if appearance_store is not None and appearance_store.has_data():
                 appearance_store.shift_frames(-start_frame)
+            if learned_store is not None and learned_store.has_data():
+                learned_store.shift_frames(-start_frame)
 
         return PlayerTrackingResult(
             positions=positions,
@@ -2005,6 +2026,13 @@ class PlayerTracker:
             # Color histogram store for post-hoc track repair
             color_store = None
             appearance_store = None
+            learned_store = None
+            # Session 4 — learned-ReID enablement. Gated at startup so the
+            # backbone+head stay cold when WEIGHT_LEARNED_REID=0.
+            learned_reid_enabled = (
+                float(os.environ.get("WEIGHT_LEARNED_REID", "0.0")) > 0
+            )
+            learned_extract_fn: Callable[..., Any] | None = None
             histogram_stride = 3  # Extract every 3rd processed frame
             if filter_enabled:
                 from rallycut.tracking.appearance_descriptor import (
@@ -2013,11 +2041,33 @@ class PlayerTracker:
                 )
                 from rallycut.tracking.color_repair import (
                     ColorHistogramStore,
+                    LearnedEmbeddingStore,
                     extract_shorts_histogram,
                 )
 
                 color_store = ColorHistogramStore()
                 appearance_store = AppearanceDescriptorStore()
+                if learned_reid_enabled:
+                    from rallycut.tracking.crop_quality import is_quality_crop
+                    from rallycut.tracking.player_features import extract_bbox_crop
+                    from rallycut.tracking.reid_embeddings import (
+                        _default_device,
+                        _get_head,
+                        extract_learned_embeddings,
+                    )
+
+                    _learned_device = _default_device()
+                    # Warm the head once so a bad checkpoint fails loudly at
+                    # start-of-rally instead of silently degrading later.
+                    if _get_head(_learned_device) is None:
+                        logger.warning(
+                            "WEIGHT_LEARNED_REID>0 but head failed to load — "
+                            "disabling learned ReID for this rally"
+                        )
+                        learned_reid_enabled = False
+                    else:
+                        learned_store = LearnedEmbeddingStore()
+                        learned_extract_fn = extract_learned_embeddings
 
             while frame_idx < end_frame:
                 # For strided processing, grab() skips frame decoding
@@ -2156,6 +2206,47 @@ class PlayerTracker:
                                     appearance_store.add(
                                         p.track_id, p.frame_number, desc
                                     )
+
+                    # Extract Session-4 within-team ReID embeddings
+                    # (DINOv2-S backbone → trained MLP head → 128-d L2-norm).
+                    # Same stride as HSV/multi-region to amortize crop cost.
+                    # `is_quality_crop` enforces: bbox ≥ 5% frame height,
+                    # edges ≥ 2% from frame boundary, IoU ≤ 30% with any
+                    # other primary track. Batched once per frame so the
+                    # backbone forward is called at most once per stride.
+                    if (
+                        learned_store is not None
+                        and learned_extract_fn is not None
+                        and frames_processed % histogram_stride == 0
+                    ):
+                        frame_primary = [
+                            fp for fp in frame_positions if fp.track_id >= 0
+                        ]
+                        quality_positions: list[PlayerPosition] = []
+                        quality_crops: list[np.ndarray] = []
+                        frame_u8 = np.ascontiguousarray(frame, dtype=np.uint8)
+                        for p in frame_primary:
+                            if not is_quality_crop(p, frame_primary):
+                                continue
+                            crop = extract_bbox_crop(
+                                frame_u8,
+                                (p.x, p.y, p.width, p.height),
+                                video_width,
+                                video_height,
+                            )
+                            if crop is None or crop.size == 0:
+                                continue
+                            quality_positions.append(p)
+                            quality_crops.append(crop)
+                        if quality_crops:
+                            embs = learned_extract_fn(
+                                quality_crops, device=_learned_device,
+                            )
+                            if embs.shape[0] == len(quality_positions):
+                                for pos, emb in zip(quality_positions, embs):
+                                    learned_store.add(
+                                        pos.track_id, pos.frame_number, emb,
+                                    )
                 except (IndexError, RuntimeError, ValueError) as e:
                     # Handle any errors from YOLO/ByteTrack internals
                     logger.debug(f"Frame {frame_idx} tracking failed: {e}")
@@ -2225,15 +2316,19 @@ class PlayerTracker:
                 ]
                 raw_color = copy.deepcopy(color_store)
                 raw_appearance = copy.deepcopy(appearance_store)
+                raw_learned = copy.deepcopy(learned_store)
                 if start_frame > 0:
                     if raw_color is not None and raw_color.has_data():
                         raw_color.shift_frames(-start_frame)
                     if raw_appearance is not None and raw_appearance.has_data():
                         raw_appearance.shift_frames(-start_frame)
+                    if raw_learned is not None and raw_learned.has_data():
+                        raw_learned.shift_frames(-start_frame)
                 raw_data = TrackingRawData(
                     positions=raw_positions_for_cache,
                     color_store=raw_color,
                     appearance_store=raw_appearance,
+                    learned_store=raw_learned,
                 )
 
             processing_time_ms = (time.time() - start_time) * 1000
@@ -2261,6 +2356,7 @@ class PlayerTracker:
                 court_detection_insights=court_detection_insights,
                 skip_global_identity=skip_global_identity,
                 processing_time_ms=processing_time_ms,
+                learned_store=learned_store,
             )
 
             if return_raw and raw_data is not None:

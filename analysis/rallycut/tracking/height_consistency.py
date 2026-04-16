@@ -18,7 +18,7 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 
 from rallycut.tracking.appearance_descriptor import AppearanceDescriptorStore
-from rallycut.tracking.color_repair import ColorHistogramStore
+from rallycut.tracking.color_repair import ColorHistogramStore, LearnedEmbeddingStore
 from rallycut.tracking.player_tracker import PlayerPosition
 
 logger = logging.getLogger(__name__)
@@ -76,6 +76,7 @@ def fix_height_swaps(
     window_frames: int = DEFAULT_WINDOW_FRAMES,
     gap_alignment_tolerance: int = DEFAULT_GAP_ALIGNMENT_TOLERANCE,
     min_gap_frames: int = DEFAULT_MIN_GAP_FRAMES,
+    learned_store: LearnedEmbeddingStore | None = None,
 ) -> tuple[list[PlayerPosition], HeightSwapResult]:
     """Detect and fix height-based track swaps.
 
@@ -181,6 +182,7 @@ def fix_height_swaps(
                 swap_frame,
                 color_store,
                 appearance_store,
+                learned_store,
             )
 
             detail = HeightSwapDetail(
@@ -324,6 +326,7 @@ def _apply_swap(
     from_frame: int,
     color_store: ColorHistogramStore | None,
     appearance_store: AppearanceDescriptorStore | None,
+    learned_store: LearnedEmbeddingStore | None = None,
 ) -> None:
     """Swap track IDs between two tracks from a given frame onward.
 
@@ -341,6 +344,8 @@ def _apply_swap(
         color_store.swap(track_a, track_b, from_frame)
     if appearance_store is not None:
         appearance_store.swap(track_a, track_b, from_frame)
+    if learned_store is not None:
+        learned_store.swap(track_a, track_b, from_frame)
 
 
 def _group_by_track(

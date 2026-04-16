@@ -17,6 +17,7 @@ from __future__ import annotations
 import functools
 import logging
 import math
+import os
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -28,6 +29,7 @@ import numpy as np
 from rallycut.tracking.color_repair import (
     ColorHistogramStore,
     ConvergencePeriod,
+    LearnedEmbeddingStore,
     detect_convergence_periods,
 )
 from rallycut.tracking.player_tracker import PlayerPosition
@@ -60,6 +62,12 @@ WEIGHT_TRAJECTORY = 0.0    # Disabled — adding to segment-level Hungarian caus
                             # swaps catchable) is real, but needs online integration
                             # at stabilize_track_ids / tracklet_link, not here.
                             # `_compute_trajectory_cost` kept for future use.
+# Session 4 — within-team ReID learned cost is ADDITIVE (not in the 1.0 sum).
+# Cost formula: WEIGHT_LEARNED_REID * (1 - cos(emb_a, emb_b)). cos ∈ [-1, 1]
+# so cost contribution ∈ [0, 2 * WEIGHT_LEARNED_REID]. Zero short-circuits
+# the entire learned pipeline (no backbone load, no crop collection).
+WEIGHT_LEARNED_REID = float(os.environ.get("WEIGHT_LEARNED_REID", "0.0"))
+LEARNED_REID_MIN_FRAMES = 5  # Below this, skip learned cost for that segment.
 SPATIAL_NORMALIZER = 0.30  # Euclidean distance divisor (normalized image coords)
 
 # Trajectory cost parameters
@@ -114,6 +122,10 @@ class PlayerProfile:
     # continuity over short gaps. Set when profiles are built from an anchor.
     anchor_end_frame: int | None = None
     anchor_last_positions: list[PlayerPosition] = field(default_factory=list, repr=False)
+    # Session 4 — mean learned-ReID embedding from the anchor segment,
+    # mean-pooled + L2-normalized. None when the learned pipeline is disabled
+    # or the anchor has too few quality crops (< LEARNED_REID_MIN_FRAMES).
+    learned_embedding: np.ndarray | None = field(default=None, repr=False)
 
 
 @dataclass
@@ -133,6 +145,7 @@ def optimize_global_identity(
     color_store: ColorHistogramStore,
     court_split_y: float | None = None,
     appearance_store: AppearanceDescriptorStore | None = None,
+    learned_store: LearnedEmbeddingStore | None = None,
 ) -> tuple[list[PlayerPosition], GlobalIdentityResult]:
     """Run global identity optimization on tracked positions.
 
@@ -142,6 +155,9 @@ def optimize_global_identity(
         color_store: Per-frame color histograms.
         court_split_y: Y-coordinate splitting near/far court.
         appearance_store: Optional multi-region appearance descriptors.
+        learned_store: Optional within-team ReID embeddings (Session 4).
+            When present and ``WEIGHT_LEARNED_REID > 0``, contributes an
+            additive ``weight * (1 - cos)`` cost term alongside HSV.
 
     Returns:
         Tuple of (positions, result). Positions are modified in place when
@@ -188,7 +204,7 @@ def optimize_global_identity(
     for team_id in (0, 1):
         team_segs = team_segments[team_id]
         team_profiles = _select_anchors_and_build_profiles(
-            team_segs, color_store, court_split_y
+            team_segs, color_store, court_split_y, learned_store=learned_store,
         )
         if len(team_profiles) < 1:
             result.skip_reason = f"team {team_id}: no valid anchors"
@@ -229,6 +245,7 @@ def optimize_global_identity(
             positions, team_segs, team_profiles,
             color_store, appearance_store,
             court_split_y=court_split_y,
+            learned_store=learned_store,
         )
         total_remapped += remapped
 
@@ -539,6 +556,34 @@ def _compute_segment_reliability(
     )
 
 
+def _get_segment_mean_embedding(
+    segment: TrackSegment,
+    learned_store: LearnedEmbeddingStore | None,
+) -> np.ndarray | None:
+    """Mean-pool + L2-renormalize per-frame learned embeddings for a segment.
+
+    Returns None when disabled, when the store has no data, or when the
+    segment has fewer than ``LEARNED_REID_MIN_FRAMES`` quality embeddings.
+    The HSV cost carries in those cases — learned ReID is additive, not
+    required.
+    """
+    if learned_store is None or not learned_store.has_data():
+        return None
+    embs: list[np.ndarray] = []
+    for p in segment.positions:
+        e = learned_store.get(segment.track_id, p.frame_number)
+        if e is not None:
+            embs.append(e)
+    if len(embs) < LEARNED_REID_MIN_FRAMES:
+        return None
+    mean = np.mean(np.stack(embs), axis=0).astype(np.float32)
+    norm = float(np.linalg.norm(mean))
+    if norm < 1e-8:
+        return None
+    normed: np.ndarray = (mean / norm).astype(np.float32)
+    return normed
+
+
 def _get_segment_mean_histogram(
     segment: TrackSegment,
     color_store: ColorHistogramStore,
@@ -570,6 +615,7 @@ def _select_anchors_and_build_profiles(
     team_segments: list[TrackSegment],
     color_store: ColorHistogramStore,
     court_split_y: float | None,
+    learned_store: LearnedEmbeddingStore | None = None,
 ) -> list[PlayerProfile]:
     """Select anchor segments and build player profiles for one team.
 
@@ -648,6 +694,7 @@ def _select_anchors_and_build_profiles(
         anchor_last_positions=sorted(
             anchor1.positions, key=lambda p: p.frame_number
         )[-TRAJECTORY_EXTRAP_SAMPLES:],
+        learned_embedding=_get_segment_mean_embedding(anchor1, learned_store),
     ))
 
     if anchor2 is not None and anchor2_hist is not None:
@@ -661,6 +708,7 @@ def _select_anchors_and_build_profiles(
             anchor_last_positions=sorted(
                 anchor2.positions, key=lambda p: p.frame_number
             )[-TRAJECTORY_EXTRAP_SAMPLES:],
+            learned_embedding=_get_segment_mean_embedding(anchor2, learned_store),
         ))
 
     return profiles
@@ -723,14 +771,21 @@ def _compute_assignment_cost(
     profile_multi_desc: MultiRegionDescriptor | None,
     compute_multi_region_distance_fn: Callable[..., float] | None,
     court_split_y: float | None = None,
+    seg_learned_emb: np.ndarray | None = None,
+    profile_learned_emb: np.ndarray | None = None,
 ) -> float:
     """Compute cost of assigning a segment to a player profile.
 
     Lower cost = better match. Pre-computed histograms and multi-region
     descriptors are passed in to avoid redundant computation.
 
-    Weights: appearance 0.40, court_side 0.20, spatial 0.15,
-             multi_region 0.15, bbox_size 0.10 (sum 1.0).
+    Weights (existing): appearance 0.40, court_side 0.20, spatial 0.15,
+    multi_region 0.15, bbox_size 0.10 (sum 1.0).
+
+    Session 4 — additive learned-ReID cost (ADDED on top of the 1.0 sum):
+    ``WEIGHT_LEARNED_REID * (1 - cos(emb_a, emb_b))`` when both embeddings
+    are available. Missing embeddings → skip (HSV carries); do NOT apply a
+    0.5 neutral penalty — the cost is complementary, not substitutive.
     """
     cost = 0.0
 
@@ -804,6 +859,19 @@ def _compute_assignment_cost(
     if WEIGHT_TRAJECTORY > 0:
         cost += WEIGHT_TRAJECTORY * _compute_trajectory_cost(segment, profile)
 
+    # 7. Session 4 — additive learned within-team ReID cost. Both embeddings
+    # are L2-normalized (128-d); cos ∈ [-1, 1], so the added contribution is
+    # in [0, 2 * WEIGHT_LEARNED_REID]. When either side is missing (too few
+    # quality crops, backbone unavailable, etc.) the learned term is skipped
+    # entirely — HSV + court_side + spatial decide alone.
+    if (
+        WEIGHT_LEARNED_REID > 0
+        and seg_learned_emb is not None
+        and profile_learned_emb is not None
+    ):
+        learned_dist = 1.0 - float(np.dot(seg_learned_emb, profile_learned_emb))
+        cost += WEIGHT_LEARNED_REID * learned_dist
+
     return cost
 
 
@@ -839,6 +907,7 @@ def _assign_segments_to_profiles(
     color_store: ColorHistogramStore,
     appearance_store: AppearanceDescriptorStore | None,
     court_split_y: float | None = None,
+    learned_store: LearnedEmbeddingStore | None = None,
 ) -> int:
     """Assign each segment to its best-matching player profile.
 
@@ -880,6 +949,23 @@ def _assign_segments_to_profiles(
         )
         compute_multi_region_distance_fn = compute_multi_region_distance
 
+    # Pre-compute learned-ReID embeddings (Session 4 — additive cost).
+    # Weight-invariant per segment/profile; the cost downstream multiplies by
+    # WEIGHT_LEARNED_REID. Entirely skipped at W=0 to keep the default path
+    # byte-identical to pre-integration.
+    seg_learned_embs: list[np.ndarray | None] = [None] * n_segs
+    profile_learned_embs: list[np.ndarray | None] = [None] * n_players
+    if (
+        WEIGHT_LEARNED_REID > 0
+        and learned_store is not None
+        and learned_store.has_data()
+    ):
+        seg_learned_embs = [
+            _get_segment_mean_embedding(seg, learned_store)
+            for seg in team_segments
+        ]
+        profile_learned_embs = [p.learned_embedding for p in profiles]
+
     # Build cost matrix [n_segs x n_players]
     cost_matrix = np.full((n_segs, n_players), fill_value=1.0)
 
@@ -890,6 +976,8 @@ def _assign_segments_to_profiles(
                 seg_histograms[i], seg_multi_descs[i], profile_multi_descs[j],
                 compute_multi_region_distance_fn,
                 court_split_y=court_split_y,
+                seg_learned_emb=seg_learned_embs[i],
+                profile_learned_emb=profile_learned_embs[j],
             )
 
     # Greedy assignment: each segment picks its lowest-cost profile
