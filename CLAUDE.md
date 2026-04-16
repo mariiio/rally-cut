@@ -2,10 +2,6 @@
 
 Volleyball video analysis platform. Monorepo with ML pipeline, web editor, and REST API.
 
-## Documentation Lookup
-
-Always use Context7 when needing library/API documentation, code generation, setup or configuration steps without the user having to explicitly ask.
-
 ## Projects
 
 | Directory | Purpose | Stack |
@@ -14,13 +10,6 @@ Always use Context7 when needing library/API documentation, code generation, set
 | `web/` | Rally editor frontend | Next.js 15, React 19, MUI, Zustand |
 | `api/` | REST backend | Express, Prisma, PostgreSQL |
 | `lambda/` | Serverless video export | AWS Lambda, FFmpeg |
-
-## Which Directory?
-
-- **ML/detection logic** → `analysis/`
-- **UI components, state** → `web/`
-- **API routes, database** → `api/`
-- **Video export processing** → `lambda/`
 
 ## Development
 
@@ -33,13 +22,6 @@ make stop     # Stop all services
 ## Local Development with MinIO
 
 RallyCut supports fully local development without AWS dependencies using MinIO for S3-compatible storage.
-
-### Quick Start
-
-```bash
-make setup    # First time: install deps, create .env, start services, migrate
-make dev      # Start all services (auto-creates .env if missing)
-```
 
 ### Development Modes
 

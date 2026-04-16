@@ -130,6 +130,13 @@ uv run rallycut evaluate --model beach --iou 0.5      # Evaluate beach model
 uv run python scripts/eval_stratified.py             # Group metrics by brightness/camera/complexity
 uv run python scripts/eval_stratified.py --ball-only # Ball metrics only
 
+# Standalone subcommands (used by api/services)
+uv run rallycut detect-court <video>                     # Court-keypoint detection standalone
+uv run rallycut compute-match-stats <video-id>           # Aggregate match stats from DB
+uv run rallycut reinterpolate-primary <video-id>         # Retro-fix stale primary-track interpolation
+uv run rallycut analyze actions <video-id>               # Action-classifier subcommand group
+uv run rallycut analyze highlights <video-id>            # Highlight detection subcommand group
+
 # Cross-rally player matching & post-processing
 uv run rallycut match-players <video-id>                 # Assign consistent player IDs 1-4
 uv run rallycut match-players <video-id> -o result.json  # Export assignments to JSON
@@ -184,6 +191,8 @@ rallycut/
 │   ├── platforms/modal_app.py       # Modal GPU detection function
 │   ├── platforms/modal_tracking.py  # Modal GPU batch tracking function
 │   └── player_tracking_runner.py    # Local player tracking subprocess
+training/
+└── within_team_reid/  # Within-team ReID head (Session 3, 2026-04-16) — SupCon-trained OSNet over player crops for occlusion-time identity recovery
 lib/volleyball_ml/   # ML model wrappers (VideoMAE)
 tests/
 ├── unit/            # Fast tests with mocked ML

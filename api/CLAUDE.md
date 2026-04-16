@@ -24,7 +24,7 @@ npx prisma migrate dev   # Run migrations
 ```
 src/
 ├── index.ts           # Express app setup
-├── routes/            # REST endpoints (sessions, videos, rallies, highlights, exports, webhooks, shares)
+├── routes/            # REST endpoints (sessions, videos, videoShares, rallies, highlights, exports, webhooks, shares)
 ├── services/          # Business logic (sync, detection, export, processing, tier, share)
 ├── schemas/           # Zod validation schemas
 ├── middleware/        # Error handling, validation, user resolution
@@ -252,6 +252,8 @@ MODAL_TRACKING_URL                         # Omit for local CPU tracking
 EXPORT_LAMBDA_FUNCTION_NAME                # Omit for local FFmpeg
 PROCESSING_LAMBDA_FUNCTION_NAME            # Omit for local FFmpeg
 CLOUDFRONT_DOMAIN, CLOUDFRONT_KEY_PAIR_ID  # For signed URLs
+LABEL_STUDIO_URL                           # Default http://localhost:8082; used by ground-truth flow
+LABEL_STUDIO_API_KEY                       # Required by ground-truth flow
 ```
 
 ## Caveats

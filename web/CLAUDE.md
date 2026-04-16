@@ -73,6 +73,7 @@ uploads that would hit the same block in post-upload preflight anyway.
 | `tierStore` | Subscription tier, usage limits |
 | `playerTrackingStore` | Player/ball tracking data, court calibration, overlay visibility |
 | `analysisStore` | "Analyze Match" pipeline orchestration (preflight → detect → track → 5s edit-quiescence → catch-up → match-analysis → stats), localStorage-persisted. After batch tracking completes, a 5-second idle timer debounces rally edits before running catch-up tracking for any newly created rallies and then match-analysis. |
+| `authStore` | Auth state + sign-in modal |
 
 ## Camera System
 
@@ -136,7 +137,10 @@ Also uses: `preload="metadata"`, 1280px poster thumbnail.
 | Escape | Cancel deletion / deselect / cancel recording |
 | Cmd/Ctrl + Z | Undo |
 | Cmd/Ctrl + Shift + Z | Redo |
-| [ / ] | Collapse left/right panel |
+| [ / ] | Slower/faster playback rate |
+| Cmd/Ctrl + [ / ] | Collapse left/right panel |
+| , / . | Step back/forward one frame |
+| F | Toggle fullscreen |
 | Cmd/Ctrl + Shift + C | Open camera panel |
 
 ## State Persistence
