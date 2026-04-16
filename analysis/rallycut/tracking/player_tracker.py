@@ -1528,75 +1528,88 @@ class PlayerTracker:
             )
             _removed_bg_count = len(_removed_bg_tracks)
 
+            # Session 7 experiment — per-pass skip flags (default all off →
+            # byte-identical to pre-Session-7 behaviour). Used to test whether
+            # the multi-stage merge/rename chain is net-positive or
+            # net-negative for identity accuracy. See session7_report.md.
+            _skip_all = os.environ.get("SKIP_ALL_MERGE_PASSES", "0") == "1"
+
+            def _skip(flag: str) -> bool:
+                return _skip_all or os.environ.get(flag, "0") == "1"
+
             # Step 0: Spatial consistency — jump detection only
-            positions, consistency_result = enforce_spatial_consistency(
-                positions,
-                color_store=color_store,
-                appearance_store=appearance_store,
-                video_fps=video_fps,
-                drift_detection=False,
-                learned_store=learned_store,
-            )
-            num_jump_splits = consistency_result.jump_splits
-
-            # Step 0a: Height-based swap correction
-            from rallycut.tracking.height_consistency import fix_height_swaps
-
-            positions, height_swap_result = fix_height_swaps(
-                positions,
-                color_store=color_store,
-                appearance_store=appearance_store,
-                learned_store=learned_store,
-            )
-            num_height_swaps = height_swap_result.swaps
-
-            # Step 0b: Color-based track splitting
-            if color_store is not None and color_store.has_data():
-                from rallycut.tracking.color_repair import (
-                    split_tracks_by_color,
-                )
-
-                positions, num_color_splits = split_tracks_by_color(
-                    positions, color_store,
+            if not _skip("SKIP_ENFORCE_SPATIAL_CONSISTENCY"):
+                positions, consistency_result = enforce_spatial_consistency(
+                    positions,
+                    color_store=color_store,
+                    appearance_store=appearance_store,
+                    video_fps=video_fps,
+                    drift_detection=False,
                     learned_store=learned_store,
                 )
+                num_jump_splits = consistency_result.jump_splits
 
-                # Step 0b2: Spatial re-link
-                from rallycut.tracking.tracklet_link import (
-                    link_tracklets_by_appearance,
-                    relink_spatial_splits,
-                )
+            # Step 0a: Height-based swap correction
+            if not _skip("SKIP_FIX_HEIGHT_SWAPS"):
+                from rallycut.tracking.height_consistency import fix_height_swaps
 
-                positions, num_spatial_relinks = relink_spatial_splits(
-                    positions, color_store,
+                positions, height_swap_result = fix_height_swaps(
+                    positions,
+                    color_store=color_store,
                     appearance_store=appearance_store,
                     learned_store=learned_store,
                 )
+                num_height_swaps = height_swap_result.swaps
+
+            # Step 0b: Color-based track splitting
+            if color_store is not None and color_store.has_data():
+                if not _skip("SKIP_SPLIT_TRACKS_BY_COLOR"):
+                    from rallycut.tracking.color_repair import (
+                        split_tracks_by_color,
+                    )
+
+                    positions, num_color_splits = split_tracks_by_color(
+                        positions, color_store,
+                        learned_store=learned_store,
+                    )
+
+                # Step 0b2: Spatial re-link
+                if not _skip("SKIP_RELINK_SPATIAL_SPLITS"):
+                    from rallycut.tracking.tracklet_link import (
+                        relink_spatial_splits,
+                    )
+
+                    positions, num_spatial_relinks = relink_spatial_splits(
+                        positions, color_store,
+                        appearance_store=appearance_store,
+                        learned_store=learned_store,
+                    )
 
                 # Step 0b3: Relaxed fragment linking for primary tracks
                 # Runs before appearance linking to give spatial proximity
                 # priority for fragments close to identified players.
-                from rallycut.tracking.tracklet_link import (
-                    relink_primary_fragments,
-                )
-
-                pre_link_filter = PlayerFilter(
-                    ball_positions=ball_positions,
-                    total_frames=frame_count,
-                    config=config,
-                    court_calibrator=court_calibrator,
-                )
-                pre_link_filter.analyze_tracks(positions)
-                pre_primary_ids = sorted(pre_link_filter.primary_tracks)
-                positions, pre_primary_ids, num_primary_relinks = (
-                    relink_primary_fragments(
-                        positions,
-                        pre_primary_ids,
-                        color_store,
-                        appearance_store=appearance_store,
-                        learned_store=learned_store,
+                if not _skip("SKIP_RELINK_PRIMARY_FRAGMENTS"):
+                    from rallycut.tracking.tracklet_link import (
+                        relink_primary_fragments,
                     )
-                )
+
+                    pre_link_filter = PlayerFilter(
+                        ball_positions=ball_positions,
+                        total_frames=frame_count,
+                        config=config,
+                        court_calibrator=court_calibrator,
+                    )
+                    pre_link_filter.analyze_tracks(positions)
+                    pre_primary_ids = sorted(pre_link_filter.primary_tracks)
+                    positions, pre_primary_ids, num_primary_relinks = (
+                        relink_primary_fragments(
+                            positions,
+                            pre_primary_ids,
+                            color_store,
+                            appearance_store=appearance_store,
+                            learned_store=learned_store,
+                        )
+                    )
 
                 # Step 0c: Appearance-based tracklet linking
                 # Session 6 — env-var-gated learned-head + court-plane-velocity
@@ -1608,20 +1621,28 @@ class PlayerTracker:
                 # re-enables the 2026-04-16-dormant velocity veto; combined
                 # with the learned veto, the false-rejection class that killed
                 # velocity-alone can be recovered.
-                _enable_velocity_gate = (
-                    os.environ.get("ENABLE_COURT_VELOCITY_GATE", "0") == "1"
-                )
-                positions, num_appearance_links = link_tracklets_by_appearance(
-                    positions, color_store,
-                    appearance_store=appearance_store,
-                    learned_store=learned_store,
-                    calibrator=court_calibrator if _enable_velocity_gate else None,
-                )
+                if not _skip("SKIP_LINK_TRACKLETS_BY_APPEARANCE"):
+                    from rallycut.tracking.tracklet_link import (
+                        link_tracklets_by_appearance,
+                    )
+
+                    _enable_velocity_gate = (
+                        os.environ.get("ENABLE_COURT_VELOCITY_GATE", "0") == "1"
+                    )
+                    positions, num_appearance_links = link_tracklets_by_appearance(
+                        positions, color_store,
+                        appearance_store=appearance_store,
+                        learned_store=learned_store,
+                        calibrator=court_calibrator if _enable_velocity_gate else None,
+                    )
 
             # Step 1: Stabilize track IDs
-            positions, id_mapping = stabilize_track_ids(
-                positions, config,
-            )
+            if not _skip("SKIP_STABILIZE_TRACK_IDS"):
+                positions, id_mapping = stabilize_track_ids(
+                    positions, config,
+                )
+            else:
+                id_mapping = {}
             if id_mapping:
                 if color_store is not None:
                     color_store.remap_ids(id_mapping)

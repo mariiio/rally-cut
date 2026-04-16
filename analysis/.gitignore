@@ -63,6 +63,7 @@ reports/within_team_reid/sweep/
 reports/within_team_reid/contact_sheet.html
 reports/occlusion_resolver/crops/
 reports/merge_veto/sweep/
+reports/minimal_processing/sweep/
 
 # Training artifacts (large, regeneratable)
 reid_training_data/
