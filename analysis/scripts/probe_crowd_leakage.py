@@ -28,7 +28,7 @@ import logging
 from collections import Counter
 from pathlib import Path
 from statistics import median
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 
@@ -92,15 +92,15 @@ def _load_rally_data(rally_id: str) -> dict[str, Any] | None:
     if not row:
         return None
     return {
-        "positions_json": row[0] or [],
-        "raw_positions_json": row[1] or [],
-        "primary_track_ids": list(row[2] or []),
-        "frame_count": int(row[3] or 0),
-        "fps": float(row[4] or 30.0),
-        "quality_report_json": row[5] or {},
+        "positions_json": cast(list[dict[str, Any]], row[0] or []),
+        "raw_positions_json": cast(list[dict[str, Any]], row[1] or []),
+        "primary_track_ids": list(cast(list[int], row[2] or [])),
+        "frame_count": int(cast(int, row[3] or 0)),
+        "fps": float(cast(float, row[4] or 30.0)),
+        "quality_report_json": cast(dict[str, Any], row[5] or {}),
         "court_calibration_json": row[6],
-        "video_width": int(row[7] or 1920),
-        "video_height": int(row[8] or 1080),
+        "video_width": int(cast(int, row[7] or 1920)),
+        "video_height": int(cast(int, row[8] or 1080)),
         "video_name": row[9] or row[10] or "—",
     }
 
