@@ -508,8 +508,12 @@ def _compute_tracker_config_hash() -> str:
     )
     if learned_merge_veto_cos > 0:
         config_parts.append("merge_veto:enabled")
-    if os.environ.get("ENABLE_COURT_VELOCITY_GATE", "0") == "1":
-        config_parts.append("court_velocity_gate:True")
+    # Court-plane velocity gate (Session 6b / Session 8 Plan B) runs
+    # entirely during post-processing (inside link_tracklets_by_appearance
+    # → _greedy_merge → _would_create_velocity_anomaly). It uses the
+    # court_calibrator passed at apply_post_processing time, NOT anything
+    # stored in the cache. Different velocity thresholds share one raw
+    # cache — same principle as the learned merge veto above. NOT in hash.
     config_str = "|".join(config_parts)
     return hashlib.sha256(config_str.encode()).hexdigest()[:16]
 
@@ -2260,7 +2264,18 @@ def audit(
         typer.Option("--iou", "-i", help="IoU threshold for matching"),
     ] = 0.5,
 ) -> None:
-    """Dump a per-GT-track audit JSON per rally.
+    """Dump a per-GT-track audit JSON per rally FROM THE DATABASE (see warning).
+
+    WARNING — `player_tracks.positions_json` has been manually patched in the
+    live DB to fix individual problematic tracks, so counts from this path are
+    systematically inflated or deflated vs. real pipeline output. For a faithful
+    audit, use the retrack pathway instead:
+
+        rallycut evaluate-tracking --all --retrack --cached \\
+            --audit-out reports/tracking_audit
+        uv run python scripts/write_tracking_audit_report.py
+
+    This subcommand is kept only for DB-side forensics.
 
     Classifies missed frames (out-of-frame / edge / occlusion / filter-drop /
     detector-miss), lists real ID switches with cause (net-crossing / same-team
@@ -2278,6 +2293,12 @@ def audit(
         console.print("[red]Error:[/red] Specify --rally-id, --video-id, or --all")
         raise typer.Exit(1)
 
+    console.print(
+        "[yellow]WARNING:[/yellow] reading predictions from DB — "
+        "`player_tracks.positions_json` has been manually patched over time, "
+        "so counts here do NOT reflect true pipeline output. Prefer "
+        "`--retrack --cached --audit-out ...` on the parent command.\n"
+    )
     console.print("[bold]Loading labeled rallies from database...[/bold]")
     rallies = load_labeled_rallies(video_id=video_id, rally_id=rally_id)
     if not rallies:
