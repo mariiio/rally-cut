@@ -4,9 +4,14 @@ from __future__ import annotations
 
 import numpy as np
 
+from rallycut.court.calibration import CourtCalibrator
 from rallycut.tracking.color_repair import ColorHistogramStore
 from rallycut.tracking.player_tracker import PlayerPosition
 from rallycut.tracking.tracklet_link import (
+    DEFAULT_MAX_MERGE_VELOCITY,
+    DEFAULT_MAX_MERGE_VELOCITY_METERS,
+    DEFAULT_MERGE_VELOCITY_WINDOW,
+    _would_create_velocity_anomaly,
     link_tracklets_by_appearance,
     relink_primary_fragments,
 )
@@ -523,3 +528,311 @@ class TestOptimalPartition:
         assert merges == 1
         track_ids = {p.track_id for p in result if p.track_id >= 0}
         assert len(track_ids) == 4
+
+
+def _perspective_calibrator() -> CourtCalibrator:
+    """Build a realistic perspective calibration.
+
+    Trapezoid-to-rectangle homography: image top is farther (compressed,
+    20m per image-x unit); image bottom is closer (expanded, 10m per
+    image-x unit). This is the scale-dependence the gate is designed for.
+    """
+    cal = CourtCalibrator()
+    cal.calibrate(
+        image_corners=[
+            (0.3, 0.2),  # top-left (far court)
+            (0.7, 0.2),  # top-right
+            (0.9, 0.8),  # bottom-right (near camera)
+            (0.1, 0.8),  # bottom-left
+        ],
+    )
+    return cal
+
+
+def _velocity_positions(
+    tid_a: int, tid_b: int,
+    a_xy: tuple[float, float], b_xy: tuple[float, float],
+    a_frames: range = range(0, 10), b_frames: range = range(20, 30),
+) -> list[PlayerPosition]:
+    """Two sequential tracks, each with fixed location."""
+    return (
+        _make_positions(tid_a, a_frames, x=a_xy[0], y=a_xy[1])
+        + _make_positions(tid_b, b_frames, x=b_xy[0], y=b_xy[1])
+    )
+
+
+class TestVelocityGateCourtPlane:
+    def test_bit_exact_when_uncalibrated(self) -> None:
+        """calibrator=None preserves current image-plane behaviour."""
+        # Image-plane displacement 0.30 > DEFAULT_MAX_MERGE_VELOCITY 0.20 → reject.
+        positions = _velocity_positions(
+            tid_a=1, tid_b=2,
+            a_xy=(0.5, 0.5), b_xy=(0.5, 0.8),
+        )
+        assert _would_create_velocity_anomaly(positions, 1, 2) is True
+        assert _would_create_velocity_anomaly(
+            positions, 1, 2, calibrator=None,
+        ) is True
+
+        # Image-plane displacement 0.10 < threshold → allow.
+        positions_ok = _velocity_positions(
+            tid_a=1, tid_b=2,
+            a_xy=(0.5, 0.5), b_xy=(0.5, 0.6),
+        )
+        assert _would_create_velocity_anomaly(positions_ok, 1, 2) is False
+
+    def test_far_court_allows_modest_image_jump(self) -> None:
+        """Near the baseline a 0.15 image jump is ~3m → test a smaller allowable jump.
+
+        Use 0.08 image-x at far edge (y=0.2): 20 m/unit × 0.08 = 1.6m court.
+        Image-plane gate at 0.20 allows it already. Court-plane gate at 2.5m
+        allows it. The assertion is: calibrated path still allows.
+        """
+        cal = _perspective_calibrator()
+        positions = _velocity_positions(
+            tid_a=1, tid_b=2,
+            a_xy=(0.42, 0.2), b_xy=(0.50, 0.2),  # top (far) edge, Δx=0.08
+        )
+        # Sanity: confirm court displacement is ≈ 1.6 m.
+        ax, ay = cal.image_to_court((0.42, 0.2), 0, 0)
+        bx, by = cal.image_to_court((0.50, 0.2), 0, 0)
+        court_dist = ((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5
+        assert 1.3 < court_dist < 1.9, f"expected ~1.6m, got {court_dist:.2f}m"
+
+        # Court-plane at 2.5m: allowed.
+        assert _would_create_velocity_anomaly(
+            positions, 1, 2, calibrator=cal,
+        ) is False
+
+    def test_far_court_rejects_large_real_jump(self) -> None:
+        """Far-court Δx=0.15 image → ~3m court → reject at 2.5m gate.
+
+        Same displacement that would regress the image-plane gate at 0.10
+        (falsely reject) IS a real 3m jump in court space — the court-plane
+        gate correctly catches it.
+        """
+        cal = _perspective_calibrator()
+        positions = _velocity_positions(
+            tid_a=1, tid_b=2,
+            a_xy=(0.4, 0.2), b_xy=(0.55, 0.2),  # top edge, Δx=0.15
+        )
+        ax, ay = cal.image_to_court((0.4, 0.2), 0, 0)
+        bx, by = cal.image_to_court((0.55, 0.2), 0, 0)
+        court_dist = ((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5
+        assert 2.7 < court_dist < 3.3, f"expected ~3m, got {court_dist:.2f}m"
+
+        assert _would_create_velocity_anomaly(
+            positions, 1, 2, calibrator=cal,
+        ) is True
+
+    def test_near_camera_allows_same_image_jump(self) -> None:
+        """Near-camera Δx=0.15 image → ~1.5m court → allow at 2.5m gate.
+
+        This is the scale-dependence fix: same image displacement at the
+        near edge is a much smaller real-world jump. Court-plane gate
+        allows it where a tight image-plane gate (0.10) would falsely reject.
+        """
+        cal = _perspective_calibrator()
+        positions = _velocity_positions(
+            tid_a=1, tid_b=2,
+            a_xy=(0.4, 0.8), b_xy=(0.55, 0.8),  # bottom edge, Δx=0.15
+        )
+        ax, ay = cal.image_to_court((0.4, 0.8), 0, 0)
+        bx, by = cal.image_to_court((0.55, 0.8), 0, 0)
+        court_dist = ((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5
+        assert 1.3 < court_dist < 1.8, f"expected ~1.5m, got {court_dist:.2f}m"
+
+        # Image-plane gate at 0.10 would reject this (0.15 > 0.10) — but the
+        # court-plane gate correctly allows (1.5m < 2.5m).
+        assert _would_create_velocity_anomaly(
+            positions, 1, 2, calibrator=cal,
+        ) is False
+        # Sanity: confirm a tighter image-plane gate *would* falsely reject.
+        assert _would_create_velocity_anomaly(
+            positions, 1, 2, max_displacement_image=0.10,
+        ) is True
+
+    def test_overlap_path_uses_court_plane(self) -> None:
+        """Overlapping tracks branch also uses court-plane when calibrated."""
+        cal = _perspective_calibrator()
+        # Overlapping frames 5-15, track a at (0.4, 0.2), track b at (0.55, 0.2)
+        # Far-edge Δx=0.15 → ~3m → reject.
+        positions = (
+            _make_positions(1, range(0, 15), x=0.4, y=0.2)
+            + _make_positions(2, range(5, 20), x=0.55, y=0.2)
+        )
+        assert _would_create_velocity_anomaly(
+            positions, 1, 2, calibrator=cal,
+        ) is True
+
+        # Same overlap but near-camera edge → ~1.5m → allow.
+        positions_near = (
+            _make_positions(1, range(0, 15), x=0.4, y=0.8)
+            + _make_positions(2, range(5, 20), x=0.55, y=0.8)
+        )
+        assert _would_create_velocity_anomaly(
+            positions_near, 1, 2, calibrator=cal,
+        ) is False
+
+    def test_uncalibrated_calibrator_falls_back_to_image_plane(self) -> None:
+        """A calibrator that hasn't had .calibrate() called → treat as None."""
+        cal = CourtCalibrator()
+        assert not cal.is_calibrated
+        positions = _velocity_positions(
+            tid_a=1, tid_b=2,
+            a_xy=(0.5, 0.5), b_xy=(0.5, 0.8),  # 0.30 image jump
+        )
+        # Should still reject via image-plane fallback, not crash.
+        assert _would_create_velocity_anomaly(
+            positions, 1, 2, calibrator=cal,
+        ) is True
+
+    def test_defaults_match_memory_spec(self) -> None:
+        """Guard: documented defaults don't drift silently."""
+        assert DEFAULT_MAX_MERGE_VELOCITY == 0.20
+        assert DEFAULT_MAX_MERGE_VELOCITY_METERS == 2.5
+        assert DEFAULT_MERGE_VELOCITY_WINDOW == 10
+
+    def test_out_of_trapezoid_falls_back_to_image_plane(self) -> None:
+        """Foot projection outside court+margin → image-plane threshold applies.
+
+        Short-height detections (partial players, jumpers) have feet above
+        the trapezoid and their homography projection is unreliable. The
+        gate must fall back to image-plane so we don't reject legitimate
+        merges in the extrapolation regime (the 740ffd88 failure mode).
+        """
+        cal = CourtCalibrator()
+        cal.calibrate(image_corners=[
+            (0.325, 0.60), (0.665, 0.60), (1.135, 0.75), (-0.125, 0.75),
+        ])
+        # Detections way above the trapezoid (foot_y = 0.3 < 0.6) — out of
+        # calibrated region. Image displacement is small (0.05) — allow.
+        positions = (
+            [PlayerPosition(f, 1, 0.45, 0.30, 0.05, 0.0, 0.9) for f in range(0, 10)]
+            + [PlayerPosition(f, 2, 0.50, 0.30, 0.05, 0.0, 0.9) for f in range(20, 30)]
+        )
+        assert _would_create_velocity_anomaly(
+            positions, 1, 2, calibrator=cal,
+        ) is False
+
+        # Image displacement 0.30 (> 0.20 fallback) — reject via image-plane.
+        positions_big = (
+            [PlayerPosition(f, 1, 0.20, 0.30, 0.05, 0.0, 0.9) for f in range(0, 10)]
+            + [PlayerPosition(f, 2, 0.60, 0.30, 0.05, 0.0, 0.9) for f in range(20, 30)]
+        )
+        assert _would_create_velocity_anomaly(
+            positions_big, 1, 2, calibrator=cal,
+        ) is True
+
+    def test_foot_y_used_not_center_y(self) -> None:
+        """Court projection must use bbox foot (y + height/2), not center.
+
+        Real beach calibrations cover only the court floor (a narrow
+        image-y band). Standing players' *centers* project above the
+        trapezoid's far edge, into the homography's extrapolation regime
+        where a tiny image displacement produces an arbitrarily large
+        projected distance. Using the foot keeps projections inside the
+        calibrated region.
+
+        Reproduces the 9dbe457a regression (-16.08pp HOTA at every
+        court-plane threshold) by using a tight trapezoid that mirrors
+        real calibration: top edge at y=0.60, bottom edge at y=0.75.
+        """
+        cal = CourtCalibrator()
+        cal.calibrate(image_corners=[
+            (0.325, 0.60),  # top-left (far court)
+            (0.665, 0.60),  # top-right
+            (1.135, 0.75),  # bottom-right (near camera)
+            (-0.125, 0.75),  # bottom-left
+        ])
+
+        # Standing players: centers slightly above trapezoid (y ≈ 0.50,
+        # 0.52) — close enough to the vanishing-point regime that tiny
+        # image-y differences project to wildly different court-y. Real
+        # feet at y = 0.50 + 0.20 = 0.70 and 0.52 + 0.20 = 0.72 both land
+        # INSIDE the trapezoid where the homography is reliable.
+        pa_center = PlayerPosition(0, 1, 0.45, 0.50, 0.05, 0.0, 0.9)
+        pb_center = PlayerPosition(0, 2, 0.50, 0.52, 0.05, 0.0, 0.9)
+        pa_real = PlayerPosition(0, 1, 0.45, 0.50, 0.05, 0.40, 0.9)
+        pb_real = PlayerPosition(0, 2, 0.50, 0.52, 0.05, 0.40, 0.9)
+
+        from rallycut.tracking.tracklet_link import _court_displacement_meters
+        center_y_dist = _court_displacement_meters(cal, pa_center, pb_center)
+        foot_y_dist = _court_displacement_meters(cal, pa_real, pb_real)
+
+        # Center-y extrapolation produces a wild distance (tens of metres
+        # for a 0.05 image jump); foot-y stays on-court-sized (< 2m).
+        assert center_y_dist > 10.0, (
+            f"center-y should extrapolate wildly above the trapezoid, "
+            f"got {center_y_dist:.2f}m"
+        )
+        assert foot_y_dist < 2.0, f"foot-y should stay sane, got {foot_y_dist:.2f}m"
+
+        # And the gate uses foot-y: this legitimate slow-moving pair passes.
+        positions = (
+            [PlayerPosition(f, 1, 0.45, 0.50, 0.05, 0.40, 0.9) for f in range(0, 10)]
+            + [PlayerPosition(f, 2, 0.50, 0.52, 0.05, 0.40, 0.9) for f in range(20, 30)]
+        )
+        assert _would_create_velocity_anomaly(
+            positions, 1, 2, calibrator=cal,
+        ) is False
+
+
+class TestLinkTrackletsCalibratorThreading:
+    """Calibrator flows through to the gate via link_tracklets_by_appearance."""
+
+    def test_calibrator_accepted_as_kwarg(self) -> None:
+        """Smoke: public API accepts calibrator parameter without error."""
+        cal = _perspective_calibrator()
+        store = ColorHistogramStore()
+        result, merges = link_tracklets_by_appearance(
+            [], store, calibrator=cal,
+        )
+        assert result == []
+        assert merges == 0
+
+    def test_calibrator_blocks_far_court_false_merge(self) -> None:
+        """Two fragments with far-court large real jump should NOT merge.
+
+        Same-appearance fragments at two different players' far-court
+        positions. Without calibrator, image-plane 0.20 gate would allow
+        (Δx=0.15 < 0.20). With calibrator, court-plane 2.5m gate rejects
+        (court dist ~3m > 2.5m).
+        """
+        # 5 tracks: 4 full players (target_count=4) + 1 fragment that is
+        # far-court displaced from one of them.
+        positions = (
+            _make_positions(1, range(0, 50), x=0.4, y=0.2)      # far-court-left
+            + _make_positions(2, range(0, 100), x=0.7, y=0.4)   # mid-right
+            + _make_positions(3, range(0, 100), x=0.3, y=0.7)   # near-left
+            + _make_positions(4, range(0, 100), x=0.7, y=0.7)   # near-right
+            + _make_positions(5, range(60, 110), x=0.55, y=0.2)  # far-court-right
+        )
+
+        store = ColorHistogramStore()
+        hist_1 = _make_histogram(hue_peak=2)
+        hist_2 = _make_histogram(hue_peak=5)
+        hist_3 = _make_histogram(hue_peak=8)
+        hist_4 = _make_histogram(hue_peak=12)
+
+        for f in range(0, 100, 3):
+            if f < 50:
+                store.add(1, f, hist_1)
+            store.add(2, f, hist_2)
+            store.add(3, f, hist_3)
+            store.add(4, f, hist_4)
+        # Track 5 matches track 1 appearance — would merge on appearance alone.
+        for f in range(60, 110, 3):
+            store.add(5, f, hist_1)
+
+        cal = _perspective_calibrator()
+        # With calibrator: court-plane 3m > 2.5m → blocked.
+        _, merges_cal = link_tracklets_by_appearance(
+            list(positions), store, calibrator=cal,
+        )
+        # Without calibrator: image-plane 0.15 < 0.20 → allowed (control).
+        _, merges_no_cal = link_tracklets_by_appearance(
+            list(positions), store, calibrator=None,
+        )
+        assert merges_no_cal == 1
+        assert merges_cal == 0

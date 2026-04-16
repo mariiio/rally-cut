@@ -6,7 +6,13 @@ know whether, if the same gate were applied to the pred_old / pred_new pair at
 every pred-exchange swap we've identified, it would have REJECTED the junction
 or ALLOWED it.
 
-  gate_would_reject   endpoint or window pair displacement > MAX_MERGE_VELOCITY
+Supports two gate regimes:
+  * image-plane (default): current production threshold, normalized 0-1 Euclidean.
+  * court-plane (``--meters``): projects both endpoints to court metres via
+    the per-video CourtCalibrator before thresholding. Removes the
+    scale-dependence that tanked `e5c1a9b3` under tight image-plane thresholds.
+
+  gate_would_reject   endpoint or window pair displacement > threshold
                       → these two tracks already look kinematically separate;
                         a velocity check on whichever stage produced this swap
                         would have prevented it. Fix: add the gate to the
@@ -16,11 +22,16 @@ or ALLOWED it.
                       → velocity alone is insufficient at the convergence
                         events where swaps actually happen. Fix: need a
                         complementary signal (appearance+velocity, pose, role).
+  no_calibration      --meters requested but video has no court_calibration_json.
   no_data             insufficient positions for pred_old or pred_new in-rally.
+
+Threshold override: ``RALLYCUT_MAX_MERGE_VELOCITY_METERS`` env var (court-plane)
+or ``--threshold`` flag. Default court-plane threshold: 2.5 m.
 
 Usage:
     uv run python scripts/check_velocity_gate_on_swaps.py
     uv run python scripts/check_velocity_gate_on_swaps.py --all-swap-rallies
+    uv run python scripts/check_velocity_gate_on_swaps.py --rally e5c1a9b3-692a-48c6-ae61-008d80307b68 --meters
 """
 
 from __future__ import annotations
@@ -28,13 +39,17 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 from collections import Counter
 from pathlib import Path
 
+from rallycut.court.calibration import CourtCalibrator
 from rallycut.evaluation.tracking.db import load_labeled_rallies
 from rallycut.tracking.tracklet_link import (
     DEFAULT_MAX_MERGE_VELOCITY,
+    DEFAULT_MAX_MERGE_VELOCITY_METERS,
     DEFAULT_MERGE_VELOCITY_WINDOW,
+    _court_displacement_meters,
     _would_create_velocity_anomaly,
 )
 
@@ -86,7 +101,13 @@ def _load_swap_events(audit_path: Path) -> list[dict]:
     return events
 
 
-def run_for_rally(rally_id: str, audit_dir: Path) -> list[dict]:
+def run_for_rally(
+    rally_id: str,
+    audit_dir: Path,
+    *,
+    use_meters: bool,
+    threshold: float,
+) -> list[dict]:
     audit_path = audit_dir / f"{rally_id}.json"
     if not audit_path.exists():
         return []
@@ -98,6 +119,18 @@ def run_for_rally(rally_id: str, audit_dir: Path) -> list[dict]:
         return []
     predictions = rallies[0].predictions.positions
 
+    calibrator: CourtCalibrator | None = None
+    if use_meters:
+        cal_json = rallies[0].court_calibration_json
+        if cal_json and isinstance(cal_json, list) and len(cal_json) == 4:
+            c = CourtCalibrator()
+            try:
+                c.calibrate([(cc["x"], cc["y"]) for cc in cal_json])
+                if c.is_calibrated:
+                    calibrator = c
+            except Exception:
+                calibrator = None
+
     results = []
     for ev in events:
         # Both pred tracks must have at least one position in the rally for the
@@ -106,15 +139,59 @@ def run_for_rally(rally_id: str, audit_dir: Path) -> list[dict]:
         has_new = any(p.track_id == ev["pred_new"] for p in predictions)
         if not (has_old and has_new):
             verdict = "no_data"
+            court_dist: float | None = None
+            image_dist: float | None = None
+        elif use_meters and calibrator is None:
+            verdict = "no_calibration"
+            court_dist = None
+            image_dist = None
         else:
-            anomaly = _would_create_velocity_anomaly(
-                positions=predictions,
-                tid_a=ev["pred_old"],
-                tid_b=ev["pred_new"],
-                max_displacement=DEFAULT_MAX_MERGE_VELOCITY,
-                window=DEFAULT_MERGE_VELOCITY_WINDOW,
-            )
+            if use_meters:
+                anomaly = _would_create_velocity_anomaly(
+                    positions=predictions,
+                    tid_a=ev["pred_old"],
+                    tid_b=ev["pred_new"],
+                    window=DEFAULT_MERGE_VELOCITY_WINDOW,
+                    calibrator=calibrator,
+                    max_displacement_meters=threshold,
+                )
+            else:
+                anomaly = _would_create_velocity_anomaly(
+                    positions=predictions,
+                    tid_a=ev["pred_old"],
+                    tid_b=ev["pred_new"],
+                    max_displacement_image=threshold,
+                    window=DEFAULT_MERGE_VELOCITY_WINDOW,
+                )
             verdict = "gate_would_reject" if anomaly else "gate_would_allow"
+
+            # Diagnostic: compute both distances at the endpoint junction so we
+            # can see the scale difference that motivated the court-plane move.
+            pa = sorted(
+                [p for p in predictions if p.track_id == ev["pred_old"]],
+                key=lambda p: p.frame_number,
+            )
+            pb = sorted(
+                [p for p in predictions if p.track_id == ev["pred_new"]],
+                key=lambda p: p.frame_number,
+            )
+            if pa and pb:
+                if pa[-1].frame_number <= pb[0].frame_number:
+                    e, s = pa[-1], pb[0]
+                elif pb[-1].frame_number <= pa[0].frame_number:
+                    e, s = pb[-1], pa[0]
+                else:
+                    e, s = pa[-1], pb[0]
+                image_dist = float(
+                    ((s.x - e.x) ** 2 + (s.y - e.y) ** 2) ** 0.5
+                )
+                court_dist = (
+                    _court_displacement_meters(calibrator, e, s)
+                    if calibrator is not None else None
+                )
+            else:
+                image_dist = None
+                court_dist = None
 
         results.append({
             "rally_id": rally_id,
@@ -123,9 +200,17 @@ def run_for_rally(rally_id: str, audit_dir: Path) -> list[dict]:
             "pred_new": ev["pred_new"],
             "gt_track_id": ev["gt_track_id"],
             "verdict": verdict,
+            "image_dist": image_dist,
+            "court_dist_m": court_dist,
         })
+        extra = (
+            f" (img={image_dist:.3f}, court={court_dist:.2f}m)"
+            if image_dist is not None and court_dist is not None
+            else (f" (img={image_dist:.3f})" if image_dist is not None else "")
+        )
         logger.info(
-            f"  swap@{ev['swap_frame']} pred {ev['pred_old']}→{ev['pred_new']} on GT {ev['gt_track_id']}: {verdict}"
+            f"  swap@{ev['swap_frame']} pred {ev['pred_old']}→{ev['pred_new']} "
+            f"on GT {ev['gt_track_id']}: {verdict}{extra}"
         )
     return results
 
@@ -136,7 +221,27 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=Path("reports/tracking_audit/reid_debug/velocity_gate_coverage.md"))
     parser.add_argument("--rally", type=str, default=None)
     parser.add_argument("--all-swap-rallies", action="store_true")
+    parser.add_argument(
+        "--meters", action="store_true",
+        help="Apply the gate in court-plane metres via per-video calibration. "
+             "Default threshold %(default)g m (override via --threshold or "
+             "RALLYCUT_MAX_MERGE_VELOCITY_METERS env).",
+    )
+    parser.add_argument(
+        "--threshold", type=float, default=None,
+        help="Threshold override. When --meters: court-plane metres "
+             f"(default {DEFAULT_MAX_MERGE_VELOCITY_METERS}); otherwise "
+             f"image-plane normalized distance (default {DEFAULT_MAX_MERGE_VELOCITY}).",
+    )
     args = parser.parse_args()
+
+    if args.threshold is not None:
+        threshold = args.threshold
+    elif args.meters:
+        env = os.environ.get("RALLYCUT_MAX_MERGE_VELOCITY_METERS")
+        threshold = float(env) if env else DEFAULT_MAX_MERGE_VELOCITY_METERS
+    else:
+        threshold = DEFAULT_MAX_MERGE_VELOCITY
 
     if args.rally:
         rally_ids = [args.rally]
@@ -153,17 +258,23 @@ def main() -> None:
     all_results: list[dict] = []
     for idx, rid in enumerate(rally_ids, start=1):
         logger.info(f"[{idx}/{len(rally_ids)}] {rid[:8]}")
-        all_results.extend(run_for_rally(rid, audit_dir=args.audit_dir))
+        all_results.extend(
+            run_for_rally(
+                rid, audit_dir=args.audit_dir,
+                use_meters=args.meters, threshold=threshold,
+            )
+        )
 
     counts = Counter(r["verdict"] for r in all_results)
     total = len(all_results)
 
+    mode_label = f"court-plane @ {threshold} m" if args.meters else f"image-plane @ {threshold}"
     lines = [
         "# Velocity-gate coverage at swap events",
         "",
         f"Probed **{total}** pred-exchange swap events across {len(rally_ids)} rally(s) "
-        f"using `_would_create_velocity_anomaly` with threshold="
-        f"{DEFAULT_MAX_MERGE_VELOCITY} and window={DEFAULT_MERGE_VELOCITY_WINDOW}.",
+        f"using `_would_create_velocity_anomaly` in {mode_label} mode "
+        f"(window={DEFAULT_MERGE_VELOCITY_WINDOW} frames).",
         "",
         "## Verdict counts",
         "",
@@ -182,6 +293,9 @@ def main() -> None:
         "no_data":
             "pred_old or pred_new has no positions in the rally — probably a mid-rally "
             "track not linked to a primary. Excluded from the actionable tally.",
+        "no_calibration":
+            "--meters requested but the video lacks court_calibration_json. "
+            "Excluded from the actionable tally.",
     }
     for v, desc in descriptions.items():
         n = counts.get(v, 0)
@@ -211,13 +325,20 @@ def main() -> None:
             f"- **Mixed: {reject} reject / {allow} allow.** Inspect per-event detail below."
         )
 
-    lines.extend(["", "## Per-event detail", "",
-                  "| Rally | Swap frame | pred_old→pred_new | GT | Verdict |",
-                  "|---|---:|---|---:|---|"])
+    lines.extend([
+        "", "## Per-event detail", "",
+        "| Rally | Swap frame | pred_old→pred_new | GT | Image Δ | Court Δ (m) | Verdict |",
+        "|---|---:|---|---:|---:|---:|---|",
+    ])
     for r in all_results:
+        img = f"{r['image_dist']:.3f}" if r.get("image_dist") is not None else "—"
+        court = (
+            f"{r['court_dist_m']:.2f}" if r.get("court_dist_m") is not None else "—"
+        )
         lines.append(
             f"| `{r['rally_id'][:8]}` | {r['swap_frame']} | "
-            f"{r['pred_old']}→{r['pred_new']} | {r['gt_track_id']} | `{r['verdict']}` |"
+            f"{r['pred_old']}→{r['pred_new']} | {r['gt_track_id']} | "
+            f"{img} | {court} | `{r['verdict']}` |"
         )
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
