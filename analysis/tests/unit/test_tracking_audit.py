@@ -5,8 +5,6 @@ These are pure-logic tests: hand-crafted GT + pred fixtures, no ML calls, no DB.
 
 from __future__ import annotations
 
-import pytest
-
 from rallycut.evaluation.tracking.audit import (
     MissCause,
     SwitchCause,
@@ -414,6 +412,59 @@ class TestClassifySwitchCause:
         ))
         assert len(events) == 1
         assert events[0].cause == SwitchCause.CROSS_TEAM_SWAP
+
+
+class TestInterpolatePrimaryTracks:
+    """interpolate_primary_tracks: fills frame-parity gaps for primary tracks.
+
+    This exists because production rallies can contain secondary primary tracks
+    (promoted after Stage 10 interpolation) that stay at YOLO's stride, causing
+    parity mismatch with GT annotations. The helper mirrors the production
+    interpolate_player_gaps logic but is applied at eval time.
+    """
+
+    def _build_predictions(self, positions, primary_ids):
+        from rallycut.tracking.player_tracker import PlayerTrackingResult
+        return PlayerTrackingResult(
+            positions=positions,
+            frame_count=100,
+            primary_track_ids=primary_ids,
+        )
+
+    def test_fills_odd_frame_gap_for_primary_track(self) -> None:
+        from rallycut.evaluation.tracking.audit import interpolate_primary_tracks
+        # Pred on frames 10, 12, 14 — odd frames missing
+        pred = [_pp(10, 5, x=0.5, y=0.5), _pp(12, 5, x=0.6, y=0.5), _pp(14, 5, x=0.7, y=0.5)]
+        result = interpolate_primary_tracks(self._build_predictions(pred, primary_ids=[5]))
+        frames = sorted(p.frame_number for p in result.positions if p.track_id == 5)
+        assert frames == [10, 11, 12, 13, 14]
+        # Interpolated values should be halfway between neighbors
+        got = {p.frame_number: p for p in result.positions if p.track_id == 5}
+        assert abs(got[11].x - 0.55) < 1e-6
+        assert abs(got[13].x - 0.65) < 1e-6
+
+    def test_non_primary_track_not_interpolated(self) -> None:
+        from rallycut.evaluation.tracking.audit import interpolate_primary_tracks
+        pred = [_pp(10, 99, x=0.5, y=0.5), _pp(12, 99, x=0.6, y=0.5)]
+        result = interpolate_primary_tracks(self._build_predictions(pred, primary_ids=[5]))
+        frames = sorted(p.frame_number for p in result.positions if p.track_id == 99)
+        assert frames == [10, 12]  # unchanged
+
+    def test_gap_over_max_is_left_alone(self) -> None:
+        from rallycut.evaluation.tracking.audit import interpolate_primary_tracks
+        # Gap of 50 frames — do not interpolate (that's suspicious, likely track break)
+        pred = [_pp(10, 5, x=0.5, y=0.5), _pp(60, 5, x=0.6, y=0.5)]
+        result = interpolate_primary_tracks(
+            self._build_predictions(pred, primary_ids=[5]), max_gap=10
+        )
+        frames = sorted(p.frame_number for p in result.positions if p.track_id == 5)
+        assert frames == [10, 60]
+
+    def test_empty_primary_is_noop(self) -> None:
+        from rallycut.evaluation.tracking.audit import interpolate_primary_tracks
+        pred = [_pp(10, 5, x=0.5, y=0.5)]
+        result = interpolate_primary_tracks(self._build_predictions(pred, primary_ids=[]))
+        assert len(result.positions) == 1
 
 
 class TestBuildRallyAudit:

@@ -416,6 +416,72 @@ class RallyAudit:
         }
 
 
+def interpolate_primary_tracks(
+    predictions: PlayerTrackingResult,
+    max_gap: int = 10,
+) -> PlayerTrackingResult:
+    """Linearly interpolate every primary track to every frame in its span.
+
+    Some production rallies (tracked by older pipeline revisions) have primary
+    tracks that were promoted to primary AFTER Stage 10's `interpolate_player_gaps`
+    ran, so they remain at YOLO's native stride (e.g. only even frames). When GT
+    is annotated on the opposite parity, Hungarian-at-exact-frame can never match.
+    This helper fills those gaps at eval time; it mirrors the production
+    interpolation logic in `tracking/player_filter.py:interpolate_player_gaps`.
+
+    Returns a new PlayerTrackingResult with the interpolation applied.
+    """
+    primary = set(predictions.primary_track_ids or [])
+    if not primary:
+        return predictions
+
+    per_track: dict[int, dict[int, PlayerPosition]] = defaultdict(dict)
+    for p in predictions.positions:
+        if p.track_id in primary:
+            per_track[p.track_id][p.frame_number] = p
+
+    new_positions: list[PlayerPosition] = []
+    for track_id, frame_map in per_track.items():
+        frames = sorted(frame_map)
+        for i in range(len(frames) - 1):
+            f1, f2 = frames[i], frames[i + 1]
+            gap = f2 - f1
+            if gap <= 1 or gap > max_gap:
+                continue
+            p1, p2 = frame_map[f1], frame_map[f2]
+            for f in range(f1 + 1, f2):
+                t = (f - f1) / gap
+                new_positions.append(PlayerPosition(
+                    frame_number=f,
+                    track_id=track_id,
+                    x=p1.x + t * (p2.x - p1.x),
+                    y=p1.y + t * (p2.y - p1.y),
+                    width=p1.width + t * (p2.width - p1.width),
+                    height=p1.height + t * (p2.height - p1.height),
+                    confidence=0.5,
+                ))
+    if not new_positions:
+        return predictions
+
+    return PlayerTrackingResult(
+        positions=sorted(
+            predictions.positions + new_positions,
+            key=lambda p: (p.frame_number, p.track_id),
+        ),
+        frame_count=predictions.frame_count,
+        video_fps=predictions.video_fps,
+        video_width=predictions.video_width,
+        video_height=predictions.video_height,
+        processing_time_ms=predictions.processing_time_ms,
+        model_version=predictions.model_version,
+        court_split_y=predictions.court_split_y,
+        primary_track_ids=predictions.primary_track_ids,
+        ball_positions=predictions.ball_positions,
+        raw_positions=predictions.raw_positions,
+        team_assignments=predictions.team_assignments,
+    )
+
+
 def _match_frames(
     gt: GroundTruthResult,
     predictions: PlayerTrackingResult,
@@ -644,19 +710,17 @@ def build_convention_drift(
     the GT side on 2+ labels.
     """
     # Majority pred-id per GT label
-    label_to_pred_counts: dict[str, Counter[int]] = defaultdict(Counter)
     gt_label_y: dict[str, list[float]] = defaultdict(list)
     gt_label_of_id: dict[int, str] = {}
     for gt_p in gt.player_positions:
         gt_label_of_id[gt_p.track_id] = gt_p.label
         gt_label_y[gt_p.label].append(gt_p.y)
 
-    pred_label_counts_by_frame_label: dict[str, Counter[int]] = defaultdict(Counter)
-    for frame, matches in matches_by_frame.items():
+    label_to_pred_counts: dict[str, Counter[int]] = defaultdict(Counter)
+    for matches in matches_by_frame.values():
         for gt_id, pred_id in matches:
             label = gt_label_of_id.get(gt_id, f"player_{gt_id}")
-            pred_label_counts_by_frame_label[label][pred_id] += 1
-    label_to_pred_counts = pred_label_counts_by_frame_label
+            label_to_pred_counts[label][pred_id] += 1
 
     gt_label_to_pred_id_mode: dict[str, int] = {}
     for label, counts in label_to_pred_counts.items():
@@ -671,7 +735,7 @@ def build_convention_drift(
         pred_y[pred_p.track_id].append(pred_p.y)
     pred_mean_y = {tid: sum(ys) / len(ys) for tid, ys in pred_y.items() if ys}
 
-    team_assignments = team_assignments or {}
+    resolved_team_assignments = team_assignments or {}
 
     # Flip detection
     court_side_flip = False
@@ -688,8 +752,8 @@ def build_convention_drift(
             pred_side = 0 if pred_mean_y[pred_id] < net_y else 1
             if gt_side != pred_side:
                 side_disagreements += 1
-            if pred_id in team_assignments:
-                pred_team = team_assignments[pred_id]
+            if pred_id in resolved_team_assignments:
+                pred_team = resolved_team_assignments[pred_id]
                 if pred_team != gt_side:
                     team_disagreements += 1
         if total > 0:
@@ -700,7 +764,7 @@ def build_convention_drift(
         gt_label_to_pred_id_mode=gt_label_to_pred_id_mode,
         gt_label_mean_y=gt_label_mean_y,
         pred_mean_y=pred_mean_y,
-        team_assignments=dict(team_assignments),
+        team_assignments=dict(resolved_team_assignments),
         court_side_flip=court_side_flip,
         team_label_flip=team_label_flip,
         net_y=net_y,
@@ -722,6 +786,11 @@ def build_rally_audit(
     Applies the same smart-interpolation policy as evaluate_rally() so aggregate
     numbers line up with the existing harness.
     """
+    # Pre-pass: interpolate secondary primary tracks to every frame in their
+    # span. See `interpolate_primary_tracks` — compensates for pipeline drift
+    # where some primary tracks remain at YOLO's native stride.
+    predictions = interpolate_primary_tracks(predictions)
+
     if smart_interpolate and predictions.frame_count > 0:
         ground_truth = smart_interpolate_gt(
             ground_truth, predictions, predictions.frame_count, min_keyframe_iou_rate

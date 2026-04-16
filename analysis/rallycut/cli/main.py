@@ -16,6 +16,7 @@ from rallycut.cli.commands.preflight import preflight as preflight_command
 from rallycut.cli.commands.preview_check import preview_check as preview_check_command
 from rallycut.cli.commands.profile import profile as profile_command
 from rallycut.cli.commands.reattribute_actions import reattribute_actions_cmd
+from rallycut.cli.commands.reinterpolate_primary import reinterpolate_primary_cmd
 from rallycut.cli.commands.remap_track_ids import remap_track_ids_cmd
 from rallycut.cli.commands.repair_identities import repair_identities_cmd
 from rallycut.cli.commands.tilt_detect import tilt_detect as tilt_detect_command
@@ -42,6 +43,7 @@ app.command(name="preview-check")(preview_check_command)
 app.command(name="tilt-detect")(tilt_detect_command)
 app.command(name="compute-match-stats")(compute_match_stats_cmd)
 app.command(name="reattribute-actions")(reattribute_actions_cmd)
+app.command(name="reinterpolate-primary")(reinterpolate_primary_cmd)
 app.command(name="remap-track-ids")(remap_track_ids_cmd)
 app.command(name="repair-identities")(repair_identities_cmd)
 app.add_typer(evaluate_tracking_app, name="evaluate-tracking")

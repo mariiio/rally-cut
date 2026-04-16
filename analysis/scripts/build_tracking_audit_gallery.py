@@ -40,10 +40,10 @@ from rallycut.tracking.player_tracker import PlayerPosition, PlayerTrackingResul
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("gallery")
 
-MISSED_RANGE_MIN_FRAMES = 6         # ≥ 0.2s at 30fps (tighter since LS keyframes are sparse)
+MISSED_RANGE_MIN_FRAMES = 3         # ≥ 0.1s (LS keyframes can be very sparse)
 FRAGMENT_MIN_GAP_FRAMES = 8         # ≥ 0.27s between pred_id handoffs
-SEVERE_LOSS_COVERAGE_MAX = 0.3      # coverage ≤ 0.3 + ≥ 20 GT frames → "track fully lost" event
-SEVERE_LOSS_MIN_GT_FRAMES = 20
+SEVERE_LOSS_COVERAGE_MAX = 0.6      # coverage ≤ 60% + ≥ 15 GT frames → "partially/severely lost" event
+SEVERE_LOSS_MIN_GT_FRAMES = 15
 CLIP_WINDOW_FRAMES = 45             # ±45 frames (~1.5s at 30fps, 3s at 60fps)
 CLIP_FPS_OUTPUT = 30
 
@@ -55,7 +55,7 @@ CLIP_FPS_OUTPUT = 30
 
 @dataclass
 class Event:
-    kind: str                          # "missed" | "switch" | "fragment" | "convention"
+    kind: str                          # "missed" | "switch" | "fragment" | "swap" | "swap_recovery" | "convention" | "severe_loss"
     gt_track_id: int | None
     gt_label: str | None
     frame: int                         # center frame for clip
@@ -64,6 +64,8 @@ class Event:
     title: str
     detail: str
     severity: int                      # for sorting (higher = worse)
+    pred_old: int | None = None        # only set for swap / fragment events
+    pred_new: int | None = None
 
 
 def _missed_events(per_gt: list[dict], min_len: int) -> list[Event]:
@@ -110,11 +112,31 @@ def _switch_events(per_gt: list[dict]) -> list[Event]:
 def _fragment_events(per_gt: list[dict], min_gap: int) -> list[Event]:
     """A fragmentation event is a span boundary where a new pred_id takes over.
 
-    We emit one event at each boundary frame — only if BOTH adjacent spans
-    represent different pred_ids (not the same pred re-appearing after an
-    unmatched gap). If the gap between the spans is >= min_gap, the event is
-    "gap" fragmentation; otherwise it's a handoff.
+    Emits one event at each boundary frame between different pred_ids. If the
+    incoming pred_id was previously tracking a DIFFERENT GT track, we re-label
+    the event as `swap` — i.e. the two pred IDs exchanged their GT assignments,
+    which my `iter_real_switch_events` can miss when the abandoned pred's
+    segments are too short. This matches how a human reviewer would describe
+    "pred 3 and pred 6 swapped players".
     """
+    # Build a reverse index: for each pred_id, the ordered list of
+    # (gt_track_id, start_frame, end_frame) where it appeared.
+    pred_history: dict[int, list[tuple[int, int, int]]] = {}
+    for g in per_gt:
+        for s, e, pid in g.get("predIdSpans", []):
+            pred_history.setdefault(pid, []).append((g["gtTrackId"], s, e))
+    for h in pred_history.values():
+        h.sort(key=lambda t: t[1])
+
+    def prior_gt_of(pred_id: int, before_frame: int) -> int | None:
+        """GT track_id this pred was on just before `before_frame`, if any."""
+        last_gt: int | None = None
+        for gt_id, s, _e in pred_history.get(pred_id, []):
+            if s >= before_frame:
+                break
+            last_gt = gt_id
+        return last_gt
+
     events: list[Event] = []
     for g in per_gt:
         spans = g.get("predIdSpans", [])
@@ -126,16 +148,42 @@ def _fragment_events(per_gt: list[dict], min_gap: int) -> list[Event]:
             if prev_pred == cur_pred:
                 continue
             gap = cur_start - prev_end - 1
+
+            # Disguised swap detection.
+            incoming_prior_gt = prior_gt_of(cur_pred, cur_start)
+            is_swap = (
+                incoming_prior_gt is not None
+                and incoming_prior_gt != g["gtTrackId"]
+            )
+
+            if is_swap:
+                kind = "swap"
+                title = f"{g['gtLabel']}: pred {cur_pred} jumped from GT {incoming_prior_gt} (prior pred {prev_pred} left)"
+                detail = (
+                    f"pred {cur_pred} was tracking GT {incoming_prior_gt} before frame {cur_start}; "
+                    f"post-boundary it tracks {g['gtLabel']}. Prior pred {prev_pred} ended frame {prev_end}."
+                )
+                severity = 600 + gap  # above pure fragment severity
+            else:
+                kind = "fragment"
+                title = f"{g['gtLabel']}: pred {prev_pred} → {cur_pred} (gap {gap}f)"
+                detail = (
+                    f"pred {cur_pred} is new for {g['gtLabel']} at frame {cur_start}; "
+                    f"prior pred {prev_pred} ended frame {prev_end}."
+                )
+                severity = 200 + gap
             events.append(Event(
-                kind="fragment",
+                kind=kind,
                 gt_track_id=g["gtTrackId"],
                 gt_label=g["gtLabel"],
                 frame=cur_start,
                 start_frame=prev_end,
                 end_frame=cur_start,
-                title=f"{g['gtLabel']}: pred {prev_pred} → {cur_pred} (gap {gap}f)",
-                detail=f"handoff at frame {cur_start}, prior pred {prev_pred} ended frame {prev_end}",
-                severity=200 + gap,
+                title=title,
+                detail=detail,
+                severity=severity,
+                pred_old=prev_pred,
+                pred_new=cur_pred,
             ))
     return events
 
@@ -195,6 +243,110 @@ def _convention_event(audit: dict) -> list[Event]:
         detail=json.dumps(conv.get("gtLabelToPredIdMode", {})),
         severity=500,
     )]
+
+
+TRAJECTORY_DELTA_HAS_SIGNAL = 0.03
+TRAJECTORY_WINDOW = 10
+
+
+def _linear_extrapolate(
+    points: list[tuple[int, float, float]],
+    target_frame: int,
+) -> tuple[float, float] | None:
+    """Constant-velocity extrapolation from ≤ 5 most recent points."""
+    if len(points) < 2:
+        return None
+    tail = sorted(points, key=lambda t: t[0])[-5:]
+    f0, x0, y0 = tail[0]
+    f1, x1, y1 = tail[-1]
+    if f1 == f0:
+        return (x1, y1)
+    vx = (x1 - x0) / (f1 - f0)
+    vy = (y1 - y0) / (f1 - f0)
+    dt = target_frame - f1
+    return (x1 + vx * dt, y1 + vy * dt)
+
+
+def reclassify_swap_recoveries(
+    events: list[Event],
+    predictions: PlayerTrackingResult | None,
+    swap_kinds: tuple[str, ...] = ("swap",),
+) -> list[Event]:
+    """Re-label `swap` events as `swap_recovery` when trajectory continuity
+    indicates the tracker was correctly re-associating, not mis-swapping.
+
+    A swap is a recovery iff pred_new's *actual* position at swap_frame is
+    significantly closer to pred_old's pre-swap extrapolation than to its
+    own pre-swap extrapolation (Δ ≥ 0.03 normalised).
+    """
+    if predictions is None:
+        return events
+
+    # Index pred positions by (pred_id, frame) for fast lookup
+    positions_by_pred: dict[int, list[tuple[int, float, float]]] = {}
+    for p in predictions.positions:
+        positions_by_pred.setdefault(p.track_id, []).append((p.frame_number, p.x, p.y))
+
+    def _actual(pred_id: int, frame: int) -> tuple[float, float] | None:
+        best = None
+        best_df = 3
+        for f, x, y in positions_by_pred.get(pred_id, []):
+            if f == frame:
+                return (x, y)
+            df = abs(f - frame)
+            if df < best_df:
+                best_df = df
+                best = (x, y)
+        return best
+
+    def _dist(a: tuple[float, float] | None, b: tuple[float, float] | None) -> float | None:
+        if a is None or b is None:
+            return None
+        return ((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2) ** 0.5
+
+    refined: list[Event] = []
+    for ev in events:
+        if ev.kind not in swap_kinds or ev.pred_old is None or ev.pred_new is None:
+            refined.append(ev)
+            continue
+        swap_frame = ev.frame
+        pred_new = ev.pred_new
+        pred_old = ev.pred_old
+
+        pre_range = range(max(0, swap_frame - TRAJECTORY_WINDOW), swap_frame)
+        new_pre = [(f, x, y) for f, x, y in positions_by_pred.get(pred_new, []) if f in pre_range]
+        old_pre = [(f, x, y) for f, x, y in positions_by_pred.get(pred_old, []) if f in pre_range]
+        extrap_new = _linear_extrapolate(new_pre, swap_frame)
+        extrap_old = _linear_extrapolate(old_pre, swap_frame)
+        actual = _actual(pred_new, swap_frame)
+        d_new = _dist(actual, extrap_new)
+        d_old = _dist(actual, extrap_old)
+        if d_new is None or d_old is None:
+            refined.append(ev)
+            continue
+        delta = d_new - d_old  # +ve → closer to old_pre → recovery
+        if delta >= TRAJECTORY_DELTA_HAS_SIGNAL:
+            # Reclassify as recovery (tracker was correct, our audit over-flagged).
+            refined.append(Event(
+                kind="swap_recovery",
+                gt_track_id=ev.gt_track_id,
+                gt_label=ev.gt_label,
+                frame=ev.frame,
+                start_frame=ev.start_frame,
+                end_frame=ev.end_frame,
+                title=ev.title.replace("pred " + str(pred_new) + " jumped from GT",
+                                        "pred " + str(pred_new) + " recovered GT", 1),
+                detail=(
+                    ev.detail + f"  [trajectory: d(actual, new_pre)={d_new:.3f} vs "
+                    f"d(actual, old_pre)={d_old:.3f} — tracker correctly re-associated]"
+                ),
+                severity=ev.severity - 400,  # lower than real swap, above fragment
+                pred_old=ev.pred_old,
+                pred_new=ev.pred_new,
+            ))
+        else:
+            refined.append(ev)
+    return refined
 
 
 def extract_events(audit: dict, max_events: int) -> list[Event]:
@@ -583,6 +735,8 @@ _RALLY_CSS = _INDEX_CSS + """
   .card .hdr .k.fragment { background: #eef; color: #339; }
   .card .hdr .k.convention { background: #efe; color: #272; }
   .card .hdr .k.severe_loss { background: #fdd; color: #900; }
+  .card .hdr .k.swap { background: #fcc; color: #700; font-weight: 600; }
+  .card .hdr .k.swap_recovery { background: #cfc; color: #070; }
   .card video { width: 100%; display: block; background: #000; }
   .card .ft { padding: 8px 12px; font-size: 13px; color: #555; }
   .card .timing { padding: 6px 12px; background: #f4f8ff; border-top: 1px solid #e0e8f4; font-size: 12px; color: #335; }
@@ -836,6 +990,14 @@ def main() -> None:
         events = extract_events(audit, args.max_events_per_rally)
         events_with_clips: list[tuple[Event, str]] = []
 
+        # Re-classify swap events as recoveries where trajectory continuity
+        # indicates the tracker was correctly re-associating (not failing).
+        # Needs predictions, so try to load them once per rally.
+        _rallies_cache = load_labeled_rallies(rally_id=rid)
+        _rally_cached = _rallies_cache[0] if _rallies_cache else None
+        if _rally_cached is not None and _rally_cached.predictions is not None:
+            events = reclassify_swap_recoveries(events, _rally_cached.predictions)
+
         if events and not args.skip_clips:
             # Load video + GT/pred once per rally.
             rally_start_ms = _ms_at_rally_start(rid) or 0
@@ -843,8 +1005,7 @@ def main() -> None:
             if video_path is None:
                 logger.warning(f"  no video for {vid}, skipping clips")
             else:
-                rallies = load_labeled_rallies(rally_id=rid)
-                rally = rallies[0] if rallies else None
+                rally = _rally_cached
                 if rally is None or rally.predictions is None:
                     logger.warning(f"  no predictions in DB for {rid}, skipping clips")
                 else:

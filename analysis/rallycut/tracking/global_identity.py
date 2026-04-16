@@ -54,7 +54,18 @@ WEIGHT_SPATIAL = 0.15      # Euclidean distance (normalized court coordinates)
 WEIGHT_BBOX_SIZE = 0.10    # Relative bbox height difference
 WEIGHT_MULTI_REGION = 0.15 # Multi-region (shorts/jersey/full) descriptor distance
 WEIGHT_COURT_SIDE = 0.20   # 0 if same side as profile, 1 if opposite
+WEIGHT_TRAJECTORY = 0.0    # Disabled — adding to segment-level Hungarian caused
+                            # a regression (HOTA -1.2pp, Real IDsw 4→12) in the
+                            # 2026-04-16 eval gate. The trajectory signal (22/58
+                            # swaps catchable) is real, but needs online integration
+                            # at stabilize_track_ids / tracklet_link, not here.
+                            # `_compute_trajectory_cost` kept for future use.
 SPATIAL_NORMALIZER = 0.30  # Euclidean distance divisor (normalized image coords)
+
+# Trajectory cost parameters
+TRAJECTORY_MAX_GAP_FRAMES = 15      # Beyond this, trajectory doesn't apply (cost = 0)
+TRAJECTORY_EXPECTED_NOISE = 0.05    # Expected motion-noise scale (normalised coords)
+TRAJECTORY_EXTRAP_SAMPLES = 5        # Most recent N anchor positions used for velocity
 
 # Assignment
 MAX_REASSIGNMENT_ROUNDS = 10
@@ -99,6 +110,10 @@ class PlayerProfile:
     histogram: np.ndarray | None = field(default=None, repr=False)
     centroid: tuple[float, float] = (0.5, 0.5)
     mean_bbox_area: float = 0.0
+    # Trajectory data — used by _compute_trajectory_cost to check kinematic
+    # continuity over short gaps. Set when profiles are built from an anchor.
+    anchor_end_frame: int | None = None
+    anchor_last_positions: list[PlayerPosition] = field(default_factory=list, repr=False)
 
 
 @dataclass
@@ -629,6 +644,10 @@ def _select_anchors_and_build_profiles(
         histogram=anchor1_hist,
         centroid=anchor1.centroid,
         mean_bbox_area=anchor1.mean_bbox_area,
+        anchor_end_frame=anchor1.end_frame,
+        anchor_last_positions=sorted(
+            anchor1.positions, key=lambda p: p.frame_number
+        )[-TRAJECTORY_EXTRAP_SAMPLES:],
     ))
 
     if anchor2 is not None and anchor2_hist is not None:
@@ -638,9 +657,62 @@ def _select_anchors_and_build_profiles(
             histogram=anchor2_hist,
             centroid=anchor2.centroid,
             mean_bbox_area=anchor2.mean_bbox_area,
+            anchor_end_frame=anchor2.end_frame,
+            anchor_last_positions=sorted(
+                anchor2.positions, key=lambda p: p.frame_number
+            )[-TRAJECTORY_EXTRAP_SAMPLES:],
         ))
 
     return profiles
+
+
+def _compute_trajectory_cost(
+    segment: TrackSegment,
+    profile: PlayerProfile,
+) -> float:
+    """Kinematic-continuity penalty: 0 when the segment's start position is
+    consistent with the profile's anchor trajectory extrapolated forward;
+    larger when the transition requires an implausible jump.
+
+    Applied only for short temporal gaps (≤ TRAJECTORY_MAX_GAP_FRAMES). For
+    larger gaps the player may have moved significantly, so the penalty
+    degrades to 0. Also returns 0 when there is no trajectory data (graceful).
+
+    The cost is `clip(distance / TRAJECTORY_EXPECTED_NOISE, 0, 1)`.
+    """
+    if not segment.positions:
+        return 0.0
+    if profile.anchor_end_frame is None or not profile.anchor_last_positions:
+        return 0.0
+
+    # Gap must be forward-looking and within range.
+    gap = segment.start_frame - profile.anchor_end_frame
+    if gap <= 0 or gap > TRAJECTORY_MAX_GAP_FRAMES:
+        return 0.0
+
+    # Fit constant-velocity from anchor's recent positions.
+    anchor = sorted(profile.anchor_last_positions, key=lambda p: p.frame_number)
+    if len(anchor) < 2:
+        # Not enough samples to estimate velocity — fall back to "zero velocity"
+        # prediction (anchor stayed where it ended).
+        end = anchor[-1]
+        extrap_x, extrap_y = end.x, end.y
+    else:
+        f0, f1 = anchor[0].frame_number, anchor[-1].frame_number
+        if f1 == f0:
+            extrap_x, extrap_y = anchor[-1].x, anchor[-1].y
+        else:
+            vx = (anchor[-1].x - anchor[0].x) / (f1 - f0)
+            vy = (anchor[-1].y - anchor[0].y) / (f1 - f0)
+            dt = segment.start_frame - f1
+            extrap_x = anchor[-1].x + vx * dt
+            extrap_y = anchor[-1].y + vy * dt
+
+    seg_start = sorted(segment.positions, key=lambda p: p.frame_number)[0]
+    dx = seg_start.x - extrap_x
+    dy = seg_start.y - extrap_y
+    dist = math.sqrt(dx * dx + dy * dy)
+    return min(dist / TRAJECTORY_EXPECTED_NOISE, 1.0)
 
 
 def _compute_assignment_cost(
@@ -724,6 +796,13 @@ def _compute_assignment_cost(
                 seg_multi_desc, profile_multi_desc
             )
     cost += WEIGHT_MULTI_REGION * multi_cost
+
+    # 6. Trajectory continuity (kinematic extrapolation over short gaps).
+    # Gated on WEIGHT_TRAJECTORY > 0 so the per-segment arithmetic is skipped
+    # entirely in the default (disabled) configuration — see the weight block
+    # above for why it is zero today.
+    if WEIGHT_TRAJECTORY > 0:
+        cost += WEIGHT_TRAJECTORY * _compute_trajectory_cost(segment, profile)
 
     return cost
 

@@ -97,6 +97,8 @@ class Aggregates:
     switch_events_by_cause: Counter
     total_real_switches: int
     rallies_with_switches: int
+    pred_exchange_swaps: int          # Disguised-swap count (fragment-style).
+    rallies_with_exchange_swaps: int
     convention_drift_rallies: list[str]
     fragmentation_hist: Counter  # distinct_pred_ids count → # GT tracks
     worst_coverage: list[tuple[str, str, float]]  # (rally, label, coverage)
@@ -105,12 +107,74 @@ class Aggregates:
     per_rally_summary: list[dict]
 
 
+def _count_pred_exchange_swaps(audit: dict) -> int:
+    """Disguised-swap detector — total pred-exchange boundaries (pre-trajectory-filter).
+
+    Counts every boundary where the incoming pred_id was previously tracking a
+    different GT. Some of these may be trajectory-continuity recoveries (tracker
+    correctly re-associating); see `_count_swap_and_recovery` for the split.
+    """
+    swaps, recoveries = _count_swap_and_recovery(audit)
+    return swaps + recoveries
+
+
+def _count_swap_and_recovery(audit: dict) -> tuple[int, int]:
+    """Return (true_swap_count, recovery_count).
+
+    A recovery is a pred-exchange where pred_new's actual position at the swap
+    frame is closer (by Δ ≥ 0.03) to pred_old's pre-swap extrapolation than to
+    its own. We can't extrapolate from the audit JSON alone (no positions), so
+    this function falls back to counting every pred-exchange as a swap unless
+    position data was attached.
+
+    Because the audit JSON doesn't carry raw positions, this report-level
+    classifier aggregates only what was already in the JSON. The decisive
+    recovery split happens in the gallery (which loads predictions), and is
+    reflected via `swap_recovery` events rendered to HTML. For the report's
+    headline, we retain the conservative "all pred-exchanges are swaps"
+    pessimistic count — with a caveat pointing to the gallery for the split.
+    """
+    pred_history: dict[int, list[tuple[int, int]]] = {}
+    for g in audit.get("perGt", []):
+        for s, _e, pid in g.get("predIdSpans", []):
+            pred_history.setdefault(pid, []).append((g["gtTrackId"], s))
+    for h in pred_history.values():
+        h.sort(key=lambda t: t[1])
+
+    def prior_gt(pid: int, before: int) -> int | None:
+        last_gt: int | None = None
+        for gt_id, s in pred_history.get(pid, []):
+            if s >= before:
+                break
+            last_gt = gt_id
+        return last_gt
+
+    swaps = 0
+    for g in audit.get("perGt", []):
+        spans = g.get("predIdSpans", [])
+        for prev, cur in zip(spans, spans[1:]):
+            prev_pred = prev[2]
+            cur_pred = cur[2]
+            cur_start = cur[0]
+            # Skip identity (same pred) and unmatched-gap sentinels — these are
+            # not pred-exchanges.
+            if prev_pred == cur_pred or prev_pred < 0 or cur_pred < 0:
+                continue
+            incoming = prior_gt(cur_pred, cur_start)
+            if incoming is not None and incoming != g["gtTrackId"]:
+                swaps += 1
+    # Report-level cannot distinguish recovery without positions.
+    return swaps, 0
+
+
 def aggregate(audits: list[dict]) -> Aggregates:
     miss_frames_by_cause: Counter = Counter()
     miss_ranges_by_cause: Counter = Counter()
     switch_events_by_cause: Counter = Counter()
     total_real_switches = 0
     rallies_with_switches = 0
+    pred_exchange_swaps = 0
+    rallies_with_exchange_swaps = 0
     convention_drift = []
     fragmentation_hist: Counter = Counter()
     worst_coverage: list[tuple[str, str, float]] = []
@@ -125,6 +189,10 @@ def aggregate(audits: list[dict]) -> Aggregates:
         total_real_switches += switches_here
         if switches_here > 0:
             rallies_with_switches += 1
+        exchange_here = _count_pred_exchange_swaps(a)
+        pred_exchange_swaps += exchange_here
+        if exchange_here > 0:
+            rallies_with_exchange_swaps += 1
 
         conv = a.get("convention", {})
         if conv.get("courtSideFlip") or conv.get("teamLabelFlip"):
@@ -174,6 +242,8 @@ def aggregate(audits: list[dict]) -> Aggregates:
         switch_events_by_cause=switch_events_by_cause,
         total_real_switches=total_real_switches,
         rallies_with_switches=rallies_with_switches,
+        pred_exchange_swaps=pred_exchange_swaps,
+        rallies_with_exchange_swaps=rallies_with_exchange_swaps,
         convention_drift_rallies=convention_drift,
         fragmentation_hist=fragmentation_hist,
         worst_coverage=worst_coverage[:15],
@@ -284,7 +354,12 @@ def render_report(agg: Aggregates) -> str:
         "",
         "## Headline",
         "",
-        f"- Real ID switches: **{agg.total_real_switches}** across {agg.rallies_with_switches} rallies.",
+        f"- Real ID switches (single-pred segment flip): **{agg.total_real_switches}** across {agg.rallies_with_switches} rallies.",
+        f"- Pred-exchange swaps (two preds swapped GT ownership): "
+        f"**{agg.pred_exchange_swaps}** across {agg.rallies_with_exchange_swaps} rallies.",
+        f"- **Combined identity-swap incidents: "
+        f"{agg.total_real_switches + agg.pred_exchange_swaps}** "
+        f"(was undercounted when only the first metric was reported).",
         f"- GT tracks with fragmentation (≥2 pred IDs): "
         f"**{sum(n for k, n in agg.fragmentation_hist.items() if k >= 2)} / {agg.n_gt_tracks}**.",
         f"- Rallies flagged for convention drift: **{len(agg.convention_drift_rallies)}**.",
