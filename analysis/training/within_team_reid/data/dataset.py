@@ -43,12 +43,16 @@ TIER_TO_IDX: dict[str, int] = {
 
 
 def build_identity_encoding(pairs: list[Pair]) -> dict[tuple[str, int], int]:
-    """Stable mapping (rally_id, canonical_id) → int across the corpus."""
+    """Stable mapping (video_id, canonical_id) → int across the corpus.
+
+    Session 9: keyed by video_id (not rally_id) so SupCon treats the same
+    player across different rallies as ONE identity class.
+    """
     seen: list[tuple[str, int]] = []
     seen_set: set[tuple[str, int]] = set()
     for p in pairs:
         for tk in (p.track_a, p.track_b):
-            key = (p.rally_id, tk.canonical_id)
+            key = (p.video_id, tk.canonical_id)
             if key not in seen_set:
                 seen_set.add(key)
                 seen.append(key)
@@ -122,8 +126,8 @@ class PairDataset(Dataset):
             tensor_a = augment_eval(crop_a)
             tensor_b = augment_eval(crop_b)
 
-        ident_a = self.identity_encoding[(pair.rally_id, pair.track_a.canonical_id)]
-        ident_b = self.identity_encoding[(pair.rally_id, pair.track_b.canonical_id)]
+        ident_a = self.identity_encoding[(pair.video_id, pair.track_a.canonical_id)]
+        ident_b = self.identity_encoding[(pair.video_id, pair.track_b.canonical_id)]
         team_a = self.team_encoding[(pair.rally_id, pair.track_a.team)]
         team_b = self.team_encoding[(pair.rally_id, pair.track_b.team)]
         tier_idx = TIER_TO_IDX[pair.tier]

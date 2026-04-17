@@ -88,4 +88,5 @@ VARIANT_CONFIGS: dict[str, TrainConfig] = {
     "v1": TrainConfig(variant_id="v1", lam_tm=0.50, label_smoothing_mid=0.05),
     "v2": TrainConfig(variant_id="v2", lam_tm=1.00, label_smoothing_mid=0.02),
     "v3": TrainConfig(variant_id="v3", lam_tm=0.25, label_smoothing_mid=0.00),
+    "v4": TrainConfig(variant_id="v4", lam_tm=0.50, label_smoothing_mid=0.05),
 }
