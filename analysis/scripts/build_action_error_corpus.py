@@ -89,6 +89,10 @@ class RallyQuality:
     ball_conf_p25: float
     player_track_count: int
     gt_contact_count: int
+    # Number of predicted contacts that did not match any GT. This is the
+    # corpus-level FP metric used by the Pattern-A rescue-gate sweep. Set by
+    # `main()` after `match_contacts`; 0 for rallies without ball data.
+    extra_predictions: int = 0
 
 
 @dataclass
@@ -244,6 +248,7 @@ def main() -> None:
     total_fn = 0
     total_wrong_action = 0
     total_wrong_player = 0
+    total_extra_preds = 0
 
     with open(corpus_path, "w") as f_corpus:
         for idx, rally in enumerate(rallies):
@@ -370,6 +375,14 @@ def main() -> None:
                     matches, synth_serves, rally.gt_labels,
                     synth_tol, avail_tids, match_teams, t2p,
                 )
+
+            # Predictions that did not match any GT are the FP count for this
+            # rally. Record it on RallyQuality so sweep harnesses can compute
+            # Δextra_pred per threshold cell.
+            extra_preds_count = len(unmatched_preds)
+            total_extra_preds += extra_preds_count
+            rq.extra_predictions = extra_preds_count
+            rally_qualities[rally.rally_id] = asdict(rq)
 
             fn_labels = [
                 rally.gt_labels[i]
@@ -506,6 +519,7 @@ def main() -> None:
                 f"[{idx+1}/{len(rallies)}] {rally.rally_id[:8]} "
                 f"GT={len(rally.gt_labels)} TP={rally_tp} FN={rally_fn} "
                 f"wrong_action={rally_wrong_action} wrong_player={rally_wrong_player} "
+                f"extra_pred={extra_preds_count} "
                 f"ball_cov={rq.ball_coverage_pct:.0f}% [{elapsed:.1f}s]"
             )
 
@@ -527,6 +541,7 @@ def main() -> None:
     print(f"Wrong action:         {total_wrong_action}")
     print(f"Wrong player:         {total_wrong_player}")
     print(f"Total errors:         {len(errors)}")
+    print(f"Extra preds (FP):     {total_extra_preds}")
     print()
 
     fn_cats = Counter(r["fn_subcategory"] for r in errors if r["error_class"] == "FN_contact")
