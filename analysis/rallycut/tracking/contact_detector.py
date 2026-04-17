@@ -173,6 +173,13 @@ class ContactDetectionConfig:
     # Player-proximity candidate refinement
     enable_proximity_candidates: bool = True
     proximity_search_window: int = 8  # Search ±N frames around each candidate
+
+    # Trajectory-peak refinement: after candidate generation, shift each candidate
+    # to the frame with maximum direction change within a small window. This
+    # corrects the common misalignment where generators detect the velocity peak
+    # (effect of contact) several frames before the actual contact (cause).
+    enable_trajectory_refinement: bool = True
+    trajectory_refinement_window: int = 3  # Search ±N frames for peak direction change
     # Court position baselines (fixed defaults assuming net_y≈0.5).
     # action_classifier.py computes dynamic baselines from actual net_y instead.
     baseline_y_near: float = 0.82  # Near baseline Y threshold
@@ -1512,6 +1519,63 @@ def estimate_net_position(
     return (min(y_values) + max(y_values)) / 2
 
 
+def _refine_candidates_to_trajectory_peak(
+    candidate_frames: list[int],
+    ball_by_frame: dict[int, BallPosition],
+    direction_check_frames: int = 8,
+    search_window: int = 3,
+    first_frame: int = 0,
+    serve_window_frames: int = 60,
+) -> list[int]:
+    """Shift each candidate to the frame with maximum direction change.
+
+    Candidate generators (velocity peaks, inflections, reversals) detect the
+    EFFECT of a contact — the velocity spike or trajectory change that follows
+    the actual contact moment. This corrects the misalignment by searching
+    ±search_window frames for the peak direction change.
+
+    Constraints (informed by 364-rally diagnostic):
+    - Search window capped at ±3 frames (not ±8). Wider windows cause serves
+      to jump 8-16 frames to the ball-toss peak instead of the contact frame.
+    - Candidates in the serve window (first 60 frames) are NOT refined — serve
+      trajectories have multiple direction-change peaks (toss, contact, arc)
+      and refinement picks the wrong one 62% of the time.
+    - No internal dedup — the post-classifier _deduplicate_contacts() handles
+      dedup with court-side awareness (cross-side distance=4 for attack→block).
+    """
+    if not candidate_frames:
+        return candidate_frames
+
+    refined: list[int] = []
+    for frame in candidate_frames:
+        # Skip refinement in serve window — multiple trajectory peaks
+        if frame - first_frame < serve_window_frames:
+            refined.append(frame)
+            continue
+
+        best_frame = frame
+        best_dir_change = compute_direction_change(
+            ball_by_frame, frame, direction_check_frames
+        )
+
+        for offset in range(-search_window, search_window + 1):
+            if offset == 0:
+                continue
+            f = frame + offset
+            if f not in ball_by_frame:
+                continue
+            dc = compute_direction_change(
+                ball_by_frame, f, direction_check_frames
+            )
+            if dc > best_dir_change:
+                best_dir_change = dc
+                best_frame = f
+
+        refined.append(best_frame)
+
+    return refined
+
+
 def _find_proximity_frame(
     frame: int,
     ball_by_frame: dict[int, BallPosition],
@@ -1889,11 +1953,21 @@ def detect_contacts(
                     candidate_frames = sorted(candidate_set_check | {receive_frame})
                     n_post_serve = 1
 
-    # Step 6b: Generate player-proximity candidates
-    # Trajectory-based candidates detect the EFFECT of a contact (velocity peak,
-    # inflection, etc.) which lags the actual contact by several frames. Proximity
-    # candidates are generated at the frame of minimum player-ball distance near
-    # each standard candidate — closer to the actual contact moment.
+    # Step 6b: Trajectory-peak refinement (constrained ±3 frames, skip serves).
+    # Shifts trajectory candidates to their local direction-change peak. Applied
+    # BEFORE proximity candidates so proximity search starts from refined positions.
+    if cfg.enable_trajectory_refinement:
+        candidate_frames = _refine_candidates_to_trajectory_peak(
+            candidate_frames, ball_by_frame,
+            direction_check_frames=cfg.direction_check_frames,
+            search_window=cfg.trajectory_refinement_window,
+            first_frame=first_frame,
+            serve_window_frames=cfg.serve_window_frames,
+        )
+
+    # Step 6c: Generate player-proximity candidates
+    # Proximity candidates are generated at the frame of minimum player-ball
+    # distance near each candidate — closer to the actual contact moment.
     n_proximity = 0
     if player_positions and cfg.enable_proximity_candidates:
         candidate_set = set(candidate_frames)
@@ -1946,7 +2020,7 @@ def detect_contacts(
 
     net_zone = 0.08  # ±8% of screen around net
     contacts: list[Contact] = []
-    prev_candidate_frame = 0  # Track ALL candidates, not just accepted ones
+    prev_accepted_frame = 0  # Track ACCEPTED contacts for frames_since_last
 
     for frame in candidate_frames:
         # Skip warmup period (ball tracking produces false detections early)
@@ -2031,12 +2105,15 @@ def detect_contacts(
             ball_by_frame, frame, estimated_net_y, window=5
         )
 
-        # Compute frames since last candidate (accepted or rejected).
-        # Must match training script semantics (prev_frame tracks all candidates).
+        # Compute frames since last ACCEPTED contact (not just any candidate).
+        # Previous semantics tracked all candidates, but this caused the GBM to
+        # penalize rapid real contacts (attack→dig at 3-5 frame spacing) because
+        # frames_since_last was always small in dense candidate regions. Measuring
+        # from last accepted contact means only validated contacts affect spacing.
+        # Must match training script semantics.
         frames_since_last = (
-            frame - prev_candidate_frame if prev_candidate_frame > 0 else 0
+            frame - prev_accepted_frame if prev_accepted_frame > 0 else 0
         )
-        prev_candidate_frame = frame
 
         if classifier is not None and classifier.is_trained:
             # Phase 3: Use learned classifier
@@ -2278,6 +2355,7 @@ def detect_contacts(
             confidence=confidence,
             arc_fit_residual=arc_residual,
         ))
+        prev_accepted_frame = frame
 
     # Deduplicate contacts from proximity + standard candidates at similar frames
     pre_dedup = len(contacts)

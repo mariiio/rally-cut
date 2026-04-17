@@ -45,6 +45,7 @@ from rallycut.tracking.contact_detector import (
     _find_proximity_frame,
     _find_velocity_reversal_candidates,
     _merge_candidates,
+    _refine_candidates_to_trajectory_peak,
     _smooth_signal,
     compute_direction_change,
     estimate_net_position,
@@ -65,20 +66,18 @@ def extract_candidate_features(
     rally: RallyData,
     config: ContactDetectionConfig | None = None,
     sequence_probs: np.ndarray | None = None,
+    gt_frames: list[int] | None = None,
 ) -> tuple[list[CandidateFeatures], list[int]]:
     """Extract features for ALL candidates in a rally (before validation gate).
 
     Args:
         rally: Rally data with ball/player positions.
         config: Contact detection configuration.
-        sequence_probs: Accepted for backward compatibility with diagnostic
-            scripts that still pass it (eval_sequence_enriched,
-            train_production_sequence, diagnose_serve_*). The 7 seq_p_*
-            features were dropped from CandidateFeatures on 2026-04-07 after
-            an importance audit found their GBM contribution was exactly
-            0.0000 (the trainer had been passing None all along, so the
-            features were constant zeros at training time and the trees
-            never split on them). This argument is now a no-op.
+        sequence_probs: No-op, kept for backward compat.
+        gt_frames: Optional GT contact frames. When provided, frames_since_last
+            is computed from the last GT-matched candidate (approximating
+            inference semantics where it's measured from last accepted contact).
+            When None, frames_since_last is measured from the last candidate.
 
     Returns:
         Tuple of (features_list, candidate_frames).
@@ -239,6 +238,16 @@ def extract_candidate_features(
                 candidate_frames, player_motion_frames, cfg.min_peak_distance_frames
             )
 
+    # Trajectory-peak refinement (must match detect_contacts logic: before proximity)
+    if cfg.enable_trajectory_refinement:
+        candidate_frames = _refine_candidates_to_trajectory_peak(
+            candidate_frames, ball_by_frame,
+            direction_check_frames=cfg.direction_check_frames,
+            search_window=cfg.trajectory_refinement_window,
+            first_frame=first_frame,
+            serve_window_frames=cfg.serve_window_frames,
+        )
+
     # Generate player-proximity candidates (must match detect_contacts logic)
     if player_positions and cfg.enable_proximity_candidates:
         candidate_set = set(candidate_frames)
@@ -253,9 +262,23 @@ def extract_candidate_features(
                 candidate_set.add(prox)
         candidate_frames = sorted(candidate_set)
 
+    # Pre-compute GT-matched candidate frames for frames_since_last.
+    # At inference, frames_since_last is measured from the last ACCEPTED contact.
+    # During training, we approximate this by measuring from the last GT-matched
+    # candidate (tolerance ±5 frames). This prevents the classifier from learning
+    # that close candidates are always noise — real contacts CAN be 3-5 frames
+    # apart (attack→dig, attack→block).
+    gt_candidate_set: set[int] = set()
+    if gt_frames:
+        for cf in candidate_frames:
+            for gf in gt_frames:
+                if abs(cf - gf) <= 5:
+                    gt_candidate_set.add(cf)
+                    break
+
     features_list: list[CandidateFeatures] = []
     valid_frames: list[int] = []
-    prev_frame = 0
+    prev_accepted_frame = 0
 
     for frame in candidate_frames:
         if frame - first_frame < cfg.warmup_skip_frames:
@@ -318,7 +341,9 @@ def extract_candidate_features(
             ball_by_frame, frame, estimated_net_y, window=5
         )
 
-        frames_since_last = frame - prev_frame if prev_frame > 0 else 0
+        frames_since_last = (
+            frame - prev_accepted_frame if prev_accepted_frame > 0 else 0
+        )
 
         # Ball detection density: fraction of ±10 frames with confident ball
         density_window = 10
@@ -388,7 +413,9 @@ def extract_candidate_features(
 
         features_list.append(features)
         valid_frames.append(frame)
-        prev_frame = frame
+        # Update prev_accepted_frame only for GT-matched candidates (or all if no GT)
+        if not gt_frames or frame in gt_candidate_set:
+            prev_accepted_frame = frame
 
     return features_list, valid_frames
 
@@ -457,7 +484,10 @@ def main() -> None:
     per_rally_table.add_column("GT Labels", justify="right")
 
     for rally in rallies:
-        features_list, candidate_frames = extract_candidate_features(rally, config=contact_config)
+        gt_frames = [gt.frame for gt in rally.gt_labels]
+        features_list, candidate_frames = extract_candidate_features(
+            rally, config=contact_config, gt_frames=gt_frames,
+        )
 
         if not features_list:
             per_rally_table.add_row(rally.rally_id[:8], "0", "0", "0", str(len(rally.gt_labels)))
