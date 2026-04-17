@@ -11,6 +11,7 @@ Reuses:
 
 Usage:
   uv run python scripts/build_tracking_audit_gallery.py
+  uv run python scripts/build_tracking_audit_gallery.py --retrack   # Use real pipeline output
   uv run python scripts/build_tracking_audit_gallery.py --rally <id>
   uv run python scripts/build_tracking_audit_gallery.py --max-events-per-rally 4
 """
@@ -963,6 +964,42 @@ def _load_audits(audit_dir: Path, rally_filter: str | None) -> list[dict]:
     return audits
 
 
+def _load_retrack_predictions(rally_id: str, ball_positions: list | None = None) -> PlayerTrackingResult | None:
+    """Load predictions from the retrack cache (real pipeline output).
+
+    Returns the fully post-processed PlayerTrackingResult, or None if the
+    rally is not in the cache.
+    """
+    from rallycut.cli.commands.evaluate_tracking import _compute_tracker_config_hash
+    from rallycut.evaluation.tracking.retrack_cache import RetrackCache
+    from rallycut.tracking.player_filter import PlayerFilterConfig
+    from rallycut.tracking.player_tracker import PlayerTracker
+
+    cache = RetrackCache()
+    config_hash = _compute_tracker_config_hash()
+    entry = cache.get(rally_id, config_hash)
+    if entry is None:
+        return None
+    cached_data, color_store, appearance_store, learned_store = entry
+    filter_config = PlayerFilterConfig()
+    return PlayerTracker.apply_post_processing(
+        positions=cached_data.positions,
+        raw_positions=list(cached_data.positions),
+        color_store=color_store,
+        appearance_store=appearance_store,
+        ball_positions=ball_positions,
+        video_fps=cached_data.video_fps,
+        video_width=cached_data.video_width,
+        video_height=cached_data.video_height,
+        frame_count=cached_data.frame_count,
+        start_frame=0,
+        filter_enabled=True,
+        filter_config=filter_config.scaled_for_fps(cached_data.video_fps),
+        court_calibrator=None,
+        learned_store=learned_store,
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--audit-dir", type=Path, default=Path("reports/tracking_audit"))
@@ -970,6 +1007,10 @@ def main() -> None:
     parser.add_argument("--rally", type=str, default=None, help="rally id prefix filter")
     parser.add_argument("--max-events-per-rally", type=int, default=6)
     parser.add_argument("--skip-clips", action="store_true", help="HTML only, no ffmpeg/cv2")
+    parser.add_argument(
+        "--retrack", action="store_true",
+        help="Use retrack cache predictions (real pipeline output) instead of DB",
+    )
     args = parser.parse_args()
 
     audits = _load_audits(args.audit_dir, args.rally)
@@ -982,6 +1023,9 @@ def main() -> None:
     clips_dir.mkdir(exist_ok=True)
 
     logger.info(f"Loaded {len(audits)} audits")
+    if args.retrack:
+        logger.info("Using retrack cache predictions (real pipeline output)")
+
     for idx, audit in enumerate(audits, start=1):
         rid = audit["rallyId"]
         vid = audit["videoId"]
@@ -990,40 +1034,54 @@ def main() -> None:
         events = extract_events(audit, args.max_events_per_rally)
         events_with_clips: list[tuple[Event, str]] = []
 
-        # Re-classify swap events as recoveries where trajectory continuity
-        # indicates the tracker was correctly re-associating (not failing).
-        # Needs predictions, so try to load them once per rally.
+        # Load rally data: GT from DB always, predictions from retrack or DB.
         _rallies_cache = load_labeled_rallies(rally_id=rid)
         _rally_cached = _rallies_cache[0] if _rallies_cache else None
-        if _rally_cached is not None and _rally_cached.predictions is not None:
-            events = reclassify_swap_recoveries(events, _rally_cached.predictions)
+
+        predictions: PlayerTrackingResult | None = None
+        video_fps: float = 30.0
+        if args.retrack:
+            ball_positions = None
+            if _rally_cached and _rally_cached.predictions:
+                ball_positions = _rally_cached.predictions.ball_positions or None
+            predictions = _load_retrack_predictions(rid, ball_positions)
+            if predictions is not None:
+                video_fps = predictions.video_fps
+            elif _rally_cached and _rally_cached.predictions:
+                logger.warning(f"  {rid[:8]} not in retrack cache, falling back to DB")
+                predictions = _rally_cached.predictions
+        elif _rally_cached and _rally_cached.predictions:
+            predictions = _rally_cached.predictions
+
+        if predictions is not None:
+            video_fps = predictions.video_fps or video_fps
+
+        # Re-classify swap events as recoveries where trajectory continuity
+        # indicates the tracker was correctly re-associating (not failing).
+        if predictions is not None:
+            events = reclassify_swap_recoveries(events, predictions)
 
         if events and not args.skip_clips:
-            # Load video + GT/pred once per rally.
             rally_start_ms = _ms_at_rally_start(rid) or 0
             video_path = get_video_path(vid)
             if video_path is None:
                 logger.warning(f"  no video for {vid}, skipping clips")
+            elif predictions is None:
+                logger.warning(f"  no predictions for {rid[:8]}, skipping clips")
             else:
-                rally = _rally_cached
-                if rally is None or rally.predictions is None:
-                    logger.warning(f"  no predictions in DB for {rid}, skipping clips")
-                else:
-                    # Interpolate GT to match predictions frame count (same as evaluate_rally).
-                    from rallycut.evaluation.tracking.metrics import smart_interpolate_gt
-                    gt = rally.ground_truth
-                    if rally.predictions.frame_count > 0:
-                        gt = smart_interpolate_gt(
-                            gt, rally.predictions, rally.predictions.frame_count,
-                        )
+                from rallycut.evaluation.tracking.metrics import smart_interpolate_gt
+                gt = _rally_cached.ground_truth if _rally_cached else None
+                if gt is not None and predictions.frame_count > 0:
+                    gt = smart_interpolate_gt(gt, predictions, predictions.frame_count)
+                if gt is not None:
                     for eidx, ev in enumerate(events, start=1):
                         clip_name = f"{rid}_{eidx:02d}_{ev.kind}.mp4"
                         clip_path = clips_dir / clip_name
                         ok = render_event_clip(
                             video_path=video_path,
                             rally_start_ms=rally_start_ms,
-                            video_fps=rally.video_fps or 30.0,
-                            predictions=rally.predictions,
+                            video_fps=video_fps,
+                            predictions=predictions,
                             gt_positions=gt.player_positions,
                             event=ev,
                             out_path=clip_path,

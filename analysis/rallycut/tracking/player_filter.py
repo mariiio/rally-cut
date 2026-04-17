@@ -186,6 +186,8 @@ class PlayerFilterConfig:
     stationary_bg_min_detections: int = 50  # Minimum detections to be considered
     stationary_bg_min_person_height: float = 0.10  # Min bbox height to be person-sized
     stationary_bg_person_spread: float = 0.003  # Stricter spread threshold for person-sized tracks
+    stationary_bg_sideline_margin: float = 0.10  # Person-sized tracks inside this x-band get looser threshold
+    stationary_bg_court_interior_spread: float = 0.001  # Looser spread for person-sized tracks inside court
 
     # Gap interpolation for primary tracks
     # Fills short detection gaps with linearly interpolated positions.
@@ -1216,14 +1218,29 @@ def remove_stationary_background_tracks(
             # Far-court players can have low spread (standing still between
             # touches) but always move *slightly* (body sway, reactions).
             # Truly static objects (signs, seated spectators) have < 0.003.
-            if (avg_height >= config.stationary_bg_min_person_height
-                    and spread >= config.stationary_bg_person_spread):
-                logger.info(
-                    f"Stationary background filter: sparing track {track_id} "
-                    f"(spread={spread:.4f}, avg_height={avg_height:.3f} "
-                    f">= {config.stationary_bg_min_person_height} — likely a player)"
+            if avg_height >= config.stationary_bg_min_person_height:
+                avg_x = float(np.mean(xs))
+                is_inside_court = (
+                    config.stationary_bg_sideline_margin
+                    <= avg_x
+                    <= 1.0 - config.stationary_bg_sideline_margin
                 )
-                continue
+                effective_threshold = (
+                    config.stationary_bg_court_interior_spread
+                    if is_inside_court
+                    else config.stationary_bg_person_spread
+                )
+                if spread >= effective_threshold:
+                    reason = (
+                        f"inside court (x={avg_x:.2f})"
+                        if is_inside_court and spread < config.stationary_bg_person_spread
+                        else "spread sufficient"
+                    )
+                    logger.info(
+                        f"Stationary background filter: sparing track {track_id} "
+                        f"(spread={spread:.4f}, avg_height={avg_height:.3f}, {reason})"
+                    )
+                    continue
 
             removed_ids.add(track_id)
             presence = n / total_frames
