@@ -12,16 +12,18 @@ from rallycut.tracking.contact_detector import (
     Contact,
     ContactDetectionConfig,
     ContactSequence,
-    _player_to_ball_dist,
-    compute_direction_change,
+    _build_generators_by_frame,
     _compute_velocities,
     _filter_noise_spikes,
     _find_inflection_candidates,
     _find_nearest_player,
     _find_parabolic_breakpoints,
     _find_velocity_reversal_candidates,
+    _maybe_anchor_rally_start_serve,
     _merge_candidates,
+    _player_to_ball_dist,
     _smooth_signal,
+    compute_direction_change,
     detect_contacts,
     estimate_net_position,
 )
@@ -1156,3 +1158,362 @@ class TestDetectContactsWithNewFeatures:
             assert hasattr(c, "confidence")
             # Without classifier, confidence should be 0.0 (hand-tuned gates)
             assert c.confidence == 0.0
+
+
+class TestBuildGeneratorsByFrame:
+    """Tests for the generator-attribution helper used by the Arm B rescue gate."""
+
+    def test_each_generator_frame_claims_nearest_merged_candidate(self) -> None:
+        """A generator frame attributes to the nearest merged candidate within min_distance."""
+        result = _build_generators_by_frame(
+            candidate_frames=[10, 30, 60],
+            min_distance_frames=8,
+            generator_lists={
+                "velocity_peak": [10, 30],
+                "inflection": [12, 31],  # both within 8f of a merged candidate
+                "reversal": [9],         # within 8f of frame 10
+            },
+        )
+        assert result[10] == {"velocity_peak", "inflection", "reversal"}
+        assert result[30] == {"velocity_peak", "inflection"}
+        assert result[60] == set()
+
+    def test_generator_frame_outside_window_is_dropped(self) -> None:
+        """Generator frames beyond min_distance from any merged candidate are ignored."""
+        result = _build_generators_by_frame(
+            candidate_frames=[10, 50],
+            min_distance_frames=5,
+            generator_lists={"parabolic": [30]},  # 20f from 10, 20f from 50
+        )
+        assert result[10] == set()
+        assert result[50] == set()
+
+    def test_empty_candidate_list_returns_empty_map(self) -> None:
+        """No merged candidates → empty map; generator lists are ignored."""
+        result = _build_generators_by_frame(
+            candidate_frames=[],
+            min_distance_frames=8,
+            generator_lists={"velocity_peak": [10, 20]},
+        )
+        assert result == {}
+
+
+class _FakeContactClassifier:
+    """Test double: returns (is_validated, confidence) from a frame-indexed map.
+
+    Used to force specific predictions at the rescue gate without the real GBM.
+    The production call site reads `classifier.is_trained`, `classifier.predict`,
+    and `classifier.threshold`; these stubs cover that surface.
+    """
+
+    threshold = 0.40
+
+    def __init__(self, by_frame_result: dict[int, tuple[bool, float]]):
+        self._by_frame = by_frame_result
+        self._call_order: list[int] = []
+
+    @property
+    def is_trained(self) -> bool:
+        return True
+
+    def predict(self, features):  # type: ignore[no-untyped-def]
+        results = []
+        # Each call passes exactly one CandidateFeatures (production uses [features]).
+        for feat in features:
+            # CandidateFeatures doesn't carry frame id directly; tests control
+            # a shared counter: the builder replaces this classifier with one
+            # that yields results in call order, matching candidate_frames.
+            frame = self._call_order.pop(0) if self._call_order else -1
+            results.append(self._by_frame.get(frame, (False, 0.0)))
+        return results
+
+    def set_call_order(self, frames: list[int]) -> None:
+        self._call_order = list(frames)
+
+
+class TestSequenceRecoveryGate:
+    """Two-arm sequence-rescue gate (Pattern A, 2026-04-17).
+
+    Arm A: seq_peak >= 0.80 AND conf >= SEQ_RECOVERY_CLF_FLOOR (0.20).
+    Arm B: seq_peak >= 0.80 AND conf >= SEQ_RECOVERY_CLF_FLOOR_MULTIGEN
+           AND n_generators >= SEQ_RECOVERY_MIN_GENERATORS
+           AND player_distance <= SEQ_RECOVERY_MAX_PLAYER_DIST.
+    """
+
+    def _make_trajectory(self, contact_frame: int = 25) -> tuple[list[BallPosition], list[PlayerPosition]]:
+        """Simple trajectory with a direction change at `contact_frame` and a player at <0.10."""
+        positions = []
+        for i in range(60):
+            if i <= contact_frame:
+                positions.append(_bp(i, 0.30 + i * 0.005, 0.50 - i * 0.003))
+            else:
+                positions.append(_bp(i, 0.425 - (i - contact_frame) * 0.005, 0.425 + (i - contact_frame) * 0.003))
+        # Player very close to the ball at the contact frame (player_dist ~0.05).
+        players = [
+            _pp(contact_frame - 2, 1, 0.42, 0.44),
+            _pp(contact_frame, 1, 0.42, 0.44),
+            _pp(contact_frame + 2, 1, 0.42, 0.44),
+        ]
+        return positions, players
+
+    def _sequence_probs_with_peak(self, length: int, peak_frame: int, peak_val: float = 0.95) -> np.ndarray:
+        """Build a (2, length) sequence-probs matrix with a non-background peak at peak_frame."""
+        probs = np.zeros((2, length), dtype=float)
+        probs[0, :] = 1.0 - 0.02  # background
+        probs[1, :] = 0.02         # non-background baseline
+        lo = max(0, peak_frame - 3)
+        hi = min(length, peak_frame + 4)
+        probs[1, lo:hi] = peak_val
+        probs[0, lo:hi] = 1.0 - peak_val
+        return probs
+
+    def _run(
+        self,
+        classifier_map: dict[int, tuple[bool, float]],
+        generators_by_frame: dict[int, set[str]] | None,
+        sequence_probs: np.ndarray | None,
+        monkeypatch,
+        contact_frame: int = 25,
+    ) -> ContactSequence:
+        positions, players = self._make_trajectory(contact_frame)
+        clf = _FakeContactClassifier(classifier_map)
+        # The production loop calls classifier.predict once per candidate frame
+        # that survives warmup. Align fake-classifier ordering with the known
+        # candidate frames in the trajectory.
+        clf.set_call_order([contact_frame] * 20)  # Oversized; extras are harmless.
+
+        # Stub `_build_generators_by_frame` to return a deterministic map so
+        # the Arm B n_generators count is fully controlled.
+        if generators_by_frame is not None:
+            def _stub(cands, _min_dist, _gen_lists):  # type: ignore[no-untyped-def]
+                return {cf: set(generators_by_frame.get(cf, set())) for cf in cands}
+            monkeypatch.setattr(
+                "rallycut.tracking.contact_detector._build_generators_by_frame",
+                _stub,
+            )
+
+        config = ContactDetectionConfig(
+            min_peak_velocity=0.003,
+            min_peak_prominence=0.001,
+            min_peak_distance_frames=8,
+            enable_noise_filter=False,
+            enable_sequence_recovery=True,
+        )
+        return detect_contacts(
+            positions,
+            player_positions=players,
+            config=config,
+            classifier=clf,  # type: ignore[arg-type]
+            sequence_probs=sequence_probs,
+        )
+
+    def test_arm_a_rescues_when_conf_above_original_floor(self, monkeypatch) -> None:
+        """Arm A preserved: conf=0.25, single generator, seq support → rescued."""
+        result = self._run(
+            classifier_map={25: (False, 0.25)},  # below 0.40 hard threshold; above 0.20 floor
+            generators_by_frame={25: {"velocity_peak"}},  # single generator
+            sequence_probs=self._sequence_probs_with_peak(length=60, peak_frame=25),
+            monkeypatch=monkeypatch,
+        )
+        rescued = [c for c in result.contacts if abs(c.frame - 25) <= 3]
+        assert len(rescued) >= 1, "Arm A regression: high-conf rescue must still fire"
+
+    def test_arm_b_rescues_low_conf_multigen_with_player(self, monkeypatch) -> None:
+        """Arm B: conf=0.10, 3 generators, player close, seq support → rescued.
+
+        The module default is MIN_GENERATORS=999 (dormant) — monkeypatch it
+        back to the designed active value for this test.
+        """
+        monkeypatch.setattr(
+            "rallycut.tracking.sequence_action_runtime.SEQ_RECOVERY_MIN_GENERATORS",
+            3,
+        )
+        result = self._run(
+            classifier_map={25: (False, 0.10)},  # below Arm A floor (0.20)
+            generators_by_frame={25: {"velocity_peak", "inflection", "reversal"}},
+            sequence_probs=self._sequence_probs_with_peak(length=60, peak_frame=25),
+            monkeypatch=monkeypatch,
+        )
+        rescued = [c for c in result.contacts if abs(c.frame - 25) <= 3]
+        assert len(rescued) >= 1, "Arm B must rescue multi-gen low-conf with player nearby"
+
+    def test_arm_b_rejects_single_generator(self, monkeypatch) -> None:
+        """Arm B requires ≥3 generators. Single-generator low-conf stays rejected."""
+        result = self._run(
+            classifier_map={25: (False, 0.10)},
+            generators_by_frame={25: {"velocity_peak"}},  # only 1
+            sequence_probs=self._sequence_probs_with_peak(length=60, peak_frame=25),
+            monkeypatch=monkeypatch,
+        )
+        rescued = [c for c in result.contacts if abs(c.frame - 25) <= 3]
+        assert len(rescued) == 0, "Arm B must not rescue single-generator low-conf"
+
+    def test_arm_b_rejects_when_player_too_far(self, monkeypatch) -> None:
+        """Arm B requires player within 0.15. Distant-player case stays rejected."""
+        # Shift player far from ball (dist >> 0.15).
+        positions, _ = self._make_trajectory(25)
+        players_far = [
+            _pp(23, 1, 0.05, 0.95),
+            _pp(25, 1, 0.05, 0.95),
+            _pp(27, 1, 0.05, 0.95),
+        ]
+        clf = _FakeContactClassifier({25: (False, 0.10)})
+        clf.set_call_order([25] * 20)
+
+        def _stub(cands, _min_dist, _gen_lists):  # type: ignore[no-untyped-def]
+            return {cf: {"velocity_peak", "inflection", "reversal"} if cf == 25 else set() for cf in cands}
+        monkeypatch.setattr(
+            "rallycut.tracking.contact_detector._build_generators_by_frame",
+            _stub,
+        )
+
+        config = ContactDetectionConfig(
+            min_peak_velocity=0.003,
+            min_peak_prominence=0.001,
+            min_peak_distance_frames=8,
+            enable_noise_filter=False,
+            enable_sequence_recovery=True,
+        )
+        result = detect_contacts(
+            positions,
+            player_positions=players_far,
+            config=config,
+            classifier=clf,  # type: ignore[arg-type]
+            sequence_probs=self._sequence_probs_with_peak(length=60, peak_frame=25),
+        )
+        rescued = [c for c in result.contacts if abs(c.frame - 25) <= 3]
+        assert len(rescued) == 0, "Arm B must not rescue when no player is within 0.15"
+
+    def test_neither_arm_rescues_without_sequence_support(self, monkeypatch) -> None:
+        """Both arms require seq_peak >= SEQ_RECOVERY_TAU. No sequence → no rescue."""
+        # Flat sequence probs: non-background stays at 0.02 (well below τ=0.80).
+        length = 60
+        flat = np.zeros((2, length), dtype=float)
+        flat[0, :] = 0.98
+        flat[1, :] = 0.02
+        result = self._run(
+            classifier_map={25: (False, 0.10)},
+            generators_by_frame={25: {"velocity_peak", "inflection", "reversal"}},
+            sequence_probs=flat,
+            monkeypatch=monkeypatch,
+        )
+        rescued = [c for c in result.contacts if abs(c.frame - 25) <= 3]
+        assert len(rescued) == 0, "Rescue requires sequence endorsement; flat probs must not rescue"
+
+
+class TestRallyStartServeAnchor:
+    """Pattern C — MS-TCN++ serve-class anchor for late ball-track starts.
+
+    The anchor fires only when (a) no existing contact lives in the first
+    SERVE_ANCHOR_MAX_FRAME frames, (b) MS-TCN++ serve class has a peak above
+    SERVE_ANCHOR_TAU in that window, and (c) a player is plausibly near the
+    ball at the peak frame.
+    """
+
+    def _probs_with_serve_peak(
+        self,
+        length: int,
+        peak_frame: int,
+        peak_val: float = 0.90,
+    ) -> np.ndarray:
+        """(7, length) sequence_probs with a serve-class peak at peak_frame."""
+        probs = np.zeros((7, length), dtype=float)
+        probs[0, :] = 0.98  # background
+        lo = max(0, peak_frame - 3)
+        hi = min(length, peak_frame + 4)
+        probs[1, lo:hi] = peak_val   # serve class
+        probs[0, lo:hi] = 1.0 - peak_val
+        return probs
+
+    def test_anchor_fires_on_late_track_start(self, monkeypatch) -> None:
+        """No early contact, strong serve peak, player close → anchor returned.
+
+        The module default is SERVE_ANCHOR_TAU=1.1 (dormant) — monkeypatch
+        it back to the designed active value for this test.
+        """
+        monkeypatch.setattr(
+            "rallycut.tracking.sequence_action_runtime.SERVE_ANCHOR_TAU",
+            0.85,
+        )
+        ball_by_frame = {
+            70: BallPosition(frame_number=70, x=0.45, y=0.55, confidence=0.9),
+            80: BallPosition(frame_number=80, x=0.42, y=0.50, confidence=0.9),
+        }
+        players = [_pp(f, 1, 0.44, 0.56) for f in range(28, 40)]
+
+        anchored = _maybe_anchor_rally_start_serve(
+            contacts=[],
+            sequence_probs=self._probs_with_serve_peak(length=100, peak_frame=30),
+            ball_by_frame=ball_by_frame,
+            player_positions=players,
+            first_frame=0,
+            net_y=0.50,
+        )
+        assert anchored is not None
+        assert anchored.is_validated is True
+        assert abs(anchored.frame - 30) <= 3
+        assert anchored.player_track_id == 1
+        assert anchored.confidence >= 0.85
+
+    def test_anchor_silent_when_contact_in_window(self) -> None:
+        """Existing contact in [0, SERVE_ANCHOR_MAX_FRAME] suppresses the anchor."""
+        existing = Contact(
+            frame=25, ball_x=0.5, ball_y=0.5, velocity=0.01,
+            direction_change_deg=10.0, player_track_id=1,
+            player_distance=0.05, is_validated=True, confidence=0.9,
+        )
+        ball_by_frame = {25: BallPosition(frame_number=25, x=0.5, y=0.5, confidence=0.9)}
+        anchored = _maybe_anchor_rally_start_serve(
+            contacts=[existing],
+            sequence_probs=self._probs_with_serve_peak(length=100, peak_frame=30),
+            ball_by_frame=ball_by_frame,
+            player_positions=[_pp(30, 1, 0.5, 0.5)],
+            first_frame=0,
+            net_y=0.50,
+        )
+        assert anchored is None
+
+    def test_anchor_silent_without_serve_peak(self) -> None:
+        """Flat sequence probs (no serve peak) → no anchor."""
+        flat = np.zeros((7, 100), dtype=float)
+        flat[0, :] = 0.98
+        flat[1:, :] = 0.02 / 6
+        ball_by_frame = {
+            70: BallPosition(frame_number=70, x=0.45, y=0.55, confidence=0.9),
+        }
+        anchored = _maybe_anchor_rally_start_serve(
+            contacts=[],
+            sequence_probs=flat,
+            ball_by_frame=ball_by_frame,
+            player_positions=[_pp(30, 1, 0.5, 0.5)],
+            first_frame=0,
+            net_y=0.50,
+        )
+        assert anchored is None
+
+    def test_anchor_silent_when_player_too_far(self) -> None:
+        """Serve peak but no player within 0.20 → no anchor."""
+        ball_by_frame = {70: BallPosition(frame_number=70, x=0.5, y=0.5, confidence=0.9)}
+        # Player at (0.05, 0.95) — distance ~0.7 from ball
+        players = [_pp(30, 1, 0.05, 0.95)]
+        anchored = _maybe_anchor_rally_start_serve(
+            contacts=[],
+            sequence_probs=self._probs_with_serve_peak(length=100, peak_frame=30),
+            ball_by_frame=ball_by_frame,
+            player_positions=players,
+            first_frame=0,
+            net_y=0.50,
+        )
+        assert anchored is None
+
+    def test_anchor_silent_without_ball_data(self) -> None:
+        """No ball positions anywhere → refuse to synthesize a (0,0) contact."""
+        anchored = _maybe_anchor_rally_start_serve(
+            contacts=[],
+            sequence_probs=self._probs_with_serve_peak(length=100, peak_frame=30),
+            ball_by_frame={},
+            player_positions=[_pp(30, 1, 0.5, 0.5)],
+            first_frame=0,
+            net_y=0.50,
+        )
+        assert anchored is None
