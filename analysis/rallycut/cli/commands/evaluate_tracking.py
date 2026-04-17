@@ -661,6 +661,7 @@ def _run_retrack_evaluation(
                     court_calibrator = None
 
             tracking_result: PlayerTrackingResult | None = None
+            raw_positions_for_audit: list[PlayerPosition] | None = None
 
             # Try cache first
             if retrack_cache is not None:
@@ -669,6 +670,7 @@ def _run_retrack_evaluation(
                     cached_data, color_store, appearance_store, learned_store = (
                         cache_entry
                     )
+                    raw_positions_for_audit = list(cached_data.positions)
                     tracking_result = PlayerTracker.apply_post_processing(
                         positions=cached_data.positions,
                         raw_positions=list(cached_data.positions),
@@ -716,6 +718,7 @@ def _run_retrack_evaluation(
                         return_raw=True,
                     )
                     tracking_result, raw_data = result_tuple
+                    raw_positions_for_audit = list(raw_data.positions)
 
                     # Cache the raw data
                     from rallycut.tracking.reid_embeddings import HEAD_SHA
@@ -776,7 +779,7 @@ def _run_retrack_evaluation(
                         video_id=rally.video_id,
                         ground_truth=rally.ground_truth,
                         predictions=tracking_result,
-                        raw_positions=None,
+                        raw_positions=raw_positions_for_audit,
                         iou_threshold=iou_threshold,
                     )
                     audit_path = audit_out / f"{rally.rally_id}.json"

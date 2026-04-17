@@ -27,7 +27,7 @@ from rallycut.tracking.player_tracker import PlayerPosition, PlayerTrackingResul
 
 # Thresholds — tuned to match existing pipeline semantics.
 EDGE_MARGIN = 0.05
-OCCLUSION_DIST = 0.08
+OCCLUSION_DIST = 0.04
 FILTER_IOU_THRESHOLD = 0.3
 NET_BAND = 0.05
 MIN_SEGMENT_FRAMES = 5
