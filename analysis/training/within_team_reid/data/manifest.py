@@ -29,7 +29,7 @@ class TrackInfo:
 class Pair:
     """One labelled pair from the harvest manifest.
 
-    Identity label for SupCon = (video_id, track_a.canonical_id) or (video_id, track_b.canonical_id).
+    Identity label for SupCon = (rally_id, track_a.canonical_id) or (rally_id, track_b.canonical_id).
     Team label for teammate-margin = (rally_id, team).
     """
 
