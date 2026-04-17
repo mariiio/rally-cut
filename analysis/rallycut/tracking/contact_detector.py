@@ -10,7 +10,6 @@ building on the lower-level contact detection in ball_features.py.
 
 from __future__ import annotations
 
-import bisect
 import logging
 import math
 import statistics
@@ -1465,151 +1464,6 @@ def _merge_candidates(
     return sorted(merged)
 
 
-def _maybe_anchor_rally_start_serve(
-    contacts: list[Contact],
-    sequence_probs: np.ndarray | None,
-    ball_by_frame: dict[int, BallPosition],
-    player_positions: list[PlayerPosition] | None,
-    first_frame: int,
-    net_y: float,
-) -> Contact | None:
-    """Return a synthetic serve Contact when Pattern C conditions fire, else None.
-
-    Pattern C (see sequence_action_runtime.py): the ball tracker missed the
-    serve impact, so no trajectory generator fires in the first ~1.5s of the
-    rally and no contact is produced. When MS-TCN++ still confidently places
-    a serve-class peak in that window, synthesize a single contact at the
-    peak frame so the action classifier can attribute + classify it normally.
-
-    Serve class index is 1 (background=0, serve=1, receive=2, ...), matching
-    `rallycut.actions.trajectory_features.ACTION_TYPES`.
-    """
-    if sequence_probs is None or sequence_probs.ndim != 2:
-        return None
-    # MS-TCN++ emits (NUM_CLASSES=7, T) = background + 6 action classes.
-    # Callers that pass a reduced 2-row probs matrix (e.g. synthetic test
-    # fixtures for the rescue gate) are not the real MS-TCN++ output and
-    # must not trigger the anchor.
-    if sequence_probs.shape[0] < 7:
-        return None
-
-    from rallycut.tracking.sequence_action_runtime import (  # noqa: PLC0415
-        SERVE_ANCHOR_MAX_FRAME,
-        SERVE_ANCHOR_TAU,
-    )
-
-    window_end = first_frame + SERVE_ANCHOR_MAX_FRAME
-    # Skip if ANY accepted contact already lives in the window — the pipeline
-    # has a candidate to work with and Pattern C must not duplicate it.
-    if any(first_frame <= c.frame < window_end for c in contacts):
-        return None
-
-    t_max = sequence_probs.shape[1]
-    lo = max(0, first_frame)
-    hi = min(t_max, window_end)
-    if hi <= lo:
-        return None
-
-    serve_probs = sequence_probs[1, lo:hi]
-    peak_local = int(np.argmax(serve_probs))
-    peak_val = float(serve_probs[peak_local])
-    if peak_val < SERVE_ANCHOR_TAU:
-        return None
-
-    peak_frame = lo + peak_local
-
-    # Anchor ball position: use the nearest confident ball detection around
-    # the peak if available, else fall back to the rally's first confident
-    # detection (guaranteed to be past the peak by Pattern C's precondition).
-    ball: BallPosition | None = ball_by_frame.get(peak_frame)
-    if ball is None:
-        for offset in range(1, SERVE_ANCHOR_MAX_FRAME):
-            ball = ball_by_frame.get(peak_frame + offset)
-            if ball is not None:
-                break
-            ball = ball_by_frame.get(peak_frame - offset)
-            if ball is not None:
-                break
-    if ball is None:
-        # No ball data anywhere near the peak — downstream action classifier
-        # needs some position to work with; refuse to synthesize rather than
-        # emit a (0,0) contact that corrupts features.
-        return None
-
-    # Attribute to the nearest player at the peak frame. A player within the
-    # standard contact radius is required — otherwise we risk injecting a
-    # serve with no plausible contacting player, which downstream repairs
-    # would revert.
-    track_id = -1
-    player_dist = float("inf")
-    if player_positions:
-        track_id, player_dist, _ = _find_nearest_player(
-            peak_frame, ball.x, ball.y, player_positions, search_frames=8,
-        )
-        if player_dist > 0.20:  # loose cap; serve players are often far from ball
-            return None
-
-    # Derive court side from ball_y vs net_y.
-    court_side = "near" if ball.y > net_y else "far"
-
-    return Contact(
-        frame=peak_frame,
-        ball_x=ball.x,
-        ball_y=ball.y,
-        velocity=0.0,
-        direction_change_deg=0.0,
-        player_track_id=track_id,
-        player_distance=player_dist if np.isfinite(player_dist) else float("inf"),
-        player_candidates=[],
-        candidate_bbox_motion={},
-        court_side=court_side,
-        is_at_net=False,
-        is_validated=True,
-        confidence=peak_val,
-        arc_fit_residual=0.0,
-    )
-
-
-def _build_generators_by_frame(
-    candidate_frames: list[int],
-    min_distance_frames: int,
-    generator_lists: dict[str, list[int]],
-) -> dict[int, set[str]]:
-    """Attribute each merged candidate frame to the generators that contributed.
-
-    A generator frame `gf` claims the nearest merged `cf` within
-    `|gf - cf| < min_distance_frames` (matching `_merge_candidates` window
-    semantics). A single candidate can be claimed by multiple generators; the
-    count is used at the sequence-rescue gate to require multi-generator
-    trajectory agreement (`SEQ_RECOVERY_MIN_GENERATORS`).
-
-    Proximity, post-serve-receive, and player-motion candidates are excluded
-    by design — Arm B requires independent trajectory evidence, not
-    derivatives of existing candidates.
-    """
-    by_frame: dict[int, set[str]] = {cf: set() for cf in candidate_frames}
-    if not candidate_frames:
-        return by_frame
-
-    sorted_cands = candidate_frames  # _merge_candidates returns sorted lists
-
-    for name, gen_frames in generator_lists.items():
-        for gf in gen_frames:
-            idx = bisect.bisect_left(sorted_cands, gf)
-            best: int | None = None
-            best_d = min_distance_frames
-            for cand_idx in (idx - 1, idx):
-                if 0 <= cand_idx < len(sorted_cands):
-                    cf = sorted_cands[cand_idx]
-                    d = abs(gf - cf)
-                    if d < best_d:
-                        best = cf
-                        best_d = d
-            if best is not None:
-                by_frame[best].add(name)
-    return by_frame
-
-
 def estimate_net_position(
     ball_positions: list[BallPosition],
     confidence_threshold: float = _CONFIDENCE_THRESHOLD,
@@ -1985,24 +1839,6 @@ def detect_contacts(
         with_parabolic, net_crossing_frames, cfg.min_peak_distance_frames
     )
 
-    # Track which trajectory generators contributed to each merged candidate.
-    # Consumed at the sequence-rescue gate (Arm B, Pattern A) to require
-    # multi-generator agreement for low-confidence candidates. Proximity,
-    # post-serve-receive, and player-motion candidates are intentionally
-    # excluded — Arm B demands independent trajectory evidence.
-    generators_by_frame = _build_generators_by_frame(
-        candidate_frames,
-        cfg.min_peak_distance_frames,
-        {
-            "velocity_peak": velocity_peak_frames,
-            "inflection": inflection_frames,
-            "reversal": reversal_frames,
-            "deceleration": deceleration_frames,
-            "parabolic": parabolic_frames,
-            "net_crossing": net_crossing_frames,
-        },
-    )
-
     # Step 5f: Player-motion candidates — detect contacts from player body motion
     # near the ball, even when ball trajectory doesn't change (blocks, soft touches)
     n_player_motion = 0
@@ -2284,16 +2120,18 @@ def detect_contacts(
             )
             results = classifier.predict([features])
             is_validated, confidence = results[0]
-            # Two-arm sequence-rescue gate (Patterns documented in
-            # sequence_action_runtime.py).
+            # Two-signal agreement rescue: if the classifier rejected this
+            # candidate but the sequence model has a non-background peak
+            # >= SEQ_RECOVERY_TAU within +-5 frames AND the classifier gave
+            # it a non-trivial score >= SEQ_RECOVERY_CLF_FLOOR, accept it.
             #
-            # Arm A (original): sequence endorsement + classifier >= 0.20.
-            # Arm B (Pattern A, 2026-04-17): sequence endorsement +
-            #   classifier >= 0.08 + >=3 trajectory generators agreeing +
-            #   player within 0.15. Widens rescue to low-conf candidates
-            #   where multiple independent trajectory detectors concur and
-            #   a real player is present — the four-signal conjunction
-            #   offsets the lower classifier floor.
+            # This rescues the 181 rejected_by_classifier FNs documented in
+            # memory/fn_sequence_signal_2026_04.md: trajectory candidates
+            # where the GBM scores median 0.22 (under 0.35 gate) but MS-TCN++
+            # endorses the frame with peak >= 0.80. Two detectors with
+            # asymmetric strengths agreeing is stronger evidence than either
+            # alone, so their conjunction warrants a lower single-source
+            # confidence requirement.
             if (
                 not is_validated
                 and seq_peak_nonbg is not None
@@ -2301,18 +2139,8 @@ def detect_contacts(
             ):
                 from rallycut.tracking.sequence_action_runtime import (  # noqa: PLC0415
                     SEQ_RECOVERY_CLF_FLOOR,
-                    SEQ_RECOVERY_CLF_FLOOR_MULTIGEN,
-                    SEQ_RECOVERY_MAX_PLAYER_DIST,
-                    SEQ_RECOVERY_MIN_GENERATORS,
                 )
-                arm_a = confidence >= SEQ_RECOVERY_CLF_FLOOR
-                n_gens = len(generators_by_frame.get(frame, set()))
-                arm_b = (
-                    confidence >= SEQ_RECOVERY_CLF_FLOOR_MULTIGEN
-                    and n_gens >= SEQ_RECOVERY_MIN_GENERATORS
-                    and player_dist <= SEQ_RECOVERY_MAX_PLAYER_DIST
-                )
-                if arm_a or arm_b:
+                if confidence >= SEQ_RECOVERY_CLF_FLOOR:
                     is_validated = True
         else:
             # Fallback: Hand-tuned 3-tier validation gates
@@ -2456,19 +2284,6 @@ def detect_contacts(
     contacts = _deduplicate_contacts(
         contacts, cfg.min_peak_distance_frames, adaptive=cfg.adaptive_dedup,
     )
-
-    # Pattern C (rally-start serve anchor): inject a synthetic contact at the
-    # MS-TCN++ serve-class peak when the ball tracker missed the serve.
-    anchored = _maybe_anchor_rally_start_serve(
-        contacts, sequence_probs, ball_by_frame, player_positions, first_frame,
-        estimated_net_y,
-    )
-    if anchored is not None:
-        contacts = sorted(contacts + [anchored], key=lambda c: c.frame)
-        logger.info(
-            "Pattern C serve anchor at frame %d (serve_peak=%.3f, tid=%d)",
-            anchored.frame, anchored.confidence, anchored.player_track_id,
-        )
 
     logger.info(
         f"Detected {len(contacts)} contacts "

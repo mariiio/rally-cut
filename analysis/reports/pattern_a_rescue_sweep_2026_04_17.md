@@ -1,5 +1,7 @@
 # Pattern A rescue-gate sweep — 2026-04-17
 
+> **Status:** NO SHIP. Code reverted in the same session after dormant ship proved unnecessary. Kept as the decision record so future work doesn't re-investigate the same hypothesis without addressing the follow-up notes at the bottom.
+
 ## Context
 
 The commit-65f4ca2 corpus (364 rallies / 2098 GT contacts / 395 FN_contact) showed 71 residual FNs with `classifier_conf ∈ [0.05, 0.20)` AND ≥3 trajectory generators firing AND a player within 0.15 — the user flagged 4 of these as visually obvious contacts missed because the existing one-arm rescue gate requires conf ≥ 0.20.

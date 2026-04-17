@@ -1,5 +1,7 @@
 # Pattern C (rally-start serve anchor) validation — 2026-04-17
 
+> **Status:** NO SHIP. Code reverted in the same session after dormant ship proved unnecessary. Kept as the decision record so future work doesn't re-investigate the same hypothesis without addressing the follow-up notes at the bottom.
+
 ## Context
 
 Corpus audit at commit 65f4ca2 identified 11 early-rally serve FNs (`gt_frame < 90`, `ball_present=False`, `ball_gap_frames ≥ 4`, no candidate within reasonable distance of GT) where the WASB ball tracker had not yet locked onto the ball by the time the serve occurred. Pattern A's rescue gate can't help — there is no trajectory candidate to rescue — so a separate mechanism is needed.
