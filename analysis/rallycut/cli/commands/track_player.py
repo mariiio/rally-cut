@@ -40,10 +40,7 @@ from rallycut.tracking.player_tracker import (
     compute_court_roi_from_ball,
     compute_court_roi_from_calibration,
 )
-from rallycut.tracking.sequence_action_runtime import (
-    apply_sequence_override,
-    get_sequence_probs,
-)
+from rallycut.tracking.sequence_action_runtime import get_sequence_probs
 
 console = Console()
 
@@ -988,17 +985,19 @@ def _run_tracking(
             sequence_probs=sequence_probs,
         )
 
+        # `sequence_probs` threads MS-TCN++ into two effects:
+        #   1. detect_contacts (above) uses the in-detector two-signal
+        #      rescue gate to recover rejected_by_classifier FN_contacts.
+        #   2. classify_rally_actions applies apply_sequence_override
+        #      internally (replaces non-serve action types with MS-TCN++
+        #      argmax, guarded by OVERRIDE_RELATIVE_CONF_K +
+        #      ATTACK_PRESERVE_RATIO + DIG_GUARD_RATIO).
         rally_actions = classify_rally_actions(
             contact_seq,
             team_assignments=verified_teams,
             calibrator=calibrator,
+            sequence_probs=sequence_probs,
         )
-
-        # Hybrid override: replace non-serve action types with MS-TCN++ argmax.
-        # Serve is exempt — structural rally constraints are stronger than
-        # per-frame model predictions.
-        if sequence_probs is not None:
-            apply_sequence_override(rally_actions, sequence_probs)
 
         # Play annotations: attack direction, set zones, action zones.
         # No-op when calibrator is absent (uncalibrated videos).

@@ -18,6 +18,7 @@ if TYPE_CHECKING:
     from rallycut.evaluation.tracking.ball_metrics import BallTrackingMetrics
     from rallycut.evaluation.tracking.error_analysis import ErrorEvent
     from rallycut.evaluation.tracking.metrics import PerPlayerMetrics, TrackingEvaluationResult
+    from rallycut.tracking.player_tracker import PlayerPosition
 
 app = typer.Typer(help="Evaluate player tracking against ground truth")
 console = Console()

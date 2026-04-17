@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock
 
+import numpy as np
+import pytest
+
 from rallycut.court.calibration import CourtCalibrator
 from rallycut.tracking.action_classifier import (
     ActionClassifier,
@@ -2608,3 +2611,121 @@ class TestClassifyServeContact:
         )
         # Formation is confident "near" → contact should NOT override
         assert side == "near"
+
+
+class TestSequenceProbsWiring:
+    """Confirm classify_rally_actions threads sequence_probs through to the
+    MS-TCN++ override. The post-2026-04-17 plan moves the override invocation
+    inside classify_rally_actions so the eval/corpus path benefits without
+    duplicating caller-side code."""
+
+    def _build_sequence(self, contacts: list[Contact]) -> ContactSequence:
+        return ContactSequence(
+            contacts=contacts,
+            ball_positions=[
+                BallPosition(frame_number=c.frame, x=c.ball_x, y=c.ball_y, confidence=0.9)
+                for c in contacts
+            ],
+            player_positions=[],
+            net_y=0.5,
+            rally_start_frame=0,
+        )
+
+    def _probs_peak_attack(self, n_frames: int, frame: int) -> np.ndarray:
+        """MS-TCN++ probs with a hot ATTACK peak at `frame`.
+
+        Index layout: row 0 = background; rows 1..6 = ACTION_TYPES (serve,
+        receive, set, attack, dig, block). attack is index 4 in the full
+        array (3 in the non-background slice).
+        """
+        from rallycut.actions.trajectory_features import ACTION_TYPES
+
+        probs = np.full((len(ACTION_TYPES) + 1, n_frames), 0.01, dtype=np.float32)
+        attack_row = 1 + ACTION_TYPES.index("attack")
+        probs[attack_row, frame] = 0.95
+        return probs
+
+    def _build_two_contact_rally(self) -> ContactSequence:
+        """Two contacts across the net (near→far): classify_rally labels
+        the first as SERVE, the second as RECEIVE. The override can then
+        rewrite the second without tripping the serve exemption."""
+        c1 = _contact(
+            frame=10, ball_y=0.7, velocity=0.05,
+            direction_change=70.0, court_side="near",
+        )
+        c2 = _contact(
+            frame=40, ball_y=0.3, velocity=0.02,
+            direction_change=80.0, court_side="far",
+        )
+        ball_positions = [
+            BallPosition(frame_number=f, x=0.5, y=y, confidence=0.9)
+            for f, y in [
+                (10, 0.70), (15, 0.62), (20, 0.54),
+                (25, 0.46), (30, 0.40), (35, 0.34), (40, 0.30),
+            ]
+        ]
+        return ContactSequence(
+            contacts=[c1, c2],
+            ball_positions=ball_positions,
+            player_positions=[],
+            net_y=0.5,
+            rally_start_frame=0,
+        )
+
+    def test_override_wired_when_sequence_probs_provided(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When MS-TCN++ peaks on `attack`, the override (wired inside
+        classify_rally_actions) rewrites the non-serve contact. Relaxes
+        OVERRIDE_RELATIVE_CONF_K for the test because the rule-based
+        classifier emits confidence=0.9 and the production gate (1.2x)
+        would mathematically prevent any argmax ≤ 1.0 from firing."""
+        from rallycut.tracking import sequence_action_runtime
+
+        monkeypatch.setattr(
+            sequence_action_runtime, "OVERRIDE_RELATIVE_CONF_K", 0.5,
+        )
+
+        seq = self._build_two_contact_rally()
+        probs = self._probs_peak_attack(n_frames=100, frame=40)
+
+        result = classify_rally_actions(
+            seq, rally_id="test", use_classifier=False,
+            sequence_probs=probs,
+        )
+        assert len(result.actions) == 2
+        assert result.actions[0].action_type == ActionType.SERVE  # exempt
+        assert result.actions[1].action_type == ActionType.ATTACK  # rewritten
+
+    def test_sequence_probs_none_leaves_result_untouched(self) -> None:
+        """sequence_probs=None must match pre-wiring behaviour — action types
+        for every contact remain whatever classify_rally produced."""
+        seq = self._build_two_contact_rally()
+
+        result_a = classify_rally_actions(
+            seq, rally_id="test", use_classifier=False, sequence_probs=None,
+        )
+        result_b = classify_rally_actions(
+            seq, rally_id="test", use_classifier=False,
+        )
+        assert [a.action_type for a in result_a.actions] == [
+            a.action_type for a in result_b.actions
+        ]
+
+    def test_override_never_produces_serve(self) -> None:
+        """Sanity guard: even when MS-TCN++ argmax is SERVE on a non-serve
+        contact, the override preserves the non-serve action type. Prevents
+        the 'double serve' regression mode from the 2026-04-14 audit."""
+        from rallycut.actions.trajectory_features import ACTION_TYPES
+
+        seq = self._build_two_contact_rally()
+        probs = np.full((len(ACTION_TYPES) + 1, 100), 0.01, dtype=np.float32)
+        serve_row = 1 + ACTION_TYPES.index("serve")
+        probs[serve_row, 40] = 0.95
+
+        result = classify_rally_actions(
+            seq, rally_id="test", use_classifier=False, sequence_probs=probs,
+        )
+        # Second contact's type is whatever classify_rally picked (not serve)
+        # — the override must NOT have promoted it to SERVE.
+        assert result.actions[1].action_type != ActionType.SERVE

@@ -1,0 +1,2156 @@
+[13:16:06] START videos=52
+[13:16:06] [1/52] 073cb11b — running pipeline
+  $ rallycut match-players 073cb11b-c7ba-4fac-8cc9-b032b3152ad6 -q -> exit 0 dt=20.1s
+  $ rallycut remap-track-ids 073cb11b-c7ba-4fac-8cc9-b032b3152ad6 -> exit 0 dt=2.1s
+    out: Remapping track IDs for video 073cb11b...
+    out:   6 rallies with mappings
+    out:   37e14e1e: 1145 remapped (T3→P4, T5→P3)
+    out:   fb7f9c23: 1766 remapped (T1→P4, T3→P1, T24→P3)
+    out:   99a01ce4: 3599 remapped (T1→P3, T2→P4, T3→P1, T5→P2)
+    out:   5e8af221: 1752 remapped (T1→P4, T3→P1, T4→P3)
+    out:   71c5d769: 1390 remapped (T1→P4, T15→P3, T16→P2, T19→P1)
+    out:   a0b7e716: 4237 remapped (T1→P4, T22→P3, T34→P1, T41→P2)
+    out: 
+    out:   Total: 13889 track ID references remapped
+    out:   Updated 6 player tracks in DB
+  $ rallycut reattribute-actions 073cb11b-c7ba-4fac-8cc9-b032b3152ad6 -> exit 0 dt=1.3s
+    out: Re-attributing actions for video 073cb11b...
+    out:   6 rallies with match teams, 6 eligible for re-attribution (conf >= 0.70)
+    out:   37e14e1e: no changes (teams stamped)
+    out:   fb7f9c23: no changes (teams stamped)
+    out:   99a01ce4: no changes (teams stamped)
+    out:   5e8af221: no changes (teams stamped)
+    out:   71c5d769: no changes (teams stamped)
+    out:   a0b7e716: no changes (teams stamped)
+    out:   Team localization: 5 rallies, Viterbi fallback: 1, label_a=1, 5 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/27 actions re-attributed across 6 rallies
+    out:   Updated 6 player tracks in DB
+    out:   Viterbi serving_team: 5 changed / 6 stamped
+[13:16:29]   OK dt=23.4s
+[13:16:29] [2/52] 07fedbd4 — running pipeline
+  $ rallycut match-players 07fedbd4-693e-4651-9fee-c616a1f4b413 -q -> exit 0 dt=18.5s
+  $ rallycut remap-track-ids 07fedbd4-693e-4651-9fee-c616a1f4b413 -> exit 0 dt=1.4s
+    out: Remapping track IDs for video 07fedbd4...
+    out:   7 rallies with mappings
+    out:   1bfcbc4f: already using player IDs
+    out:   5d35c3bf: already using player IDs
+    out:   39139435: already using player IDs
+    out:   675413bb: already using player IDs
+    out:   89ac798c: already using player IDs
+    out:   7d9fde90: reversed previous remap
+    out:   7d9fde90: already using player IDs
+    out:   ac39ca88: already using player IDs
+    out: 
+    out:   Total: 0 track ID references remapped
+  $ rallycut reattribute-actions 07fedbd4-693e-4651-9fee-c616a1f4b413 -> exit 0 dt=1.2s
+    out: Re-attributing actions for video 07fedbd4...
+    out:   7 rallies with match teams, 7 eligible for re-attribution (conf >= 0.70)
+    out:   1bfcbc4f: no changes (teams stamped)
+    out:   5d35c3bf: no changes (teams stamped)
+    out:   ac39ca88: no changes (teams stamped)
+    out:   39139435: no changes (teams stamped)
+    out:   675413bb: no changes (teams stamped)
+    out:   89ac798c: no changes (teams stamped)
+    out:   7d9fde90: no changes (teams stamped)
+    out:   Team localization: 7 rallies, Viterbi fallback: 0, label_a=0, 2 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/35 actions re-attributed across 7 rallies
+    out:   Updated 7 player tracks in DB
+    out:   Viterbi serving_team: 2 changed / 7 stamped
+[13:16:50]   OK dt=21.0s
+[13:16:50] [3/52] 16458e78 — running pipeline
+  $ rallycut match-players 16458e78-d30d-425c-805b-f9957d469a7c -q -> exit 0 dt=22.6s
+  $ rallycut remap-track-ids 16458e78-d30d-425c-805b-f9957d469a7c -> exit 0 dt=1.4s
+    out: Remapping track IDs for video 16458e78...
+    out:   9 rallies with mappings
+    out:   a738f65f: already using player IDs
+    out:   4ea1bfa2: already using player IDs
+    out:   a43fb033: already using player IDs
+    out:   6ed4d6fc: already using player IDs
+    out:   25edb83f: already using player IDs
+    out:   6391fb0e: 1078 remapped (T1→P3, T3→P4, T4→P1)
+    out:   e2db8571: already using player IDs
+    out:   fcbd34b5: already using player IDs
+    out:   5111160d: 1031 remapped (T1→P3, T2→P1, T3→P4, T10→P2)
+    out: 
+    out:   Total: 2109 track ID references remapped
+    out:   Updated 2 player tracks in DB
+  $ rallycut reattribute-actions 16458e78-d30d-425c-805b-f9957d469a7c -> exit 0 dt=1.1s
+    out: Re-attributing actions for video 16458e78...
+    out:   9 rallies with match teams, 7 eligible for re-attribution (conf >= 0.70)
+    out:   e2db8571: no changes (teams stamped)
+    out:   a738f65f: no changes (teams stamped)
+    out:   fcbd34b5: no changes (teams stamped)
+    out:   4ea1bfa2: no changes (teams stamped)
+    out:   a43fb033: no changes (teams stamped)
+    out:   6ed4d6fc: no changes (teams stamped)
+    out:   25edb83f: no changes (teams stamped)
+    out:   6391fb0e: no changes (teams stamped)
+    out:   5111160d: no changes (teams stamped)
+    out:   Team localization: 9 rallies, Viterbi fallback: 0, label_a=0, 2 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/50 actions re-attributed across 9 rallies
+    out:   Updated 9 player tracks in DB
+    out:   Viterbi serving_team: 2 changed / 9 stamped
+[13:17:15]   OK dt=25.1s
+[13:17:15] [4/52] 1a5da176 — running pipeline
+  $ rallycut match-players 1a5da176-8755-4e0d-8afd-ed1cab746fe3 -q -> exit 0 dt=11.6s
+  $ rallycut remap-track-ids 1a5da176-8755-4e0d-8afd-ed1cab746fe3 -> exit 0 dt=1.1s
+    out: Remapping track IDs for video 1a5da176...
+    out:   6 rallies with mappings
+    out:   fb8fd612: reversed previous remap
+    out:   fb8fd612: already using player IDs
+    out:   5447e090: already using player IDs
+    out:   e1929103: reversed previous remap
+    out:   e1929103: already using player IDs
+    out:   753a4ec7: already using player IDs
+    out:   9bb60892: reversed previous remap
+    out:   9bb60892: already using player IDs
+    out:   b0d36fa8: 714 remapped (T1→P4, T2→P1, T4→P2)
+    out: 
+    out:   Total: 714 track ID references remapped
+    out:   Updated 1 player tracks in DB
+  $ rallycut reattribute-actions 1a5da176-8755-4e0d-8afd-ed1cab746fe3 -> exit 0 dt=1.1s
+    out: Re-attributing actions for video 1a5da176...
+    out:   6 rallies with match teams, 4 eligible for re-attribution (conf >= 0.70)
+    out:   fb8fd612: no changes (teams stamped)
+    out:   5447e090: no changes (teams stamped)
+    out:   e1929103: no changes (teams stamped)
+    out:   753a4ec7: no changes (teams stamped)
+    out:   9bb60892: no changes (teams stamped)
+    out:   b0d36fa8: no changes (teams stamped)
+    out:   Team localization: 6 rallies, Viterbi fallback: 0, label_a=0, 2 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/38 actions re-attributed across 6 rallies
+    out:   Updated 6 player tracks in DB
+    out:   Viterbi serving_team: 2 changed / 6 stamped
+[13:17:29]   OK dt=13.8s
+[13:17:29] [5/52] 1efa35cf — running pipeline
+  $ rallycut match-players 1efa35cf-4edd-4504-b4a4-834eee9e5218 -q -> exit 0 dt=31.8s
+  $ rallycut remap-track-ids 1efa35cf-4edd-4504-b4a4-834eee9e5218 -> exit 0 dt=1.6s
+    out: Remapping track IDs for video 1efa35cf...
+    out:   15 rallies with mappings
+    out:   f1c7ec19: 473 remapped (T1→P2, T2→P1, T3→P4, T13→P3)
+    out:   26ad03e7: already using player IDs
+    out:   de5f7d3a: 516 remapped (T1→P2, T2→P3, T15→P1, T16→P4)
+    out:   349bbee9: 508 remapped (T1→P2, T2→P1, T7→P4)
+    out:   73581b32: 808 remapped (T1→P2, T2→P1, T3→P4, T4→P3)
+    out:   4d0824f7: 1217 remapped (T1→P2, T2→P3, T3→P4, T17→P1)
+    out:   6befbea3: 1013 remapped (T1→P3, T2→P4, T3→P2, T4→P1)
+    out:   cf33c17d: 1697 remapped (T1→P3, T2→P4, T3→P2, T20→P1)
+    out:   a9dadee9: 424 remapped (T1→P3, T2→P4, T4→P2, T14→P1)
+    out:   846b7c5f: 423 remapped (T2→P4, T3→P2, T4→P3, T5→P1)
+    out:   a0e3078f: 904 remapped (T1→P4, T2→P3, T4→P2, T18→P1)
+    out:   6836c3a3: 60 remapped (T9→P3)
+    out:   ff1569b4: 608 remapped (T1→P4, T7→P3, T21→P1)
+    out:   395bb169: 356 remapped (T1→P2, T2→P1, T12→P3)
+    out:   01bb69cb: 606 remapped (T1→P3, T11→P1, T14→P4)
+    out: 
+    out:   Total: 9613 track ID references remapped
+    out:   Updated 14 player tracks in DB
+  $ rallycut reattribute-actions 1efa35cf-4edd-4504-b4a4-834eee9e5218 -> exit 0 dt=1.1s
+    out: Re-attributing actions for video 1efa35cf...
+    out:   15 rallies with match teams, 8 eligible for re-attribution (conf >= 0.70)
+    out:   73581b32: no changes (teams stamped)
+    out:   f1c7ec19: no changes (teams stamped)
+    out:   26ad03e7: no changes (teams stamped)
+    out:   de5f7d3a: no changes (teams stamped)
+    out:   349bbee9: no changes (teams stamped)
+    out:   4d0824f7: 1/6 actions re-attributed
+    out:   6befbea3: no changes (teams stamped)
+    out:   cf33c17d: no changes (teams stamped)
+    out:   a9dadee9: no changes (teams stamped)
+    out:   846b7c5f: no changes (teams stamped)
+    out:   a0e3078f: no changes (teams stamped)
+    out:   6836c3a3: no changes (teams stamped)
+    out:   ff1569b4: no changes (teams stamped)
+    out:   395bb169: no changes (teams stamped)
+    out:   01bb69cb: no changes (teams stamped)
+    out:   Team localization: 15 rallies, Viterbi fallback: 0, label_a=0, 0 serving_team 
+    out: changes
+    out: 
+    out:   Total: 1/45 actions re-attributed across 15 rallies
+    out:   Updated 15 player tracks in DB
+    out:   Viterbi serving_team: 0 changed / 15 stamped
+[13:18:04]   OK dt=34.5s
+[13:18:04]   progress: 5/52 ok=5 fail=0 ETA=18.5min
+[13:18:04] [6/52] 20c11175 — running pipeline
+  $ rallycut match-players 20c11175-4387-4079-bd35-f66b7adf50e3 -q -> exit 0 dt=18.3s
+  $ rallycut remap-track-ids 20c11175-4387-4079-bd35-f66b7adf50e3 -> exit 0 dt=1.3s
+    out: Remapping track IDs for video 20c11175...
+    out:   6 rallies with mappings
+    out:   86c9106d: already using player IDs
+    out:   2391489e: already using player IDs
+    out:   4549a879: already using player IDs
+    out:   499c4ec8: already using player IDs
+    out:   5b1dd4cc: 2318 remapped (T1→P4, T3→P1, T6→P3, T7→P2)
+    out:   e25858c4: reversed previous remap
+    out:   e25858c4: already using player IDs
+    out: 
+    out:   Total: 2318 track ID references remapped
+    out:   Updated 1 player tracks in DB
+  $ rallycut reattribute-actions 20c11175-4387-4079-bd35-f66b7adf50e3 -> exit 0 dt=1.1s
+    out: Re-attributing actions for video 20c11175...
+    out:   6 rallies with match teams, 5 eligible for re-attribution (conf >= 0.70)
+    out:   86c9106d: no changes (teams stamped)
+    out:   2391489e: no changes (teams stamped)
+    out:   4549a879: no changes (teams stamped)
+    out:   e25858c4: no changes (teams stamped)
+    out:   499c4ec8: no changes (teams stamped)
+    out:   5b1dd4cc: no changes (teams stamped)
+    out:   Team localization: 5 rallies, Viterbi fallback: 1, label_a=1, 2 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/23 actions re-attributed across 6 rallies
+    out:   Updated 6 player tracks in DB
+    out:   Viterbi serving_team: 2 changed / 6 stamped
+[13:18:24]   OK dt=20.7s
+[13:18:24] [7/52] 211e2a4c — running pipeline
+  $ rallycut match-players 211e2a4c-c9a3-4438-9b0c-bea4e7555ad0 -q -> exit 0 dt=18.6s
+  $ rallycut remap-track-ids 211e2a4c-c9a3-4438-9b0c-bea4e7555ad0 -> exit 0 dt=1.5s
+    out: Remapping track IDs for video 211e2a4c...
+    out:   15 rallies with mappings
+    out:   0102cbba: 1671 remapped (T1→P2, T2→P4, T3→P1, T4→P3)
+    out:   ac84c527: 586 remapped (T8→P1)
+    out:   04f2a97f: 1318 remapped (T1→P2, T2→P3, T3→P1)
+    out:   028f8384: 2261 remapped (T1→P2, T3→P1, T6→P4, T10→P3)
+    out:   d1faa2b4: 1354 remapped (T1→P2, T2→P1, T6→P4)
+    out:   6618acda: 1769 remapped (T1→P3, T2→P4, T3→P2, T4→P1)
+    out:   06bafb49: 1527 remapped (T1→P4, T2→P1, T5→P2)
+    out:   49c2cce5: 1346 remapped (T1→P2, T2→P1, T9→P4)
+    out:   6737d3fc: 1689 remapped (T1→P3, T2→P4, T3→P2, T4→P1)
+    out:   c09147c3: 1661 remapped (T2→P3, T3→P4, T7→P2, T9→P1)
+    out:   2ae99d01: 1253 remapped (T1→P2, T2→P1, T6→P3)
+    out:   30707f69: 617 remapped (T8→P4)
+    out:   c30c9fc9: 698 remapped (T4→P3, T9→P4)
+    out:   58460f5f: 1247 remapped (T1→P2, T2→P1, T5→P4)
+    out:   3cd2782c: 2050 remapped (T1→P2, T2→P3, T3→P1)
+    out: 
+    out:   Total: 21047 track ID references remapped
+    out:   Updated 15 player tracks in DB
+  $ rallycut reattribute-actions 211e2a4c-c9a3-4438-9b0c-bea4e7555ad0 -> exit 0 dt=1.2s
+    out: Re-attributing actions for video 211e2a4c...
+    out:   15 rallies with match teams, 11 eligible for re-attribution (conf >= 0.70)
+    out:   0102cbba: no changes (teams stamped)
+    out:   ac84c527: no changes (teams stamped)
+    out:   04f2a97f: no changes (teams stamped)
+    out:   028f8384: no changes (teams stamped)
+    out:   2ae99d01: no changes (teams stamped)
+    out:   30707f69: no changes (teams stamped)
+    out:   c30c9fc9: no changes (teams stamped)
+    out:   58460f5f: no changes (teams stamped)
+    out:   3cd2782c: no changes (teams stamped)
+    out:   d1faa2b4: no changes (teams stamped)
+    out:   49c2cce5: no changes (teams stamped)
+    out:   6737d3fc: no changes (teams stamped)
+    out:   c09147c3: no changes (teams stamped)
+    out:   6618acda: no changes (teams stamped)
+    out:   06bafb49: no changes (teams stamped)
+    out:   Team localization: 15 rallies, Viterbi fallback: 0, label_a=0, 4 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/79 actions re-attributed across 15 rallies
+    out:   Updated 15 player tracks in DB
+    out:   Viterbi serving_team: 4 changed / 15 stamped
+[13:18:46]   OK dt=21.3s
+[13:18:46] [8/52] 23b662ba — running pipeline
+  $ rallycut match-players 23b662ba-99e0-47d6-a9ac-90bb6fa9bdd1 -q -> exit 0 dt=24.2s
+  $ rallycut remap-track-ids 23b662ba-99e0-47d6-a9ac-90bb6fa9bdd1 -> exit 0 dt=1.3s
+    out: Remapping track IDs for video 23b662ba...
+    out:   9 rallies with mappings
+    out:   d724bbf0: already using player IDs
+    out:   17fa7f9c: already using player IDs
+    out:   714194e6: 1195 remapped (T1→P2, T2→P3, T6→P4, T21→P1)
+    out:   d7df73b1: 1887 remapped (T1→P2, T16→P1, T22→P3, T32→P4)
+    out:   737842f1: 581 remapped (T1→P2, T16→P1, T20→P3)
+    out:   fbdb44b1: 841 remapped (T1→P2, T2→P4, T18→P1, T20→P3)
+    out:   9c6fce48: 138 remapped (T4→P3, T5→P4)
+    out:   8d3205ed: 622 remapped (T16→P4)
+    out:   2b114a5c: 1093 remapped (T1→P3, T2→P1, T3→P2)
+    out: 
+    out:   Total: 6357 track ID references remapped
+    out:   Updated 7 player tracks in DB
+  $ rallycut reattribute-actions 23b662ba-99e0-47d6-a9ac-90bb6fa9bdd1 -> exit 0 dt=1.1s
+    out: Re-attributing actions for video 23b662ba...
+    out:   9 rallies with match teams, 2 eligible for re-attribution (conf >= 0.70)
+    out:   d724bbf0: no changes (teams stamped)
+    out:   17fa7f9c: no changes (teams stamped)
+    out:   714194e6: no changes (teams stamped)
+    out:   d7df73b1: no changes (teams stamped)
+    out:   2b114a5c: no changes (teams stamped)
+    out:   737842f1: no changes (teams stamped)
+    out:   fbdb44b1: no changes (teams stamped)
+    out:   9c6fce48: no changes (teams stamped)
+    out:   8d3205ed: no changes (teams stamped)
+    out:   Team localization: 9 rallies, Viterbi fallback: 0, label_a=0, 7 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/52 actions re-attributed across 9 rallies
+    out:   Updated 9 player tracks in DB
+    out:   Viterbi serving_team: 7 changed / 9 stamped
+[13:19:12]   OK dt=26.7s
+[13:19:12] [9/52] 2b2d7786 — running pipeline
+  $ rallycut match-players 2b2d7786-1f78-4856-95d5-d3003b15f2a3 -q -> exit 0 dt=33.2s
+  $ rallycut remap-track-ids 2b2d7786-1f78-4856-95d5-d3003b15f2a3 -> exit 0 dt=1.5s
+    out: Remapping track IDs for video 2b2d7786...
+    out:   10 rallies with mappings
+    out:   4b7ad71f: already using player IDs
+    out:   eaaa5305: already using player IDs
+    out:   67d8172f: 1898 remapped (T1→P2, T3→P1, T10→P4, T37→P3)
+    out:   44a7db23: 1160 remapped (T32→P4, T34→P3)
+    out:   227cf416: 1712 remapped (T1→P2, T2→P1, T3→P4, T4→P3)
+    out:   6f4f930f: 3137 remapped (T1→P3, T2→P4, T3→P1, T4→P2)
+    out:   1e88199d: 2654 remapped (T1→P4, T2→P3, T3→P2, T31→P1)
+    out:   16a083a5: 1798 remapped (T1→P4, T3→P1, T13→P2, T24→P3)
+    out:   31cf1130: 792 remapped (T1→P3, T10→P1)
+    out:   da8c9da3: 742 remapped (T1→P4, T3→P1, T10→P3, T16→P2)
+    out: 
+    out:   Total: 13893 track ID references remapped
+    out:   Updated 8 player tracks in DB
+  $ rallycut reattribute-actions 2b2d7786-1f78-4856-95d5-d3003b15f2a3 -> exit 0 dt=1.2s
+    out: Re-attributing actions for video 2b2d7786...
+    out:   10 rallies with match teams, 1 eligible for re-attribution (conf >= 0.70)
+    out:   4b7ad71f: no changes (teams stamped)
+    out:   eaaa5305: no changes (teams stamped)
+    out:   67d8172f: no changes (teams stamped)
+    out:   44a7db23: no changes (teams stamped)
+    out:   227cf416: no changes (teams stamped)
+    out:   6f4f930f: no changes (teams stamped)
+    out:   1e88199d: no changes (teams stamped)
+    out:   16a083a5: no changes (teams stamped)
+    out:   da8c9da3: no changes (teams stamped)
+    out:   31cf1130: no changes (teams stamped)
+    out:   Team localization: 10 rallies, Viterbi fallback: 0, label_a=0, 3 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/33 actions re-attributed across 10 rallies
+    out:   Updated 10 player tracks in DB
+    out:   Viterbi serving_team: 3 changed / 10 stamped
+[13:19:48]   OK dt=35.8s
+[13:19:48] [10/52] 2d105b7b — running pipeline
+  $ rallycut match-players 2d105b7b-12be-476e-b010-1b274380b891 -q -> exit 0 dt=23.5s
+  $ rallycut remap-track-ids 2d105b7b-12be-476e-b010-1b274380b891 -> exit 0 dt=1.4s
+    out: Remapping track IDs for video 2d105b7b...
+    out:   7 rallies with mappings
+    out:   8500f776: already using player IDs
+    out:   75295533: already using player IDs
+    out:   89bd8f53: already using player IDs
+    out:   076cb0fe: already using player IDs
+    out:   4d874829: 2401 remapped (T1→P3, T2→P4, T3→P1, T4→P2)
+    out:   bbfc3cf7: 956 remapped (T1→P3, T2→P4, T3→P1, T4→P2)
+    out:   114f3446: 2625 remapped (T2→P4, T4→P2, T5→P3, T6→P1)
+    out: 
+    out:   Total: 5982 track ID references remapped
+    out:   Updated 3 player tracks in DB
+  $ rallycut reattribute-actions 2d105b7b-12be-476e-b010-1b274380b891 -> exit 0 dt=1.1s
+    out: Re-attributing actions for video 2d105b7b...
+    out:   7 rallies with match teams, 7 eligible for re-attribution (conf >= 0.70)
+    out:   8500f776: no changes (teams stamped)
+    out:   75295533: no changes (teams stamped)
+    out:   89bd8f53: no changes (teams stamped)
+    out:   076cb0fe: no changes (teams stamped)
+    out:   4d874829: no changes (teams stamped)
+    out:   bbfc3cf7: no changes (teams stamped)
+    out:   114f3446: 1/16 actions re-attributed
+    out:   Team localization: 7 rallies, Viterbi fallback: 0, label_a=0, 1 serving_team 
+    out: changes
+    out: 
+    out:   Total: 1/65 actions re-attributed across 7 rallies
+    out:   Updated 7 player tracks in DB
+    out:   Viterbi serving_team: 1 changed / 7 stamped
+[13:20:14]   OK dt=26.0s
+[13:20:14]   progress: 10/52 ok=10 fail=0 ETA=17.4min
+[13:20:14] [11/52] 2e984c43 — running pipeline
+  $ rallycut match-players 2e984c43-cef6-4215-8d8e-50d892b510b9 -q -> exit 0 dt=68.1s
+  $ rallycut remap-track-ids 2e984c43-cef6-4215-8d8e-50d892b510b9 -> exit 0 dt=2.3s
+    out: Remapping track IDs for video 2e984c43...
+    out:   30 rallies with mappings
+    out:   21029e9f: 672 remapped (T1→P2, T2→P1, T10→P4)
+    out:   43b849ec: 2396 remapped (T1→P3, T2→P4, T3→P1, T4→P2)
+    out:   594a832a: 777 remapped (T1→P3, T3→P4, T8→P1)
+    out:   60461d6d: 1147 remapped (T1→P2, T2→P1, T6→P4)
+    out:   39407a0e: 1604 remapped (T1→P3, T2→P1, T3→P2, T6→P4)
+    out:   35aec2b6: 804 remapped (T1→P2, T2→P1)
+    out:   4e80a8a7: 1570 remapped (T1→P3, T2→P4, T4→P1, T7→P2)
+    out:   80fb7cf9: 1648 remapped (T1→P3, T2→P4, T3→P2, T4→P1)
+    out:   40a38e37: 1186 remapped (T1→P3, T2→P4, T6→P2, T9→P1)
+    out:   a90fca71: 888 remapped (T1→P2, T2→P1, T9→P4)
+    out:   71676247: 997 remapped (T1→P2, T2→P1, T3→P4, T4→P3)
+    out:   2d25d8ba: 1157 remapped (T2→P1, T4→P3, T6→P4, T8→P2)
+    out:   216370ba: 1520 remapped (T1→P3, T2→P4, T3→P1, T8→P2)
+    out:   a0881d82: 1834 remapped (T1→P2, T3→P4, T6→P1, T7→P3)
+    out:   4716499e: 1111 remapped (T1→P4, T2→P3, T3→P1, T4→P2)
+    out:   4cb43924: 600 remapped (T1→P3, T2→P4, T3→P1, T5→P2)
+    out:   66571168: 1788 remapped (T1→P4, T2→P3, T3→P1, T7→P2)
+    out:   1e38daab: 2540 remapped (T1→P3, T3→P4, T5→P2, T10→P1)
+    out:   414cff1b: 1689 remapped (T1→P3, T2→P4, T8→P1, T9→P2)
+    out:   94426457: 1130 remapped (T1→P3, T2→P4, T4→P2, T8→P1)
+    out:   2855cd04: 887 remapped (T1→P2, T2→P1)
+    out:   01f68711: 2068 remapped (T1→P2, T2→P3, T4→P1, T8→P4)
+    out:   a8cf6893: 381 remapped (T1→P2, T2→P1)
+    out:   4ad457f6: 1758 remapped (T1→P2, T2→P3, T5→P1, T6→P4)
+    out:   41794d71: 1123 remapped (T1→P3, T2→P4, T3→P1, T4→P2)
+    out:   42757e1a: 1521 remapped (T1→P2, T2→P1, T4→P3, T7→P4)
+    out:   12b8ff15: 1122 remapped (T1→P2, T2→P3, T4→P1, T8→P4)
+    out:   375405ff: 723 remapped (T1→P2, T2→P1, T5→P4)
+    out:   caa96651: 856 remapped (T1→P4, T2→P1, T4→P2)
+    out:   ce7b8505: 1069 remapped (T1→P2, T2→P1, T15→P4)
+    out: 
+    out:   Total: 38566 track ID references remapped
+    out:   Updated 30 player tracks in DB
+  $ rallycut reattribute-actions 2e984c43-cef6-4215-8d8e-50d892b510b9 -> exit 0 dt=1.3s
+    out: Re-attributing actions for video 2e984c43...
+    out:   30 rallies with match teams, 30 eligible for re-attribution (conf >= 0.70)
+    out:   21029e9f: no changes (teams stamped)
+    out:   42757e1a: no changes (teams stamped)
+    out:   12b8ff15: 1/5 actions re-attributed
+    out:   375405ff: no changes (teams stamped)
+    out:   caa96651: no changes (teams stamped)
+    out:   ce7b8505: no changes (teams stamped)
+    out:   43b849ec: no changes (teams stamped)
+    out:   1e38daab: no changes (teams stamped)
+    out:   414cff1b: no changes (teams stamped)
+    out:   594a832a: no changes (teams stamped)
+    out:   4e80a8a7: no changes (teams stamped)
+    out:   80fb7cf9: no changes (teams stamped)
+    out:   40a38e37: no changes (teams stamped)
+    out:   60461d6d: no changes (teams stamped)
+    out:   39407a0e: no changes (teams stamped)
+    out:   35aec2b6: no changes (teams stamped)
+    out:   a90fca71: no changes (teams stamped)
+    out:   71676247: no changes (teams stamped)
+    out:   2d25d8ba: no changes (teams stamped)
+    out:   216370ba: no changes (teams stamped)
+    out:   a0881d82: no changes (teams stamped)
+    out:   4716499e: no changes (teams stamped)
+    out:   4cb43924: no changes (teams stamped)
+    out:   66571168: no changes (teams stamped)
+    out:   94426457: no changes (teams stamped)
+    out:   41794d71: no changes (teams stamped)
+    out:   2855cd04: no changes (teams stamped)
+    out:   01f68711: no changes (teams stamped)
+    out:   a8cf6893: no changes (teams stamped)
+    out:   4ad457f6: no changes (teams stamped)
+    out:   Team localization: 30 rallies, Viterbi fallback: 0, label_a=0, 2 serving_team 
+    out: changes
+    out: 
+    out:   Total: 1/201 actions re-attributed across 30 rallies
+    out:   Updated 30 player tracks in DB
+    out:   Viterbi serving_team: 2 changed / 30 stamped
+[13:21:26]   OK dt=71.7s
+[13:21:26] [12/52] 313c6c95 — running pipeline
+  $ rallycut match-players 313c6c95-e586-4585-bfce-a2d293d96815 -q -> exit 0 dt=40.4s
+  $ rallycut remap-track-ids 313c6c95-e586-4585-bfce-a2d293d96815 -> exit 0 dt=1.5s
+    out: Remapping track IDs for video 313c6c95...
+    out:   18 rallies with mappings
+    out:   572bff7e: already using player IDs
+    out:   ea02a014: already using player IDs
+    out:   49582c29: reversed previous remap
+    out:   49582c29: already using player IDs
+    out:   65c54107: already using player IDs
+    out:   e5327806: reversed previous remap
+    out:   e5327806: already using player IDs
+    out:   d6dfef25: already using player IDs
+    out:   fb3e5842: 554 remapped (T3→P4, T5→P3)
+    out:   9a9f223c: 336 remapped (T2→P4, T6→P3, T101→P2)
+    out:   979a2eb2: 894 remapped (T2→P4, T3→P2, T5→P3)
+    out:   6bc59398: already using player IDs
+    out:   259887d1: 545 remapped (T2→P3, T4→P2, T8→P4)
+    out:   64db3fe4: 1412 remapped (T1→P4, T2→P3, T3→P2, T4→P1)
+    out:   11723e2b: already using player IDs
+    out:   29397a28: 478 remapped (T1→P3, T3→P1, T101→P2)
+    out:   47228c55: 1357 remapped (T1→P2, T2→P4, T3→P1, T4→P3)
+    out:   e98b67c6: 750 remapped (T1→P2, T2→P4, T3→P1, T4→P3)
+    out:   5d576abf: 585 remapped (T1→P2, T2→P1)
+    out:   1679b01b: 302 remapped (T3→P4, T4→P3)
+    out: 
+    out:   Total: 7213 track ID references remapped
+    out:   Updated 10 player tracks in DB
+  $ rallycut reattribute-actions 313c6c95-e586-4585-bfce-a2d293d96815 -> exit 0 dt=1.2s
+    out: Re-attributing actions for video 313c6c95...
+    out:   18 rallies with match teams, 8 eligible for re-attribution (conf >= 0.70)
+    out:   572bff7e: no changes (teams stamped)
+    out:   ea02a014: no changes (teams stamped)
+    out:   49582c29: no changes (teams stamped)
+    out:   65c54107: no changes (teams stamped)
+    out:   e5327806: no changes (teams stamped)
+    out:   6bc59398: no changes (teams stamped)
+    out:   d6dfef25: no changes (teams stamped)
+    out:   fb3e5842: no changes (teams stamped)
+    out:   9a9f223c: no changes (teams stamped)
+    out:   979a2eb2: no changes (teams stamped)
+    out:   259887d1: no changes (teams stamped)
+    out:   64db3fe4: no changes (teams stamped)
+    out:   11723e2b: no changes (teams stamped)
+    out:   29397a28: no changes (teams stamped)
+    out:   47228c55: no changes (teams stamped)
+    out:   e98b67c6: no changes (teams stamped)
+    out:   5d576abf: no changes (teams stamped)
+    out:   1679b01b: no changes (teams stamped)
+    out:   Team localization: 18 rallies, Viterbi fallback: 0, label_a=0, 5 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/76 actions re-attributed across 18 rallies
+    out:   Updated 18 player tracks in DB
+    out:   Viterbi serving_team: 5 changed / 18 stamped
+[13:22:09]   OK dt=43.2s
+[13:22:09] [13/52] 35ff869f — running pipeline
+  $ rallycut match-players 35ff869f-5698-4982-bcdb-267e11d70e0d -q -> exit 0 dt=31.5s
+  $ rallycut remap-track-ids 35ff869f-5698-4982-bcdb-267e11d70e0d -> exit 0 dt=1.5s
+    out: Remapping track IDs for video 35ff869f...
+    out:   11 rallies with mappings
+    out:   67abc72e: already using player IDs
+    out:   8a542678: already using player IDs
+    out:   7c6f7c09: 457 remapped (T5→P4, T7→P3, T20→P1)
+    out:   46ca1223: 2003 remapped (T1→P2, T2→P4, T3→P1, T4→P3)
+    out:   afbb5e6f: 3737 remapped (T1→P4, T2→P1, T3→P2, T53→P3)
+    out:   8dc2e70e: 935 remapped (T23→P3)
+    out:   06c8a233: 404 remapped (T4→P1, T20→P3, T25→P2)
+    out:   f59985f2: 834 remapped (T1→P3, T3→P1, T15→P2)
+    out:   19be6bd0: 1464 remapped (T1→P4, T2→P3, T3→P1, T30→P2)
+    out:   8e6c4b6a: 2026 remapped (T2→P4, T26→P2, T31→P1)
+    out:   a69dc843: 1832 remapped (T1→P4, T2→P3, T3→P2, T5→P1)
+    out: 
+    out:   Total: 13692 track ID references remapped
+    out:   Updated 9 player tracks in DB
+  $ rallycut reattribute-actions 35ff869f-5698-4982-bcdb-267e11d70e0d -> exit 0 dt=1.1s
+    out: Re-attributing actions for video 35ff869f...
+    out:   11 rallies with match teams, 8 eligible for re-attribution (conf >= 0.70)
+    out:   67abc72e: no changes (teams stamped)
+    out:   8a542678: no changes (teams stamped)
+    out:   7c6f7c09: no changes (teams stamped)
+    out:   46ca1223: no changes (teams stamped)
+    out:   afbb5e6f: 1/7 actions re-attributed
+    out:   8dc2e70e: no changes (teams stamped)
+    out:   06c8a233: no changes (teams stamped)
+    out:   f59985f2: no changes (teams stamped)
+    out:   19be6bd0: no changes (teams stamped)
+    out:   8e6c4b6a: no changes (teams stamped)
+    out:   a69dc843: no changes (teams stamped)
+    out:   Team localization: 11 rallies, Viterbi fallback: 0, label_a=0, 4 serving_team 
+    out: changes
+    out: 
+    out:   Total: 1/32 actions re-attributed across 11 rallies
+    out:   Updated 11 player tracks in DB
+    out:   Viterbi serving_team: 4 changed / 11 stamped
+[13:22:43]   OK dt=34.1s
+[13:22:43] [14/52] 3ad271bd — running pipeline
+  $ rallycut match-players 3ad271bd-b94d-4d63-86ec-4ecbe5dbfeac -q -> exit 0 dt=28.8s
+  $ rallycut remap-track-ids 3ad271bd-b94d-4d63-86ec-4ecbe5dbfeac -> exit 0 dt=1.3s
+    out: Remapping track IDs for video 3ad271bd...
+    out:   8 rallies with mappings
+    out:   fc53d8ef: reversed previous remap
+    out:   fc53d8ef: already using player IDs
+    out:   62b6c286: already using player IDs
+    out:   2e8b3ce2: already using player IDs
+    out:   4740d2c9: 585 remapped (T1→P4, T5→P1)
+    out:   e84deef3: reversed previous remap
+    out:   e84deef3: already using player IDs
+    out:   8ce5a9e2: 526 remapped (T2→P3, T3→P2)
+    out:   c7e20480: already using player IDs
+    out:   c3c9d54f: 1304 remapped (T1→P2, T2→P1, T4→P3, T6→P4)
+    out: 
+    out:   Total: 2415 track ID references remapped
+    out:   Updated 3 player tracks in DB
+  $ rallycut reattribute-actions 3ad271bd-b94d-4d63-86ec-4ecbe5dbfeac -> exit 0 dt=1.1s
+    out: Re-attributing actions for video 3ad271bd...
+    out:   8 rallies with match teams, 8 eligible for re-attribution (conf >= 0.70)
+    out:   8ce5a9e2: no changes (teams stamped)
+    out:   fc53d8ef: no changes (teams stamped)
+    out:   62b6c286: no changes (teams stamped)
+    out:   2e8b3ce2: no changes (teams stamped)
+    out:   c7e20480: no changes (teams stamped)
+    out:   e84deef3: no changes (teams stamped)
+    out:   4740d2c9: no changes (teams stamped)
+    out:   c3c9d54f: no changes (teams stamped)
+    out:   Team localization: 8 rallies, Viterbi fallback: 0, label_a=0, 5 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/36 actions re-attributed across 8 rallies
+    out:   Updated 8 player tracks in DB
+    out:   Viterbi serving_team: 5 changed / 8 stamped
+[13:23:14]   OK dt=31.2s
+[13:23:14] [15/52] 43928971 — running pipeline
+  $ rallycut match-players 43928971-2e07-4814-bb1a-3d91c7bf03b2 -q -> exit 0 dt=25.1s
+  $ rallycut remap-track-ids 43928971-2e07-4814-bb1a-3d91c7bf03b2 -> exit 0 dt=1.3s
+    out: Remapping track IDs for video 43928971...
+    out:   7 rallies with mappings
+    out:   4c27b635: already using player IDs
+    out:   a51a6746: already using player IDs
+    out:   24b025fa: already using player IDs
+    out:   e048e101: 1920 remapped (T1→P4, T23→P1, T24→P3, T49→P2)
+    out:   7b5a6973: already using player IDs
+    out:   8276604f: already using player IDs
+    out:   cecb6ebf: already using player IDs
+    out: 
+    out:   Total: 1920 track ID references remapped
+    out:   Updated 1 player tracks in DB
+  $ rallycut reattribute-actions 43928971-2e07-4814-bb1a-3d91c7bf03b2 -> exit 0 dt=1.1s
+    out: Re-attributing actions for video 43928971...
+    out:   7 rallies with match teams, 7 eligible for re-attribution (conf >= 0.70)
+    out:   7b5a6973: no changes (teams stamped)
+    out:   8276604f: no changes (teams stamped)
+    out:   cecb6ebf: no changes (teams stamped)
+    out:   4c27b635: no changes (teams stamped)
+    out:   a51a6746: no changes (teams stamped)
+    out:   24b025fa: no changes (teams stamped)
+    out:   e048e101: 1/13 actions re-attributed
+    out:   Team localization: 7 rallies, Viterbi fallback: 0, label_a=0, 1 serving_team 
+    out: changes
+    out: 
+    out:   Total: 1/50 actions re-attributed across 7 rallies
+    out:   Updated 7 player tracks in DB
+    out:   Viterbi serving_team: 1 changed / 7 stamped
+[13:23:42]   OK dt=27.6s
+[13:23:42]   progress: 15/52 ok=15 fail=0 ETA=18.8min
+[13:23:42] [16/52] 44e89f6c — running pipeline
+  $ rallycut match-players 44e89f6c-7708-4830-88ef-e9a9819ff343 -q -> exit 0 dt=31.3s
+  $ rallycut remap-track-ids 44e89f6c-7708-4830-88ef-e9a9819ff343 -> exit 0 dt=2.9s
+    out: Remapping track IDs for video 44e89f6c...
+    out:   13 rallies with mappings
+    out:   0b8c1d2b: 1271 remapped (T3→P4, T9→P3)
+    out:   bb984d2d: 2414 remapped (T2→P3, T10→P4, T14→P2)
+    out:   8c2d30ce: 2004 remapped (T2→P3, T3→P4, T5→P2)
+    out:   0d835edf: 3314 remapped (T1→P3, T3→P1, T8→P2, T9→P4)
+    out:   ecfed131: 2939 remapped (T1→P4, T2→P3, T3→P1, T11→P2)
+    out:   83790ce7: 1276 remapped (T2→P4, T13→P2, T16→P3)
+    out:   7a49d939: 1943 remapped (T1→P3, T2→P4, T3→P1, T4→P2)
+    out:   1052f286: 2289 remapped (T1→P3, T2→P1, T3→P4, T4→P2)
+    out:   c49d774d: 1399 remapped (T1→P3, T3→P1, T11→P4)
+    out:   247ab722: already using player IDs
+    out:   bed98d84: 2485 remapped (T11→P3, T14→P1, T15→P4)
+    out:   c5c7f3dd: 2038 remapped (T1→P2, T2→P1, T3→P4, T4→P3)
+    out:   7e074bff: 4958 remapped (T2→P1, T3→P4, T4→P3, T14→P2)
+    out: 
+    out:   Total: 28330 track ID references remapped
+    out:   Updated 12 player tracks in DB
+  $ rallycut reattribute-actions 44e89f6c-7708-4830-88ef-e9a9819ff343 -> exit 0 dt=1.6s
+    out: Re-attributing actions for video 44e89f6c...
+    out:   13 rallies with match teams, 13 eligible for re-attribution (conf >= 0.70)
+    out:   0b8c1d2b: no changes (teams stamped)
+    out:   bb984d2d: no changes (teams stamped)
+    out:   8c2d30ce: no changes (teams stamped)
+    out:   0d835edf: no changes (teams stamped)
+    out:   ecfed131: no changes (teams stamped)
+    out:   83790ce7: no changes (teams stamped)
+    out:   7a49d939: no changes (teams stamped)
+    out:   1052f286: no changes (teams stamped)
+    out:   c49d774d: no changes (teams stamped)
+    out:   247ab722: no changes (teams stamped)
+    out:   bed98d84: no changes (teams stamped)
+    out:   c5c7f3dd: no changes (teams stamped)
+    out:   7e074bff: no changes (teams stamped)
+    out:   Team localization: 13 rallies, Viterbi fallback: 0, label_a=0, 2 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/49 actions re-attributed across 13 rallies
+    out:   Updated 13 player tracks in DB
+    out:   Viterbi serving_team: 2 changed / 13 stamped
+[13:24:18]   OK dt=35.8s
+[13:24:18] [17/52] 5c641cfe — running pipeline
+  $ rallycut match-players 5c641cfe-2a98-44b3-816c-e093d700baef -q -> exit 0 dt=14.2s
+  $ rallycut remap-track-ids 5c641cfe-2a98-44b3-816c-e093d700baef -> exit 0 dt=1.4s
+    out: Remapping track IDs for video 5c641cfe...
+    out:   5 rallies with mappings
+    out:   b5d6f2e9: already using player IDs
+    out:   bbb22a1a: already using player IDs
+    out:   c3b31af2: reversed previous remap
+    out:   c3b31af2: already using player IDs
+    out:   1de2b211: already using player IDs
+    out:   f3695225: reversed previous remap
+    out:   f3695225: already using player IDs
+    out: 
+    out:   Total: 0 track ID references remapped
+  $ rallycut reattribute-actions 5c641cfe-2a98-44b3-816c-e093d700baef -> exit 0 dt=1.2s
+    out: Re-attributing actions for video 5c641cfe...
+    out:   5 rallies with match teams, 5 eligible for re-attribution (conf >= 0.70)
+    out:   c3b31af2: no changes (teams stamped)
+    out:   b5d6f2e9: no changes (teams stamped)
+    out:   1de2b211: no changes (teams stamped)
+    out:   f3695225: no changes (teams stamped)
+    out:   bbb22a1a: no changes (teams stamped)
+    out:   Team localization: 5 rallies, Viterbi fallback: 0, label_a=0, 2 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/27 actions re-attributed across 5 rallies
+    out:   Updated 5 player tracks in DB
+    out:   Viterbi serving_team: 2 changed / 5 stamped
+[13:24:35]   OK dt=16.8s
+[13:24:35] [18/52] 5c756c41 — running pipeline
+  $ rallycut match-players 5c756c41-1cc1-4486-a95c-97398912cfbe -q -> exit 0 dt=19.0s
+  $ rallycut remap-track-ids 5c756c41-1cc1-4486-a95c-97398912cfbe -> exit 0 dt=2.0s
+    out: Remapping track IDs for video 5c756c41...
+    out:   6 rallies with mappings
+    out:   7094136a: 774 remapped (T2→P4, T7→P2)
+    out:   8c49e480: already using player IDs
+    out:   7f0f540a: 4601 remapped (T1→P2, T2→P1, T3→P4, T4→P3)
+    out:   11adfc2f: 2496 remapped (T3→P4, T9→P2, T10→P3)
+    out:   06c13117: already using player IDs
+    out:   fb6e37bf: 1586 remapped (T2→P3, T4→P2, T5→P4)
+    out: 
+    out:   Total: 9457 track ID references remapped
+    out:   Updated 4 player tracks in DB
+  $ rallycut reattribute-actions 5c756c41-1cc1-4486-a95c-97398912cfbe -> exit 0 dt=1.3s
+    out: Re-attributing actions for video 5c756c41...
+    out:   6 rallies with match teams, 5 eligible for re-attribution (conf >= 0.70)
+    out:   7094136a: no changes (teams stamped)
+    out:   8c49e480: no changes (teams stamped)
+    out:   fb6e37bf: no changes (teams stamped)
+    out:   7f0f540a: no changes (teams stamped)
+    out:   11adfc2f: no changes (teams stamped)
+    out:   06c13117: no changes (teams stamped)
+    out:   Team localization: 5 rallies, Viterbi fallback: 1, label_a=0, 2 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/31 actions re-attributed across 6 rallies
+    out:   Updated 6 player tracks in DB
+    out:   Viterbi serving_team: 2 changed / 6 stamped
+[13:24:57]   OK dt=22.3s
+[13:24:57] [19/52] 601d4a69 — running pipeline
+  $ rallycut match-players 601d4a69-b6e9-4b7c-9bd4-2511d282dc5e -q -> exit 0 dt=38.1s
+  $ rallycut remap-track-ids 601d4a69-b6e9-4b7c-9bd4-2511d282dc5e -> exit 0 dt=1.4s
+    out: Remapping track IDs for video 601d4a69...
+    out:   14 rallies with mappings
+    out:   ef32c552: reversed previous remap
+    out:   ef32c552: already using player IDs
+    out:   9d443de0: reversed previous remap
+    out:   9d443de0: already using player IDs
+    out:   bc15bf77: already using player IDs
+    out:   53ca3586: already using player IDs
+    out:   de7136d1: reversed previous remap
+    out:   de7136d1: already using player IDs
+    out:   8de78319: already using player IDs
+    out:   c079b2be: already using player IDs
+    out:   f99f99f7: already using player IDs
+    out:   3649f1a0: already using player IDs
+    out:   9e1c8911: reversed previous remap
+    out:   9e1c8911: already using player IDs
+    out:   bb6ca329: reversed previous remap
+    out:   bb6ca329: already using player IDs
+    out:   e7d41f54: already using player IDs
+    out:   9ddcfd09: 2064 remapped (T2→P3, T3→P4, T5→P2, T6→P1)
+    out:   9994449b: 1002 remapped (T1→P2, T2→P3, T3→P4, T5→P1)
+    out: 
+    out:   Total: 3066 track ID references remapped
+    out:   Updated 2 player tracks in DB
+  $ rallycut reattribute-actions 601d4a69-b6e9-4b7c-9bd4-2511d282dc5e -> exit 0 dt=1.3s
+    out: Re-attributing actions for video 601d4a69...
+    out:   14 rallies with match teams, 10 eligible for re-attribution (conf >= 0.70)
+    out:   ef32c552: no changes (teams stamped)
+    out:   9d443de0: no changes (teams stamped)
+    out:   bc15bf77: no changes (teams stamped)
+    out:   53ca3586: no changes (teams stamped)
+    out:   de7136d1: no changes (teams stamped)
+    out:   8de78319: no changes (teams stamped)
+    out:   c079b2be: no changes (teams stamped)
+    out:   f99f99f7: no changes (teams stamped)
+    out:   3649f1a0: no changes (teams stamped)
+    out:   9e1c8911: no changes (teams stamped)
+    out:   bb6ca329: no changes (teams stamped)
+    out:   e7d41f54: no changes (teams stamped)
+    out:   9ddcfd09: no changes (teams stamped)
+    out:   9994449b: no changes (teams stamped)
+    out:   Team localization: 14 rallies, Viterbi fallback: 0, label_a=0, 5 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/58 actions re-attributed across 14 rallies
+    out:   Updated 14 player tracks in DB
+    out:   Viterbi serving_team: 5 changed / 14 stamped
+[13:25:38]   OK dt=40.8s
+[13:25:38] [20/52] 635dcba2 — running pipeline
+  $ rallycut match-players 635dcba2-2645-49d1-ac62-072f05c957d9 -q -> exit 0 dt=97.2s
+  $ rallycut remap-track-ids 635dcba2-2645-49d1-ac62-072f05c957d9 -> exit 0 dt=1.9s
+    out: Remapping track IDs for video 635dcba2...
+    out:   30 rallies with mappings
+    out:   974d4b76: 2746 remapped (T4→P1, T6→P3, T8→P2, T10→P4)
+    out:   06b907f1: 79 remapped (T9→P4)
+    out:   d70fa5ad: 269 remapped (T2→P4, T9→P1)
+    out:   d24901dd: 340 remapped (T2→P3, T3→P4, T4→P2)
+    out:   2f806f76: 396 remapped (T2→P3, T3→P4, T4→P2)
+    out:   5d9e9e43: 2067 remapped (T1→P2, T2→P4, T4→P1)
+    out:   9ef7b6f9: 499 remapped (T3→P2, T5→P3)
+    out:   51aa8083: 500 remapped (T1→P4, T2→P1, T4→P2)
+    out:   70bd06c8: 912 remapped (T2→P3, T3→P4, T4→P2)
+    out:   1d316b85: 2166 remapped (T1→P3, T2→P1, T3→P2, T8→P4)
+    out:   4567964d: 458 remapped (T2→P4, T7→P2, T8→P3)
+    out:   78587ac4: 710 remapped (T1→P4, T2→P3, T3→P1, T6→P2)
+    out:   15c43db1: 792 remapped (T6→P3, T10→P4)
+    out:   6587002c: 756 remapped (T2→P3, T3→P4, T4→P2)
+    out:   fcc5dcba: 244 remapped (T5→P4)
+    out:   e5a1da4f: 729 remapped (T2→P3, T3→P4, T4→P2)
+    out:   66921886: 733 remapped (T2→P3, T3→P4, T4→P2)
+    out:   67b3e1ad: 1007 remapped (T2→P3, T3→P4, T4→P2)
+    out:   bf5b72cf: 1060 remapped (T2→P3, T7→P2, T8→P4)
+    out:   b52bc536: 809 remapped (T2→P3, T3→P4, T4→P2)
+    out:   83dea3ce: 667 remapped (T1→P4, T4→P1)
+    out:   a1151ff4: 718 remapped (T2→P3, T3→P2)
+    out:   248aaf83: 3311 remapped (T1→P3, T2→P1, T15→P4, T17→P2)
+    out:   06927cb0: 687 remapped (T1→P3, T2→P1, T3→P2, T5→P4)
+    out:   a938fad1: 861 remapped (T2→P3, T5→P2)
+    out:   f1f09039: 1782 remapped (T1→P4, T3→P1, T4→P2, T7→P3)
+    out:   0b43709e: 756 remapped (T1→P4, T3→P1, T6→P2)
+    out:   a1a5baf7: 3008 remapped (T2→P4, T9→P3, T17→P1, T18→P2)
+    out:   bd10eae6: 888 remapped (T1→P2, T2→P4, T5→P1)
+    out:   e5c1a9b3: 2355 remapped (T1→P3, T2→P1, T4→P2, T5→P4)
+    out: 
+    out:   Total: 32305 track ID references remapped
+    out:   Updated 30 player tracks in DB
+  $ rallycut reattribute-actions 635dcba2-2645-49d1-ac62-072f05c957d9 -> exit 0 dt=1.3s
+    out: Re-attributing actions for video 635dcba2...
+    out:   30 rallies with match teams, 26 eligible for re-attribution (conf >= 0.70)
+    out:   e5c1a9b3: 1/11 actions re-attributed
+    out:   6587002c: no changes (teams stamped)
+    out:   fcc5dcba: no changes (teams stamped)
+    out:   d24901dd: no changes (teams stamped)
+    out:   2f806f76: no changes (teams stamped)
+    out:   e5a1da4f: no changes (teams stamped)
+    out:   66921886: no changes (teams stamped)
+    out:   51aa8083: no changes (teams stamped)
+    out:   b52bc536: no changes (teams stamped)
+    out:   83dea3ce: no changes (teams stamped)
+    out:   70bd06c8: no changes (teams stamped)
+    out:   67b3e1ad: no changes (teams stamped)
+    out:   a1151ff4: no changes (teams stamped)
+    out:   bf5b72cf: no changes (teams stamped)
+    out:   1d316b85: no changes (teams stamped)
+    out:   248aaf83: no changes (teams stamped)
+    out:   06927cb0: no changes (teams stamped)
+    out:   a938fad1: no changes (teams stamped)
+    out:   4567964d: no changes (teams stamped)
+    out:   f1f09039: no changes (teams stamped)
+    out:   0b43709e: no changes (teams stamped)
+    out:   78587ac4: no changes (teams stamped)
+    out:   a1a5baf7: no changes (teams stamped)
+    out:   d70fa5ad: no changes (teams stamped)
+    out:   bd10eae6: no changes (teams stamped)
+    out:   5d9e9e43: no changes (teams stamped)
+    out:   06b907f1: no changes (teams stamped)
+    out:   974d4b76: no changes (teams stamped)
+    out:   15c43db1: no changes (teams stamped)
+    out:   9ef7b6f9: no changes (teams stamped)
+    out:   Team localization: 30 rallies, Viterbi fallback: 0, label_a=0, 12 serving_team
+    out: changes
+    out: 
+    out:   Total: 1/165 actions re-attributed across 30 rallies
+    out:   Updated 30 player tracks in DB
+    out:   Viterbi serving_team: 12 changed / 30 stamped
+[13:27:18]   OK dt=100.5s
+[13:27:18]   progress: 20/52 ok=20 fail=0 ETA=17.9min
+[13:27:18] [21/52] 6d2f646c — running pipeline
+  $ rallycut match-players 6d2f646c-1551-4917-a26c-7707a48ba0e9 -q -> exit 0 dt=20.4s
+  $ rallycut remap-track-ids 6d2f646c-1551-4917-a26c-7707a48ba0e9 -> exit 0 dt=1.3s
+    out: Remapping track IDs for video 6d2f646c...
+    out:   7 rallies with mappings
+    out:   512f9467: reversed previous remap
+    out:   512f9467: already using player IDs
+    out:   610b5078: 531 remapped (T1→P4, T4→P1)
+    out:   733d0c7c: 1122 remapped (T1→P2, T2→P3, T5→P4, T13→P1)
+    out:   cc50cf7e: reversed previous remap
+    out:   cc50cf7e: already using player IDs
+    out:   db3a3503: reversed previous remap
+    out:   db3a3503: already using player IDs
+    out:   e11fa028: already using player IDs
+    out:   f644387b: already using player IDs
+    out: 
+    out:   Total: 1653 track ID references remapped
+    out:   Updated 2 player tracks in DB
+  $ rallycut reattribute-actions 6d2f646c-1551-4917-a26c-7707a48ba0e9 -> exit 0 dt=1.1s
+    out: Re-attributing actions for video 6d2f646c...
+    out:   7 rallies with match teams, 7 eligible for re-attribution (conf >= 0.70)
+    out:   512f9467: no changes (teams stamped)
+    out:   f644387b: no changes (teams stamped)
+    out:   db3a3503: no changes (teams stamped)
+    out:   e11fa028: no changes (teams stamped)
+    out:   cc50cf7e: no changes (teams stamped)
+    out:   610b5078: no changes (teams stamped)
+    out:   733d0c7c: 1/4 actions re-attributed
+    out:   Team localization: 7 rallies, Viterbi fallback: 0, label_a=0, 2 serving_team 
+    out: changes
+    out: 
+    out:   Total: 1/41 actions re-attributed across 7 rallies
+    out:   Updated 7 player tracks in DB
+    out:   Viterbi serving_team: 2 changed / 7 stamped
+[13:27:41]   OK dt=22.8s
+[13:27:41] [22/52] 6f8ca447 — running pipeline
+  $ rallycut match-players 6f8ca447-a244-4833-bf49-e9f949defc1a -q -> exit 0 dt=18.9s
+  $ rallycut remap-track-ids 6f8ca447-a244-4833-bf49-e9f949defc1a -> exit 0 dt=2.3s
+    out: Remapping track IDs for video 6f8ca447...
+    out:   10 rallies with mappings
+    out:   0f82a711: 3886 remapped (T1→P4, T2→P3, T3→P2, T4→P1)
+    out:   39c7b994: already using player IDs
+    out:   5b486730: 1767 remapped (T1→P4, T2→P3, T3→P2, T4→P1)
+    out:   67166481: 1205 remapped (T2→P4, T15→P2)
+    out:   682130d2: 4710 remapped (T1→P2, T2→P1, T8→P4, T9→P3)
+    out:   7aef7188: 4757 remapped (T1→P3, T3→P1, T5→P4)
+    out:   8f008df7: 2370 remapped (T1→P4, T2→P3, T3→P2, T4→P1)
+    out:   96e18702: 900 remapped (T2→P4, T4→P2, T6→P3)
+    out:   e73267b4: 1330 remapped (T1→P3, T3→P1)
+    out:   eb4c4b8e: 3275 remapped (T1→P4, T2→P3, T3→P2, T4→P1)
+    out: 
+    out:   Total: 24200 track ID references remapped
+    out:   Updated 9 player tracks in DB
+  $ rallycut reattribute-actions 6f8ca447-a244-4833-bf49-e9f949defc1a -> exit 0 dt=1.4s
+    out: Re-attributing actions for video 6f8ca447...
+    out:   10 rallies with match teams, 1 eligible for re-attribution (conf >= 0.70)
+    out:   67166481: no changes (teams stamped)
+    out:   7aef7188: no changes (teams stamped)
+    out:   e73267b4: no changes (teams stamped)
+    out:   5b486730: no changes (teams stamped)
+    out:   8f008df7: no changes (teams stamped)
+    out:   0f82a711: no changes (teams stamped)
+    out:   eb4c4b8e: no changes (teams stamped)
+    out:   682130d2: no changes (teams stamped)
+    out:   96e18702: no changes (teams stamped)
+    out:   39c7b994: no changes (teams stamped)
+    out:   Team localization: 10 rallies, Viterbi fallback: 0, label_a=0, 0 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/55 actions re-attributed across 10 rallies
+    out:   Updated 10 player tracks in DB
+    out:   Viterbi serving_team: 0 changed / 10 stamped
+[13:28:03]   OK dt=22.6s
+[13:28:03] [23/52] 7d77980f — running pipeline
+  $ rallycut match-players 7d77980f-3006-40e0-adc0-db491a5bb659 -q -> exit 0 dt=48.8s
+  $ rallycut remap-track-ids 7d77980f-3006-40e0-adc0-db491a5bb659 -> exit 0 dt=1.7s
+    out: Remapping track IDs for video 7d77980f...
+    out:   20 rallies with mappings
+    out:   4e7e589c: already using player IDs
+    out:   613fde44: already using player IDs
+    out:   8c802c26: already using player IDs
+    out:   724ead56: 1286 remapped (T2→P4, T10→P3, T16→P2)
+    out:   ad7cccbf: already using player IDs
+    out:   689854e3: already using player IDs
+    out:   e50f127e: already using player IDs
+    out:   30ffb876: already using player IDs
+    out:   db841666: already using player IDs
+    out:   6e4a9de1: 233 remapped (T1→P4, T4→P1)
+    out:   8b0b9e13: already using player IDs
+    out:   03144243: already using player IDs
+    out:   4bfafd6d: 358 remapped (T3→P2, T102→P4)
+    out:   d934f57a: already using player IDs
+    out:   9f46f74e: already using player IDs
+    out:   09553ef1: already using player IDs
+    out:   97c42190: already using player IDs
+    out:   fdc4375b: already using player IDs
+    out:   d5c51d52: already using player IDs
+    out:   1f9ce33a: already using player IDs
+    out: 
+    out:   Total: 1877 track ID references remapped
+    out:   Updated 3 player tracks in DB
+  $ rallycut reattribute-actions 7d77980f-3006-40e0-adc0-db491a5bb659 -> exit 0 dt=1.4s
+    out: Re-attributing actions for video 7d77980f...
+    out:   20 rallies with match teams, 20 eligible for re-attribution (conf >= 0.70)
+    out:   8b0b9e13: no changes (teams stamped)
+    out:   09553ef1: no changes (teams stamped)
+    out:   ad7cccbf: no changes (teams stamped)
+    out:   97c42190: no changes (teams stamped)
+    out:   e50f127e: no changes (teams stamped)
+    out:   30ffb876: no changes (teams stamped)
+    out:   8c802c26: no changes (teams stamped)
+    out:   724ead56: no changes (teams stamped)
+    out:   03144243: no changes (teams stamped)
+    out:   4bfafd6d: no changes (teams stamped)
+    out:   fdc4375b: no changes (teams stamped)
+    out:   689854e3: no changes (teams stamped)
+    out:   d5c51d52: no changes (teams stamped)
+    out:   4e7e589c: no changes (teams stamped)
+    out:   d934f57a: no changes (teams stamped)
+    out:   613fde44: no changes (teams stamped)
+    out:   1f9ce33a: no changes (teams stamped)
+    out:   9f46f74e: no changes (teams stamped)
+    out:   db841666: no changes (teams stamped)
+    out:   6e4a9de1: no changes (teams stamped)
+    out:   Team localization: 20 rallies, Viterbi fallback: 0, label_a=0, 5 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/121 actions re-attributed across 20 rallies
+    out:   Updated 20 player tracks in DB
+    out:   Viterbi serving_team: 5 changed / 20 stamped
+[13:28:55]   OK dt=52.0s
+[13:28:55] [24/52] 808a5618 — running pipeline
+  $ rallycut match-players 808a5618-a5dc-4d36-93a8-c502c3eb53c5 -q -> exit 0 dt=11.3s
+  $ rallycut remap-track-ids 808a5618-a5dc-4d36-93a8-c502c3eb53c5 -> exit 0 dt=1.9s
+    out: Remapping track IDs for video 808a5618...
+    out:   7 rallies with mappings
+    out:   184650b5: 1287 remapped (T1→P3, T2→P4, T3→P2, T18→P1)
+    out:   47430bea: 411 remapped (T4→P3)
+    out:   4f73e54c: 1941 remapped (T1→P3, T2→P1, T3→P2, T14→P4)
+    out:   7029ace1: 896 remapped (T1→P4, T2→P3, T4→P2, T12→P1)
+    out:   c036a173: 3998 remapped (T1→P3, T2→P4, T5→P2, T31→P1)
+    out:   c7ef5f89: 345 remapped (T10→P4)
+    out:   cce341ff: 1674 remapped (T1→P4, T2→P3, T3→P2, T14→P1)
+    out: 
+    out:   Total: 10552 track ID references remapped
+    out:   Updated 7 player tracks in DB
+  $ rallycut reattribute-actions 808a5618-a5dc-4d36-93a8-c502c3eb53c5 -> exit 0 dt=1.2s
+    out: Re-attributing actions for video 808a5618...
+    out:   7 rallies with match teams, 5 eligible for re-attribution (conf >= 0.70)
+    out:   47430bea: no changes (teams stamped)
+    out:   c7ef5f89: no changes (teams stamped)
+    out:   184650b5: no changes (teams stamped)
+    out:   7029ace1: no changes (teams stamped)
+    out:   c036a173: no changes (teams stamped)
+    out:   cce341ff: no changes (teams stamped)
+    out:   4f73e54c: no changes (teams stamped)
+    out:   Team localization: 7 rallies, Viterbi fallback: 0, label_a=0, 0 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/43 actions re-attributed across 7 rallies
+    out:   Updated 7 player tracks in DB
+    out:   Viterbi serving_team: 0 changed / 7 stamped
+[13:29:10]   OK dt=14.4s
+[13:29:10] [25/52] 840e8b6b — running pipeline
+  $ rallycut match-players 840e8b6b-8428-48d6-8af8-d239d7c64f5c -q -> exit 0 dt=23.4s
+  $ rallycut remap-track-ids 840e8b6b-8428-48d6-8af8-d239d7c64f5c -> exit 0 dt=1.4s
+    out: Remapping track IDs for video 840e8b6b...
+    out:   12 rallies with mappings
+    out:   f7db091f: 1063 remapped (T1→P3, T2→P4, T3→P1, T4→P2)
+    out:   f1f0730d: 1982 remapped (T1→P3, T3→P2, T15→P4, T19→P1)
+    out:   42f0989f: 1875 remapped (T1→P3, T2→P4, T3→P2, T27→P1)
+    out:   e3348468: already using player IDs
+    out:   bc88a9a3: 398 remapped (T1→P2, T2→P3, T3→P4, T10→P1)
+    out:   920d4a33: 816 remapped (T1→P2, T2→P3, T13→P1, T23→P4)
+    out:   d1ef5696: 1045 remapped (T1→P2, T2→P3, T3→P1, T5→P4)
+    out:   8ccb5349: 1409 remapped (T1→P2, T2→P1, T5→P3, T15→P4)
+    out:   d7c9c9e0: 959 remapped (T1→P4, T2→P3, T3→P1, T4→P2)
+    out:   6c147b7a: already using player IDs
+    out:   8638ee31: 732 remapped (T2→P4, T3→P2, T22→P3)
+    out:   d2a26a50: 293 remapped (T2→P4, T4→P2)
+    out: 
+    out:   Total: 10572 track ID references remapped
+    out:   Updated 10 player tracks in DB
+  $ rallycut reattribute-actions 840e8b6b-8428-48d6-8af8-d239d7c64f5c -> exit 0 dt=1.1s
+    out: Re-attributing actions for video 840e8b6b...
+    out:   12 rallies with match teams, 3 eligible for re-attribution (conf >= 0.70)
+    out:   d2a26a50: no changes (teams stamped)
+    out:   6c147b7a: no changes (teams stamped)
+    out:   e3348468: no changes (teams stamped)
+    out:   bc88a9a3: no changes (teams stamped)
+    out:   920d4a33: no changes (teams stamped)
+    out:   8638ee31: no changes (teams stamped)
+    out:   d1ef5696: no changes (teams stamped)
+    out:   8ccb5349: no changes (teams stamped)
+    out:   d7c9c9e0: no changes (teams stamped)
+    out:   f7db091f: no changes (teams stamped)
+    out:   f1f0730d: no changes (teams stamped)
+    out:   42f0989f: no changes (teams stamped)
+    out:   Team localization: 12 rallies, Viterbi fallback: 0, label_a=0, 8 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/75 actions re-attributed across 12 rallies
+    out:   Updated 12 player tracks in DB
+    out:   Viterbi serving_team: 8 changed / 12 stamped
+[13:29:36]   OK dt=25.9s
+[13:29:36]   progress: 25/52 ok=25 fail=0 ETA=14.6min
+[13:29:36] [26/52] 84e66e74 — running pipeline
+  $ rallycut match-players 84e66e74-8d4f-420a-ad01-0ada95153ad0 -q -> exit 0 dt=52.8s
+  $ rallycut remap-track-ids 84e66e74-8d4f-420a-ad01-0ada95153ad0 -> exit 0 dt=1.6s
+    out: Remapping track IDs for video 84e66e74...
+    out:   21 rallies with mappings
+    out:   6a467cf6: already using player IDs
+    out:   793625cd: already using player IDs
+    out:   c46ec7a6: 1314 remapped (T1→P2, T2→P3, T3→P4, T4→P1)
+    out:   276985b8: already using player IDs
+    out:   a80db496: already using player IDs
+    out:   5bdb67a1: 752 remapped (T1→P4, T12→P1)
+    out:   2eeb3ae6: already using player IDs
+    out:   1ab7fe05: 593 remapped (T1→P3, T3→P4, T15→P1)
+    out:   61bb1e1c: 315 remapped (T2→P4, T4→P2)
+    out:   b28dcbf1: 1730 remapped (T1→P4, T2→P1, T3→P2, T30→P3)
+    out:   682f2267: 1799 remapped (T1→P4, T2→P1, T3→P2, T4→P3)
+    out:   311f75b4: 790 remapped (T2→P4, T3→P2, T4→P3)
+    out:   cce8c015: 944 remapped (T1→P3, T3→P1)
+    out:   f18578b6: 881 remapped (T1→P2, T2→P3, T3→P4, T4→P1)
+    out:   ce316bb4: already using player IDs
+    out:   533bcdd5: 1372 remapped (T1→P4, T2→P1, T4→P3, T14→P2)
+    out:   eecb04d1: 1484 remapped (T1→P2, T2→P4, T30→P1)
+    out:   9666105f: 3319 remapped (T1→P2, T2→P3, T29→P4, T47→P1)
+    out:   f04d09bc: 1432 remapped (T1→P3, T2→P1, T15→P2, T21→P4)
+    out:   d6c4322d: 1284 remapped (T1→P3, T7→P1, T28→P4)
+    out:   1126ab99: 1864 remapped (T1→P2, T2→P3, T3→P1, T5→P4)
+    out: 
+    out:   Total: 19873 track ID references remapped
+    out:   Updated 15 player tracks in DB
+  $ rallycut reattribute-actions 84e66e74-8d4f-420a-ad01-0ada95153ad0 -> exit 0 dt=1.2s
+    out: Re-attributing actions for video 84e66e74...
+    out:   21 rallies with match teams, 21 eligible for re-attribution (conf >= 0.70)
+    out:   793625cd: no changes (teams stamped)
+    out:   ce316bb4: no changes (teams stamped)
+    out:   6a467cf6: no changes (teams stamped)
+    out:   c46ec7a6: no changes (teams stamped)
+    out:   276985b8: no changes (teams stamped)
+    out:   a80db496: no changes (teams stamped)
+    out:   1ab7fe05: no changes (teams stamped)
+    out:   5bdb67a1: no changes (teams stamped)
+    out:   2eeb3ae6: no changes (teams stamped)
+    out:   61bb1e1c: no changes (teams stamped)
+    out:   b28dcbf1: no changes (teams stamped)
+    out:   682f2267: no changes (teams stamped)
+    out:   533bcdd5: no changes (teams stamped)
+    out:   311f75b4: no changes (teams stamped)
+    out:   cce8c015: no changes (teams stamped)
+    out:   eecb04d1: no changes (teams stamped)
+    out:   9666105f: no changes (teams stamped)
+    out:   f04d09bc: no changes (teams stamped)
+    out:   f18578b6: no changes (teams stamped)
+    out:   d6c4322d: no changes (teams stamped)
+    out:   1126ab99: no changes (teams stamped)
+    out:   Team localization: 21 rallies, Viterbi fallback: 0, label_a=0, 7 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/132 actions re-attributed across 21 rallies
+    out:   Updated 21 player tracks in DB
+    out:   Viterbi serving_team: 7 changed / 21 stamped
+[13:30:31]   OK dt=55.6s
+[13:30:31] [27/52] 854bb250 — running pipeline
+  $ rallycut match-players 854bb250-3e91-47d2-944d-f62413e3cf45 -q -> exit 0 dt=11.5s
+  $ rallycut remap-track-ids 854bb250-3e91-47d2-944d-f62413e3cf45 -> exit 0 dt=1.3s
+    out: Remapping track IDs for video 854bb250...
+    out:   5 rallies with mappings
+    out:   38d9e796: reversed previous remap
+    out:   38d9e796: 2352 remapped (T1→P2, T2→P1, T3→P4, T4→P3)
+    out:   40b6b832: 1278 remapped (T1→P2, T2→P1)
+    out:   55c2c6e5: already using player IDs
+    out:   c039ef17: reversed previous remap
+    out:   c039ef17: already using player IDs
+    out:   e4a5349e: reversed previous remap
+    out:   e4a5349e: already using player IDs
+    out: 
+    out:   Total: 3630 track ID references remapped
+    out:   Updated 2 player tracks in DB
+  $ rallycut reattribute-actions 854bb250-3e91-47d2-944d-f62413e3cf45 -> exit 0 dt=1.1s
+    out: Re-attributing actions for video 854bb250...
+    out:   5 rallies with match teams, 5 eligible for re-attribution (conf >= 0.70)
+    out:   38d9e796: no changes (teams stamped)
+    out:   55c2c6e5: no changes (teams stamped)
+    out:   e4a5349e: no changes (teams stamped)
+    out:   c039ef17: no changes (teams stamped)
+    out:   40b6b832: no changes (teams stamped)
+    out:   Team localization: 5 rallies, Viterbi fallback: 0, label_a=0, 0 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/30 actions re-attributed across 5 rallies
+    out:   Updated 5 player tracks in DB
+    out:   Viterbi serving_team: 0 changed / 5 stamped
+[13:30:45]   OK dt=14.0s
+[13:30:45] [28/52] 9170269b — running pipeline
+  $ rallycut match-players 9170269b-8259-462e-8a23-28da51026410 -q -> exit 0 dt=19.0s
+  $ rallycut remap-track-ids 9170269b-8259-462e-8a23-28da51026410 -> exit 0 dt=1.4s
+    out: Remapping track IDs for video 9170269b...
+    out:   6 rallies with mappings
+    out:   2b59b234: 435 remapped (T1→P2, T2→P1, T5→P4, T6→P3)
+    out:   5668ebd9: 897 remapped (T3→P4, T4→P3, T43→P1)
+    out:   780d876e: 267 remapped (T3→P4, T6→P3)
+    out:   b0c5ad1c: 994 remapped (T1→P2, T2→P4, T16→P1, T26→P3)
+    out:   d5b199ea: already using player IDs
+    out:   ec483e08: already using player IDs
+    out: 
+    out:   Total: 2593 track ID references remapped
+    out:   Updated 4 player tracks in DB
+  $ rallycut reattribute-actions 9170269b-8259-462e-8a23-28da51026410 -> exit 0 dt=1.1s
+    out: Re-attributing actions for video 9170269b...
+    out:   6 rallies with match teams, 6 eligible for re-attribution (conf >= 0.70)
+    out:   d5b199ea: no changes (teams stamped)
+    out:   ec483e08: no changes (teams stamped)
+    out:   b0c5ad1c: no changes (teams stamped)
+    out:   780d876e: no changes (teams stamped)
+    out:   5668ebd9: no changes (teams stamped)
+    out:   2b59b234: no changes (teams stamped)
+    out:   Team localization: 6 rallies, Viterbi fallback: 0, label_a=0, 0 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/27 actions re-attributed across 6 rallies
+    out:   Updated 6 player tracks in DB
+    out:   Viterbi serving_team: 0 changed / 6 stamped
+[13:31:07]   OK dt=21.5s
+[13:31:07] [29/52] 950fbe5d — running pipeline
+  $ rallycut match-players 950fbe5d-fdad-4862-b05d-8b374bdd5ec6 -q -> exit 0 dt=16.3s
+  $ rallycut remap-track-ids 950fbe5d-fdad-4862-b05d-8b374bdd5ec6 -> exit 0 dt=1.5s
+    out: Remapping track IDs for video 950fbe5d...
+    out:   5 rallies with mappings
+    out:   55e78d3a: 133 remapped (T16→P4)
+    out:   5c35e049: 2346 remapped (T2→P1, T3→P2, T4→P3, T26→P4)
+    out:   79ecfb2d: 907 remapped (T1→P2, T2→P4, T13→P1)
+    out:   8f17a3ed: 434 remapped (T1→P4, T12→P1)
+    out:   f978201e: already using player IDs
+    out: 
+    out:   Total: 3820 track ID references remapped
+    out:   Updated 4 player tracks in DB
+  $ rallycut reattribute-actions 950fbe5d-fdad-4862-b05d-8b374bdd5ec6 -> exit 0 dt=1.1s
+    out: Re-attributing actions for video 950fbe5d...
+    out:   5 rallies with match teams, 4 eligible for re-attribution (conf >= 0.70)
+    out:   f978201e: no changes (teams stamped)
+    out:   55e78d3a: no changes (teams stamped)
+    out:   5c35e049: no changes (teams stamped)
+    out:   8f17a3ed: no changes (teams stamped)
+    out:   79ecfb2d: no changes (teams stamped)
+    out:   Team localization: 5 rallies, Viterbi fallback: 0, label_a=0, 2 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/29 actions re-attributed across 5 rallies
+    out:   Updated 5 player tracks in DB
+    out:   Viterbi serving_team: 2 changed / 5 stamped
+[13:31:26]   OK dt=18.9s
+[13:31:26] [30/52] 9a6a9499 — running pipeline
+  $ rallycut match-players 9a6a9499-ca96-45e3-9f15-d5902c070c0a -q -> exit 0 dt=20.5s
+  $ rallycut remap-track-ids 9a6a9499-ca96-45e3-9f15-d5902c070c0a -> exit 0 dt=1.3s
+    out: Remapping track IDs for video 9a6a9499...
+    out:   7 rallies with mappings
+    out:   17b080fa: reversed previous remap
+    out:   17b080fa: already using player IDs
+    out:   34430b2e: already using player IDs
+    out:   4f4e0a0a: already using player IDs
+    out:   aeffed7c: already using player IDs
+    out:   b4747e0d: already using player IDs
+    out:   d362c7b2: 1174 remapped (T20→P3, T26→P4)
+    out:   ef07c839: already using player IDs
+    out: 
+    out:   Total: 1174 track ID references remapped
+    out:   Updated 1 player tracks in DB
+  $ rallycut reattribute-actions 9a6a9499-ca96-45e3-9f15-d5902c070c0a -> exit 0 dt=1.1s
+    out: Re-attributing actions for video 9a6a9499...
+    out:   7 rallies with match teams, 7 eligible for re-attribution (conf >= 0.70)
+    out:   ef07c839: no changes (teams stamped)
+    out:   b4747e0d: no changes (teams stamped)
+    out:   17b080fa: no changes (teams stamped)
+    out:   aeffed7c: no changes (teams stamped)
+    out:   34430b2e: no changes (teams stamped)
+    out:   4f4e0a0a: no changes (teams stamped)
+    out:   d362c7b2: no changes (teams stamped)
+    out:   Team localization: 7 rallies, Viterbi fallback: 0, label_a=0, 0 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/46 actions re-attributed across 7 rallies
+    out:   Updated 7 player tracks in DB
+    out:   Viterbi serving_team: 0 changed / 7 stamped
+[13:31:49]   OK dt=22.9s
+[13:31:49]   progress: 30/52 ok=30 fail=0 ETA=11.5min
+[13:31:49] [31/52] 9e9a2327 — running pipeline
+  $ rallycut match-players 9e9a2327-8766-4515-9188-47293f9aad85 -q -> exit 0 dt=32.9s
+  $ rallycut remap-track-ids 9e9a2327-8766-4515-9188-47293f9aad85 -> exit 0 dt=1.4s
+    out: Remapping track IDs for video 9e9a2327...
+    out:   6 rallies with mappings
+    out:   016b0e5c: 1067 remapped (T1→P4, T2→P1, T3→P2, T7→P3)
+    out:   137cd8bc: 379 remapped (T1→P3, T2→P1, T3→P2)
+    out:   27964520: already using player IDs
+    out:   52b0ca76: already using player IDs
+    out:   5cc5127f: already using player IDs
+    out:   9c70e73a: already using player IDs
+    out: 
+    out:   Total: 1446 track ID references remapped
+    out:   Updated 2 player tracks in DB
+  $ rallycut reattribute-actions 9e9a2327-8766-4515-9188-47293f9aad85 -> exit 0 dt=1.1s
+    out: Re-attributing actions for video 9e9a2327...
+    out:   6 rallies with match teams, 4 eligible for re-attribution (conf >= 0.70)
+    out:   27964520: no changes (teams stamped)
+    out:   5cc5127f: no changes (teams stamped)
+    out:   52b0ca76: no changes (teams stamped)
+    out:   9c70e73a: no changes (teams stamped)
+    out:   137cd8bc: no changes (teams stamped)
+    out:   016b0e5c: no changes (teams stamped)
+    out:   Team localization: 6 rallies, Viterbi fallback: 0, label_a=1, 5 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/13 actions re-attributed across 6 rallies
+    out:   Updated 6 player tracks in DB
+    out:   Viterbi serving_team: 5 changed / 6 stamped
+[13:32:24]   OK dt=35.3s
+[13:32:24] [32/52] a5866029 — running pipeline
+  $ rallycut match-players a5866029-7cf4-42d6-adc2-8e28111ffd81 -q -> exit 0 dt=22.5s
+  $ rallycut remap-track-ids a5866029-7cf4-42d6-adc2-8e28111ffd81 -> exit 0 dt=1.3s
+    out: Remapping track IDs for video a5866029...
+    out:   7 rallies with mappings
+    out:   eff4febd: already using player IDs
+    out:   25cb82c1: 603 remapped (T2→P3, T3→P2, T11→P1)
+    out:   bd77efd1: already using player IDs
+    out:   0fa82bdf: 1030 remapped (T1→P3, T2→P4, T3→P2, T11→P1)
+    out:   7cd50bd0: 466 remapped (T1→P2, T2→P1)
+    out:   bc4a380c: 389 remapped (T2→P3, T12→P2)
+    out:   a42fec64: 637 remapped (T2→P4, T4→P3, T13→P2)
+    out: 
+    out:   Total: 3125 track ID references remapped
+    out:   Updated 5 player tracks in DB
+  $ rallycut reattribute-actions a5866029-7cf4-42d6-adc2-8e28111ffd81 -> exit 0 dt=1.1s
+    out: Re-attributing actions for video a5866029...
+    out:   7 rallies with match teams, 2 eligible for re-attribution (conf >= 0.70)
+    out:   bd77efd1: no changes (teams stamped)
+    out:   a42fec64: no changes (teams stamped)
+    out:   eff4febd: no changes (teams stamped)
+    out:   25cb82c1: no changes (teams stamped)
+    out:   0fa82bdf: no changes (teams stamped)
+    out:   7cd50bd0: no changes (teams stamped)
+    out:   bc4a380c: no changes (teams stamped)
+    out:   Team localization: 7 rallies, Viterbi fallback: 0, label_a=0, 1 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/26 actions re-attributed across 7 rallies
+    out:   Updated 7 player tracks in DB
+    out:   Viterbi serving_team: 1 changed / 7 stamped
+[13:32:49]   OK dt=24.9s
+[13:32:49] [33/52] a7ee3d38 — running pipeline
+  $ rallycut match-players a7ee3d38-a3a9-4dcd-a2af-e0617997e708 -q -> exit 0 dt=25.8s
+  $ rallycut remap-track-ids a7ee3d38-a3a9-4dcd-a2af-e0617997e708 -> exit 0 dt=1.5s
+    out: Remapping track IDs for video a7ee3d38...
+    out:   11 rallies with mappings
+    out:   0d84f858: 576 remapped (T2→P4, T5→P2)
+    out:   3296c4a0: already using player IDs
+    out:   2a4c3656: 351 remapped (T2→P1, T3→P2, T4→P3, T10→P4)
+    out:   19d0b82a: 1071 remapped (T1→P3, T2→P4, T3→P1, T7→P2)
+    out:   ef47fc50: 1226 remapped (T1→P4, T2→P1, T4→P2, T7→P3)
+    out:   1e449249: 544 remapped (T1→P4, T2→P3, T3→P2, T5→P1)
+    out:   f0371bb7: 1299 remapped (T1→P3, T4→P2, T9→P4, T11→P1)
+    out:   f271b5e6: 1298 remapped (T1→P3, T2→P1, T10→P4, T11→P2)
+    out:   33fa851b: 988 remapped (T2→P1, T8→P2, T13→P4, T15→P3)
+    out:   e5e4c0b7: 637 remapped (T1→P2, T2→P1)
+    out:   914e4ccc: 733 remapped (T1→P4, T2→P1, T6→P2)
+    out: 
+    out:   Total: 8723 track ID references remapped
+    out:   Updated 10 player tracks in DB
+  $ rallycut reattribute-actions a7ee3d38-a3a9-4dcd-a2af-e0617997e708 -> exit 0 dt=1.2s
+    out: Re-attributing actions for video a7ee3d38...
+    out:   11 rallies with match teams, 4 eligible for re-attribution (conf >= 0.70)
+    out:   e5e4c0b7: no changes (teams stamped)
+    out:   0d84f858: no changes (teams stamped)
+    out:   3296c4a0: no changes (teams stamped)
+    out:   2a4c3656: no changes (teams stamped)
+    out:   19d0b82a: no changes (teams stamped)
+    out:   ef47fc50: no changes (teams stamped)
+    out:   1e449249: no changes (teams stamped)
+    out:   f0371bb7: no changes (teams stamped)
+    out:   f271b5e6: no changes (teams stamped)
+    out:   33fa851b: no changes (teams stamped)
+    out:   914e4ccc: no changes (teams stamped)
+    out:   Team localization: 11 rallies, Viterbi fallback: 0, label_a=0, 0 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/47 actions re-attributed across 11 rallies
+    out:   Updated 11 player tracks in DB
+    out:   Viterbi serving_team: 0 changed / 11 stamped
+[13:33:17]   OK dt=28.4s
+[13:33:17] [34/52] ab2ccb1d — running pipeline
+  $ rallycut match-players ab2ccb1d-80fb-4d0e-b90a-a11b65a3498c -q -> exit 0 dt=22.2s
+  $ rallycut remap-track-ids ab2ccb1d-80fb-4d0e-b90a-a11b65a3498c -> exit 0 dt=1.4s
+    out: Remapping track IDs for video ab2ccb1d...
+    out:   10 rallies with mappings
+    out:   2c9092e3: reversed previous remap
+    out:   2c9092e3: already using player IDs
+    out:   b07b388b: 1275 remapped (T1→P2, T2→P1)
+    out:   5665b276: 759 remapped (T2→P4, T6→P2)
+    out:   3eb37b1b: already using player IDs
+    out:   169292de: reversed previous remap
+    out:   169292de: 4703 remapped (T1→P2, T2→P1, T3→P4, T4→P3)
+    out:   20007e80: 1285 remapped (T2→P4, T5→P2, T10→P3)
+    out:   8230ba6a: 3483 remapped (T1→P2, T2→P1, T3→P4, T7→P3)
+    out:   3d813776: 2106 remapped (T1→P3, T2→P4, T3→P2, T4→P1)
+    out:   7d27e33f: 2574 remapped (T1→P3, T2→P4, T5→P1, T8→P2)
+    out:   f87f332f: 2375 remapped (T1→P3, T2→P4, T3→P2, T4→P1)
+    out: 
+    out:   Total: 18560 track ID references remapped
+    out:   Updated 8 player tracks in DB
+  $ rallycut reattribute-actions ab2ccb1d-80fb-4d0e-b90a-a11b65a3498c -> exit 0 dt=1.2s
+    out: Re-attributing actions for video ab2ccb1d...
+    out:   10 rallies with match teams, 3 eligible for re-attribution (conf >= 0.70)
+    out:   3eb37b1b: no changes (teams stamped)
+    out:   169292de: no changes (teams stamped)
+    out:   2c9092e3: no changes (teams stamped)
+    out:   b07b388b: no changes (teams stamped)
+    out:   5665b276: no changes (teams stamped)
+    out:   20007e80: no changes (teams stamped)
+    out:   8230ba6a: no changes (teams stamped)
+    out:   3d813776: no changes (teams stamped)
+    out:   7d27e33f: no changes (teams stamped)
+    out:   f87f332f: no changes (teams stamped)
+    out:   Team localization: 9 rallies, Viterbi fallback: 1, label_a=0, 1 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/34 actions re-attributed across 10 rallies
+    out:   Updated 10 player tracks in DB
+    out:   Viterbi serving_team: 1 changed / 10 stamped
+[13:33:42]   OK dt=24.8s
+[13:33:42] [35/52] ab4edcdc — running pipeline
+  $ rallycut match-players ab4edcdc-7335-44d1-b944-b201feb5a262 -q -> exit 0 dt=20.4s
+  $ rallycut remap-track-ids ab4edcdc-7335-44d1-b944-b201feb5a262 -> exit 0 dt=1.3s
+    out: Remapping track IDs for video ab4edcdc...
+    out:   8 rallies with mappings
+    out:   4c993a75: reversed previous remap
+    out:   4c993a75: already using player IDs
+    out:   9c1c438b: reversed previous remap
+    out:   9c1c438b: already using player IDs
+    out:   f373c7c1: already using player IDs
+    out:   6397a7d9: already using player IDs
+    out:   e7020bac: already using player IDs
+    out:   b96331f2: already using player IDs
+    out:   a9f80d9f: 911 remapped (T1→P3, T2→P4, T4→P1, T23→P2)
+    out:   3a65e432: 1492 remapped (T1→P3, T2→P1, T3→P4, T45→P2)
+    out: 
+    out:   Total: 2403 track ID references remapped
+    out:   Updated 2 player tracks in DB
+  $ rallycut reattribute-actions ab4edcdc-7335-44d1-b944-b201feb5a262 -> exit 0 dt=1.1s
+    out: Re-attributing actions for video ab4edcdc...
+    out:   8 rallies with match teams, 8 eligible for re-attribution (conf >= 0.70)
+    out:   4c993a75: no changes (teams stamped)
+    out:   9c1c438b: no changes (teams stamped)
+    out:   f373c7c1: no changes (teams stamped)
+    out:   6397a7d9: no changes (teams stamped)
+    out:   e7020bac: no changes (teams stamped)
+    out:   b96331f2: no changes (teams stamped)
+    out:   a9f80d9f: no changes (teams stamped)
+    out:   3a65e432: no changes (teams stamped)
+    out:   Team localization: 8 rallies, Viterbi fallback: 0, label_a=0, 2 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/40 actions re-attributed across 8 rallies
+    out:   Updated 8 player tracks in DB
+    out:   Viterbi serving_team: 2 changed / 8 stamped
+[13:34:05]   OK dt=22.8s
+[13:34:05]   progress: 35/52 ok=35 fail=0 ETA=8.7min
+[13:34:05] [36/52] ae81fff5 — running pipeline
+  $ rallycut match-players ae81fff5-a80e-4f77-8315-2e3377ce7737 -q -> exit 0 dt=82.1s
+  $ rallycut remap-track-ids ae81fff5-a80e-4f77-8315-2e3377ce7737 -> exit 0 dt=2.1s
+    out: Remapping track IDs for video ae81fff5...
+    out:   30 rallies with mappings
+    out:   a8ef3948: 166 remapped (T6→P3)
+    out:   81756fb9: 947 remapped (T1→P4, T2→P3, T4→P1, T5→P2)
+    out:   aa54e478: 910 remapped (T1→P4, T2→P3, T4→P2, T6→P1)
+    out:   9c3e9dad: 486 remapped (T2→P3, T3→P2, T5→P4)
+    out:   f81cedbe: 670 remapped (T3→P4, T6→P3)
+    out:   fa7f0d02: 1439 remapped (T1→P2, T2→P1, T6→P4, T7→P3)
+    out:   da794fc1: 982 remapped (T1→P2, T2→P1, T3→P4, T4→P3)
+    out:   3d8f7024: 832 remapped (T1→P4, T4→P1)
+    out:   496a1670: 2481 remapped (T1→P4, T2→P3, T3→P2, T4→P1)
+    out:   3c1f4b82: 974 remapped (T1→P4, T6→P3, T8→P1)
+    out:   53c4fa5a: 491 remapped (T1→P4, T5→P3, T6→P1)
+    out:   6a4a4788: 935 remapped (T1→P2, T2→P3, T4→P1, T5→P4)
+    out:   bb175970: 1734 remapped (T1→P2, T3→P1, T6→P4, T8→P3)
+    out:   c4eb6810: 845 remapped (T1→P3, T3→P1)
+    out:   212c0b30: 2231 remapped (T1→P2, T3→P1, T5→P4, T6→P3)
+    out:   7ff96129: 1322 remapped (T3→P4, T4→P2, T10→P3)
+    out:   100d190a: 1588 remapped (T1→P3, T2→P1, T3→P4, T4→P2)
+    out:   29931eb0: already using player IDs
+    out:   ad9fbb33: 1265 remapped (T1→P2, T2→P1, T3→P4, T4→P3)
+    out:   c2c7d136: 743 remapped (T1→P4, T2→P3, T3→P1, T4→P2)
+    out:   5e1c8a7a: 385 remapped (T1→P2, T2→P1)
+    out:   a6191f6c: 1148 remapped (T1→P4, T2→P3, T3→P1, T6→P2)
+    out:   c9015cb0: 971 remapped (T1→P3, T5→P4, T6→P1)
+    out:   62a4b02d: 868 remapped (T1→P2, T2→P1, T3→P4, T4→P3)
+    out:   303d70e0: 503 remapped (T1→P3, T2→P1, T3→P2)
+    out:   d4020159: 1444 remapped (T1→P2, T2→P1, T3→P4, T4→P3)
+    out:   d4938222: 2635 remapped (T1→P2, T2→P1, T3→P4, T4→P3)
+    out:   fcabf602: 596 remapped (T1→P4, T6→P3, T7→P1)
+    out:   e638f57f: 397 remapped (T1→P3, T3→P1, T6→P4)
+    out:   8c00e2cc: 879 remapped (T1→P2, T2→P4, T6→P3, T8→P1)
+    out: 
+    out:   Total: 30867 track ID references remapped
+    out:   Updated 29 player tracks in DB
+  $ rallycut reattribute-actions ae81fff5-a80e-4f77-8315-2e3377ce7737 -> exit 0 dt=1.3s
+    out: Re-attributing actions for video ae81fff5...
+    out:   30 rallies with match teams, 24 eligible for re-attribution (conf >= 0.70)
+    out:   212c0b30: no changes (teams stamped)
+    out:   c4eb6810: no changes (teams stamped)
+    out:   a8ef3948: no changes (teams stamped)
+    out:   5e1c8a7a: no changes (teams stamped)
+    out:   7ff96129: no changes (teams stamped)
+    out:   d4938222: no changes (teams stamped)
+    out:   fcabf602: no changes (teams stamped)
+    out:   a6191f6c: no changes (teams stamped)
+    out:   81756fb9: no changes (teams stamped)
+    out:   aa54e478: no changes (teams stamped)
+    out:   c9015cb0: no changes (teams stamped)
+    out:   100d190a: no changes (teams stamped)
+    out:   e638f57f: no changes (teams stamped)
+    out:   9c3e9dad: no changes (teams stamped)
+    out:   29931eb0: no changes (teams stamped)
+    out:   f81cedbe: no changes (teams stamped)
+    out:   ad9fbb33: no changes (teams stamped)
+    out:   fa7f0d02: no changes (teams stamped)
+    out:   62a4b02d: no changes (teams stamped)
+    out:   da794fc1: no changes (teams stamped)
+    out:   8c00e2cc: no changes (teams stamped)
+    out:   3c1f4b82: no changes (teams stamped)
+    out:   53c4fa5a: no changes (teams stamped)
+    out:   3d8f7024: no changes (teams stamped)
+    out:   496a1670: no changes (teams stamped)
+    out:   303d70e0: no changes (teams stamped)
+    out:   c2c7d136: no changes (teams stamped)
+    out:   d4020159: no changes (teams stamped)
+    out:   6a4a4788: no changes (teams stamped)
+    out:   bb175970: no changes (teams stamped)
+    out:   Team localization: 30 rallies, Viterbi fallback: 0, label_a=0, 1 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/130 actions re-attributed across 30 rallies
+    out:   Updated 30 player tracks in DB
+    out:   Viterbi serving_team: 1 changed / 30 stamped
+[13:35:30]   OK dt=85.6s
+[13:35:30] [37/52] b03b461b — running pipeline
+  $ rallycut match-players b03b461b-b1c1-4f53-8cce-79c0afe8a049 -q -> exit 0 dt=29.1s
+  $ rallycut remap-track-ids b03b461b-b1c1-4f53-8cce-79c0afe8a049 -> exit 0 dt=1.6s
+    out: Remapping track IDs for video b03b461b...
+    out:   8 rallies with mappings
+    out:   59f2a9a0: already using player IDs
+    out:   c1a37b5e: 518 remapped (T6→P2, T7→P4)
+    out:   c1052008: 243 remapped (T8→P4)
+    out:   95c3db02: already using player IDs
+    out:   15a57d49: 1042 remapped (T1→P4, T2→P3, T3→P2, T4→P1)
+    out:   65e3612a: 847 remapped (T1→P3, T2→P4, T3→P2, T4→P1)
+    out:   2001b635: 1275 remapped (T1→P3, T2→P4, T4→P1, T6→P2)
+    out:   7501a7b7: 1076 remapped (T1→P4, T2→P3, T3→P2, T4→P1)
+    out: 
+    out:   Total: 5001 track ID references remapped
+    out:   Updated 6 player tracks in DB
+  $ rallycut reattribute-actions b03b461b-b1c1-4f53-8cce-79c0afe8a049 -> exit 0 dt=1.2s
+    out: Re-attributing actions for video b03b461b...
+    out:   8 rallies with match teams, 4 eligible for re-attribution (conf >= 0.70)
+    out:   59f2a9a0: no changes (teams stamped)
+    out:   c1a37b5e: no changes (teams stamped)
+    out:   c1052008: no changes (teams stamped)
+    out:   95c3db02: no changes (teams stamped)
+    out:   7501a7b7: no changes (teams stamped)
+    out:   15a57d49: no changes (teams stamped)
+    out:   65e3612a: no changes (teams stamped)
+    out:   2001b635: no changes (teams stamped)
+    out:   Team localization: 8 rallies, Viterbi fallback: 0, label_a=0, 0 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/45 actions re-attributed across 8 rallies
+    out:   Updated 8 player tracks in DB
+    out:   Viterbi serving_team: 0 changed / 8 stamped
+[13:36:02]   OK dt=31.8s
+[13:36:02] [38/52] b097dd2a — running pipeline
+  $ rallycut match-players b097dd2a-6953-4e0e-a603-5be3552f462e -q -> exit 0 dt=24.9s
+  $ rallycut remap-track-ids b097dd2a-6953-4e0e-a603-5be3552f462e -> exit 0 dt=1.3s
+    out: Remapping track IDs for video b097dd2a...
+    out:   7 rallies with mappings
+    out:   39e866fd: already using player IDs
+    out:   72c8229b: already using player IDs
+    out:   bc9345c1: 129 remapped (T6→P4)
+    out:   df3de8ed: reversed previous remap
+    out:   df3de8ed: already using player IDs
+    out:   5b6f0474: 613 remapped (T3→P4, T11→P3)
+    out:   3e07342a: 1326 remapped (T1→P2, T2→P1, T4→P3, T6→P4)
+    out:   b8d333ae: 909 remapped (T1→P2, T2→P1, T5→P4)
+    out: 
+    out:   Total: 2977 track ID references remapped
+    out:   Updated 4 player tracks in DB
+  $ rallycut reattribute-actions b097dd2a-6953-4e0e-a603-5be3552f462e -> exit 0 dt=1.1s
+    out: Re-attributing actions for video b097dd2a...
+    out:   7 rallies with match teams, 7 eligible for re-attribution (conf >= 0.70)
+    out:   72c8229b: no changes (teams stamped)
+    out:   bc9345c1: no changes (teams stamped)
+    out:   39e866fd: no changes (teams stamped)
+    out:   df3de8ed: no changes (teams stamped)
+    out:   5b6f0474: no changes (teams stamped)
+    out:   3e07342a: no changes (teams stamped)
+    out:   b8d333ae: no changes (teams stamped)
+    out:   Team localization: 6 rallies, Viterbi fallback: 1, label_a=0, 1 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/52 actions re-attributed across 7 rallies
+    out:   Updated 7 player tracks in DB
+    out:   Viterbi serving_team: 1 changed / 7 stamped
+[13:36:30]   OK dt=27.3s
+[13:36:30] [39/52] b5fb0594 — running pipeline
+  $ rallycut match-players b5fb0594-d64f-4a0d-bad9-de8fc36414d0 -q -> exit 0 dt=23.0s
+  $ rallycut remap-track-ids b5fb0594-d64f-4a0d-bad9-de8fc36414d0 -> exit 0 dt=2.7s
+    out: Remapping track IDs for video b5fb0594...
+    out:   11 rallies with mappings
+    out:   be3134ba: 2336 remapped (T1→P2, T18→P4, T38→P1)
+    out:   57a588b2: 1313 remapped (T1→P2, T18→P1)
+    out:   cc2b967b: 728 remapped (T7→P4)
+    out:   59832407: 2491 remapped (T1→P4, T2→P3, T3→P2, T4→P1)
+    out:   3e61838c: 5185 remapped (T1→P3, T2→P4, T3→P1, T4→P2)
+    out:   3655eb69: already using player IDs
+    out:   9d5f5152: 4269 remapped (T1→P4, T2→P1, T19→P2)
+    out:   0a9ac90a: 3042 remapped (T1→P4, T2→P1, T3→P2, T4→P3)
+    out:   2e95067d: 3129 remapped (T1→P3, T2→P1, T14→P4, T18→P2)
+    out:   185d87f6: 1812 remapped (T1→P4, T2→P3, T3→P1, T4→P2)
+    out:   26165b51: 3517 remapped (T1→P3, T3→P1, T17→P4, T27→P2)
+    out: 
+    out:   Total: 27822 track ID references remapped
+    out:   Updated 10 player tracks in DB
+  $ rallycut reattribute-actions b5fb0594-d64f-4a0d-bad9-de8fc36414d0 -> exit 0 dt=1.5s
+    out: Re-attributing actions for video b5fb0594...
+    out:   11 rallies with match teams, 8 eligible for re-attribution (conf >= 0.70)
+    out:   be3134ba: no changes (teams stamped)
+    out:   57a588b2: no changes (teams stamped)
+    out:   cc2b967b: no changes (teams stamped)
+    out:   59832407: no changes (teams stamped)
+    out:   3e61838c: no changes (teams stamped)
+    out:   3655eb69: no changes (teams stamped)
+    out:   9d5f5152: no changes (teams stamped)
+    out:   0a9ac90a: no changes (teams stamped)
+    out:   2e95067d: no changes (teams stamped)
+    out:   185d87f6: no changes (teams stamped)
+    out:   26165b51: no changes (teams stamped)
+    out:   Team localization: 2 rallies, Viterbi fallback: 9, label_a=0, 10 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/69 actions re-attributed across 11 rallies
+    out:   Updated 11 player tracks in DB
+    out:   Viterbi serving_team: 10 changed / 11 stamped
+[13:36:57]   OK dt=27.2s
+[13:36:57] [40/52] bbd880f2 — running pipeline
+  $ rallycut match-players bbd880f2-2cc1-429c-96c0-9b72222607cb -q -> exit 0 dt=18.0s
+  $ rallycut remap-track-ids bbd880f2-2cc1-429c-96c0-9b72222607cb -> exit 0 dt=1.4s
+    out: Remapping track IDs for video bbd880f2...
+    out:   7 rallies with mappings
+    out:   36130cbc: already using player IDs
+    out:   89c53e08: 1127 remapped (T1→P2, T2→P1, T3→P4, T4→P3)
+    out:   047c5e5f: already using player IDs
+    out:   e46a9741: 2868 remapped (T1→P3, T2→P4, T3→P1, T4→P2)
+    out:   e55b433d: reversed previous remap
+    out:   e55b433d: already using player IDs
+    out:   1eac2bd6: already using player IDs
+    out:   8e1e5e61: reversed previous remap
+    out:   8e1e5e61: already using player IDs
+    out: 
+    out:   Total: 3995 track ID references remapped
+    out:   Updated 2 player tracks in DB
+  $ rallycut reattribute-actions bbd880f2-2cc1-429c-96c0-9b72222607cb -> exit 0 dt=1.1s
+    out: Re-attributing actions for video bbd880f2...
+    out:   7 rallies with match teams, 4 eligible for re-attribution (conf >= 0.70)
+    out:   36130cbc: no changes (teams stamped)
+    out:   e55b433d: no changes (teams stamped)
+    out:   89c53e08: no changes (teams stamped)
+    out:   047c5e5f: no changes (teams stamped)
+    out:   8e1e5e61: no changes (teams stamped)
+    out:   1eac2bd6: no changes (teams stamped)
+    out:   e46a9741: no changes (teams stamped)
+    out:   Team localization: 7 rallies, Viterbi fallback: 0, label_a=0, 2 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/36 actions re-attributed across 7 rallies
+    out:   Updated 7 player tracks in DB
+    out:   Viterbi serving_team: 2 changed / 7 stamped
+[13:37:17]   OK dt=20.5s
+[13:37:17]   progress: 40/52 ok=40 fail=0 ETA=6.4min
+[13:37:17] [41/52] beb70f61 — running pipeline
+  $ rallycut match-players beb70f61-de8a-4805-a7ae-e8c7199d7275 -q -> exit 0 dt=31.1s
+  $ rallycut remap-track-ids beb70f61-de8a-4805-a7ae-e8c7199d7275 -> exit 0 dt=1.4s
+    out: Remapping track IDs for video beb70f61...
+    out:   9 rallies with mappings
+    out:   70e5834b: already using player IDs
+    out:   7d5fbfb2: already using player IDs
+    out:   24d00889: reversed previous remap
+    out:   24d00889: already using player IDs
+    out:   7265f3ea: already using player IDs
+    out:   7063ea7b: already using player IDs
+    out:   9e3ff9fe: already using player IDs
+    out:   47379221: already using player IDs
+    out:   6c819737: 554 remapped (T1→P4, T2→P3, T3→P2, T4→P1)
+    out:   a2c74722: 1565 remapped (T5→P4, T6→P3, T9→P2, T10→P1)
+    out: 
+    out:   Total: 2119 track ID references remapped
+    out:   Updated 2 player tracks in DB
+  $ rallycut reattribute-actions beb70f61-de8a-4805-a7ae-e8c7199d7275 -> exit 0 dt=1.1s
+    out: Re-attributing actions for video beb70f61...
+    out:   9 rallies with match teams, 6 eligible for re-attribution (conf >= 0.70)
+    out:   70e5834b: no changes (teams stamped)
+    out:   7d5fbfb2: no changes (teams stamped)
+    out:   24d00889: no changes (teams stamped)
+    out:   7265f3ea: no changes (teams stamped)
+    out:   7063ea7b: no changes (teams stamped)
+    out:   9e3ff9fe: no changes (teams stamped)
+    out:   47379221: no changes (teams stamped)
+    out:   6c819737: no changes (teams stamped)
+    out:   a2c74722: no changes (teams stamped)
+    out:   Team localization: 9 rallies, Viterbi fallback: 0, label_a=0, 4 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/33 actions re-attributed across 9 rallies
+    out:   Updated 9 player tracks in DB
+    out:   Viterbi serving_team: 4 changed / 9 stamped
+[13:37:51]   OK dt=33.6s
+[13:37:51] [42/52] c6e4c876 — running pipeline
+  $ rallycut match-players c6e4c876-beca-4cb8-9cce-4a4fc70553f1 -q -> exit 0 dt=34.4s
+  $ rallycut remap-track-ids c6e4c876-beca-4cb8-9cce-4a4fc70553f1 -> exit 0 dt=1.7s
+    out: Remapping track IDs for video c6e4c876...
+    out:   10 rallies with mappings
+    out:   b9b93b87: 1020 remapped (T1→P2, T2→P1, T29→P4, T40→P3)
+    out:   fad29c31: 1800 remapped (T1→P4, T2→P1, T6→P3, T34→P2)
+    out:   3391198d: already using player IDs
+    out:   806ffdf7: 580 remapped (T1→P3, T2→P4, T4→P1, T8→P2)
+    out:   b0dabe43: 630 remapped (T1→P4, T13→P3, T19→P1)
+    out:   6d5e04f4: 1678 remapped (T1→P2, T23→P3, T37→P4, T41→P1)
+    out:   0a95a5e8: 942 remapped (T1→P2, T2→P3, T4→P1, T7→P4)
+    out:   f8e251d8: 759 remapped (T1→P3, T2→P4, T3→P1, T6→P2)
+    out:   13bc398e: 387 remapped (T5→P3, T12→P4)
+    out:   4f7d1cb5: 440 remapped (T1→P3, T2→P4, T5→P1, T10→P2)
+    out: 
+    out:   Total: 8236 track ID references remapped
+    out:   Updated 9 player tracks in DB
+  $ rallycut reattribute-actions c6e4c876-beca-4cb8-9cce-4a4fc70553f1 -> exit 0 dt=1.2s
+    out: Re-attributing actions for video c6e4c876...
+    out:   10 rallies with match teams, 4 eligible for re-attribution (conf >= 0.70)
+    out:   fad29c31: no changes (teams stamped)
+    out:   3391198d: no changes (teams stamped)
+    out:   b9b93b87: no changes (teams stamped)
+    out:   13bc398e: no changes (teams stamped)
+    out:   806ffdf7: no changes (teams stamped)
+    out:   b0dabe43: no changes (teams stamped)
+    out:   6d5e04f4: no changes (teams stamped)
+    out:   0a95a5e8: no changes (teams stamped)
+    out:   f8e251d8: no changes (teams stamped)
+    out:   4f7d1cb5: no changes (teams stamped)
+    out:   Team localization: 10 rallies, Viterbi fallback: 0, label_a=0, 1 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/46 actions re-attributed across 10 rallies
+    out:   Updated 10 player tracks in DB
+    out:   Viterbi serving_team: 1 changed / 10 stamped
+[13:38:28]   OK dt=37.3s
+[13:38:28] [43/52] cb3b68f0 — running pipeline
+  $ rallycut match-players cb3b68f0-74df-4ab3-9e14-e76ac62ecb2d -q -> exit 0 dt=17.1s
+  $ rallycut remap-track-ids cb3b68f0-74df-4ab3-9e14-e76ac62ecb2d -> exit 0 dt=1.3s
+    out: Remapping track IDs for video cb3b68f0...
+    out:   5 rallies with mappings
+    out:   87ce7bff: already using player IDs
+    out:   696e302a: already using player IDs
+    out:   912bc2a8: 684 remapped (T1→P3, T2→P1, T3→P2, T7→P4)
+    out:   b7f92cdc: already using player IDs
+    out:   7c7f0ba3: already using player IDs
+    out: 
+    out:   Total: 684 track ID references remapped
+    out:   Updated 1 player tracks in DB
+  $ rallycut reattribute-actions cb3b68f0-74df-4ab3-9e14-e76ac62ecb2d -> exit 0 dt=1.1s
+    out: Re-attributing actions for video cb3b68f0...
+    out:   5 rallies with match teams, 5 eligible for re-attribution (conf >= 0.70)
+    out:   87ce7bff: no changes (teams stamped)
+    out:   696e302a: no changes (teams stamped)
+    out:   b7f92cdc: no changes (teams stamped)
+    out:   7c7f0ba3: no changes (teams stamped)
+    out:   912bc2a8: no changes (teams stamped)
+    out:   Team localization: 5 rallies, Viterbi fallback: 0, label_a=0, 2 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/31 actions re-attributed across 5 rallies
+    out:   Updated 5 player tracks in DB
+    out:   Viterbi serving_team: 2 changed / 5 stamped
+[13:38:48]   OK dt=19.4s
+[13:38:48] [44/52] ce4c67a1 — running pipeline
+  $ rallycut match-players ce4c67a1-f99c-4e87-9a3e-a34c216d4761 -q -> exit 0 dt=17.0s
+  $ rallycut remap-track-ids ce4c67a1-f99c-4e87-9a3e-a34c216d4761 -> exit 0 dt=1.5s
+    out: Remapping track IDs for video ce4c67a1...
+    out:   7 rallies with mappings
+    out:   9db9cb6b: 935 remapped (T1→P2, T2→P1, T5→P3, T26→P4)
+    out:   5f32d512: 1057 remapped (T1→P3, T2→P4, T5→P1, T6→P2)
+    out:   6560f8a3: 808 remapped (T1→P4, T5→P2, T11→P1, T27→P3)
+    out:   25220443: 814 remapped (T1→P3, T6→P2, T16→P4, T23→P1)
+    out:   f2e47246: 1178 remapped (T2→P3, T3→P4, T6→P1, T19→P2)
+    out:   64896fac: 1108 remapped (T1→P4, T2→P3, T6→P1, T36→P2)
+    out:   84119722: 1136 remapped (T1→P4, T2→P3, T4→P2, T5→P1)
+    out: 
+    out:   Total: 7036 track ID references remapped
+    out:   Updated 7 player tracks in DB
+  $ rallycut reattribute-actions ce4c67a1-f99c-4e87-9a3e-a34c216d4761 -> exit 0 dt=1.1s
+    out: Re-attributing actions for video ce4c67a1...
+    out:   7 rallies with match teams, 7 eligible for re-attribution (conf >= 0.70)
+    out:   9db9cb6b: no changes (teams stamped)
+    out:   5f32d512: no changes (teams stamped)
+    out:   6560f8a3: no changes (teams stamped)
+    out:   25220443: no changes (teams stamped)
+    out:   f2e47246: no changes (teams stamped)
+    out:   64896fac: no changes (teams stamped)
+    out:   84119722: no changes (teams stamped)
+    out:   Team localization: 7 rallies, Viterbi fallback: 0, label_a=0, 0 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/32 actions re-attributed across 7 rallies
+    out:   Updated 7 player tracks in DB
+    out:   Viterbi serving_team: 0 changed / 7 stamped
+[13:39:07]   OK dt=19.6s
+[13:39:07] [45/52] d07ce9e1 — running pipeline
+  $ rallycut match-players d07ce9e1-aa5d-4875-97c4-f565bbfc14f3 -q -> exit 0 dt=16.6s
+  $ rallycut remap-track-ids d07ce9e1-aa5d-4875-97c4-f565bbfc14f3 -> exit 0 dt=1.3s
+    out: Remapping track IDs for video d07ce9e1...
+    out:   11 rallies with mappings
+    out:   da366ddb: already using player IDs
+    out:   88e3503c: 2447 remapped (T1→P4, T2→P3, T4→P2, T40→P1)
+    out:   1cf3ad14: reversed previous remap
+    out:   1cf3ad14: already using player IDs
+    out:   d36a8281: already using player IDs
+    out:   a44a2a94: already using player IDs
+    out:   24249be3: already using player IDs
+    out:   5b9e0ef2: 1746 remapped (T1→P4, T2→P1, T3→P2, T4→P3)
+    out:   09c55f5a: 719 remapped (T13→P3, T14→P1)
+    out:   c99fdd78: already using player IDs
+    out:   04ef801f: already using player IDs
+    out:   8941e6e4: reversed previous remap
+    out:   8941e6e4: already using player IDs
+    out: 
+    out:   Total: 4912 track ID references remapped
+    out:   Updated 3 player tracks in DB
+  $ rallycut reattribute-actions d07ce9e1-aa5d-4875-97c4-f565bbfc14f3 -> exit 0 dt=1.1s
+    out: Re-attributing actions for video d07ce9e1...
+    out:   11 rallies with match teams, 0 eligible for re-attribution (conf >= 0.70)
+    out:   c99fdd78: no changes (teams stamped)
+    out:   04ef801f: no changes (teams stamped)
+    out:   8941e6e4: no changes (teams stamped)
+    out:   da366ddb: no changes (teams stamped)
+    out:   88e3503c: no changes (teams stamped)
+    out:   1cf3ad14: no changes (teams stamped)
+    out:   d36a8281: no changes (teams stamped)
+    out:   a44a2a94: no changes (teams stamped)
+    out:   24249be3: no changes (teams stamped)
+    out:   5b9e0ef2: no changes (teams stamped)
+    out:   09c55f5a: no changes (teams stamped)
+    out:   Team localization: 11 rallies, Viterbi fallback: 0, label_a=0, 6 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/56 actions re-attributed across 11 rallies
+    out:   Updated 11 player tracks in DB
+    out:   Viterbi serving_team: 6 changed / 11 stamped
+[13:39:26]   OK dt=19.0s
+[13:39:26]   progress: 45/52 ok=45 fail=0 ETA=3.6min
+[13:39:26] [46/52] d3486f0b — running pipeline
+  $ rallycut match-players d3486f0b-6601-43d8-a60f-6ecc4874c408 -q -> exit 0 dt=23.8s
+  $ rallycut remap-track-ids d3486f0b-6601-43d8-a60f-6ecc4874c408 -> exit 0 dt=1.4s
+    out: Remapping track IDs for video d3486f0b...
+    out:   7 rallies with mappings
+    out:   ba7c42c5: already using player IDs
+    out:   d0d64de1: already using player IDs
+    out:   f127f3d5: already using player IDs
+    out:   d2995693: already using player IDs
+    out:   106e295e: reversed previous remap
+    out:   106e295e: already using player IDs
+    out:   886a43db: 1270 remapped (T1→P3, T2→P4, T3→P2, T7→P1)
+    out:   7539e9b9: 437 remapped (T1→P2, T2→P1)
+    out: 
+    out:   Total: 1707 track ID references remapped
+    out:   Updated 2 player tracks in DB
+  $ rallycut reattribute-actions d3486f0b-6601-43d8-a60f-6ecc4874c408 -> exit 0 dt=1.2s
+    out: Re-attributing actions for video d3486f0b...
+    out:   7 rallies with match teams, 7 eligible for re-attribution (conf >= 0.70)
+    out:   ba7c42c5: no changes (teams stamped)
+    out:   d0d64de1: no changes (teams stamped)
+    out:   f127f3d5: no changes (teams stamped)
+    out:   d2995693: no changes (teams stamped)
+    out:   106e295e: no changes (teams stamped)
+    out:   886a43db: 1/6 actions re-attributed
+    out:   7539e9b9: no changes (teams stamped)
+    out:   Team localization: 7 rallies, Viterbi fallback: 0, label_a=0, 0 serving_team 
+    out: changes
+    out: 
+    out:   Total: 1/49 actions re-attributed across 7 rallies
+    out:   Updated 7 player tracks in DB
+    out:   Viterbi serving_team: 0 changed / 7 stamped
+[13:39:53]   OK dt=26.4s
+[13:39:53] [47/52] d5a6932f — running pipeline
+  $ rallycut match-players d5a6932f-e853-469b-ad9b-8c811a058526 -q -> exit 0 dt=72.3s
+  $ rallycut remap-track-ids d5a6932f-e853-469b-ad9b-8c811a058526 -> exit 0 dt=2.0s
+    out: Remapping track IDs for video d5a6932f...
+    out:   21 rallies with mappings
+    out:   adca6b54: already using player IDs
+    out:   02ded716: already using player IDs
+    out:   7fc329a9: 1959 remapped (T1→P2, T2→P4, T4→P1, T14→P3)
+    out:   d654e305: 928 remapped (T2→P3, T3→P4, T12→P2)
+    out:   02adc658: 1476 remapped (T1→P3, T2→P1, T6→P4, T8→P2)
+    out:   c38da325: already using player IDs
+    out:   5df3a352: 1037 remapped (T1→P3, T2→P1, T5→P2)
+    out:   072fb8c5: already using player IDs
+    out:   b4d9c787: already using player IDs
+    out:   37286868: already using player IDs
+    out:   4d8cf2ff: 504 remapped (T1→P3, T3→P4, T4→P1)
+    out:   b98e7d3e: 479 remapped (T2→P3, T5→P2)
+    out:   6788aced: 2454 remapped (T1→P4, T10→P1, T29→P3, T55→P2)
+    out:   636b7192: 1472 remapped (T1→P2, T2→P4, T3→P1, T4→P3)
+    out:   7781bfb7: 747 remapped (T1→P2, T2→P4, T3→P1, T4→P3)
+    out:   2cb5adc8: 1713 remapped (T3→P2, T9→P3, T11→P1)
+    out:   1f4c643a: 2911 remapped (T1→P3, T3→P4, T14→P1, T35→P2)
+    out:   ca0ccd55: already using player IDs
+    out:   d8b05b01: 1977 remapped (T1→P2, T2→P4, T8→P1, T11→P3)
+    out:   6c9063c2: 1036 remapped (T1→P4, T2→P1, T7→P2)
+    out:   6cf81aeb: 815 remapped (T1→P2, T2→P4, T4→P3, T9→P1)
+    out: 
+    out:   Total: 19508 track ID references remapped
+    out:   Updated 14 player tracks in DB
+  $ rallycut reattribute-actions d5a6932f-e853-469b-ad9b-8c811a058526 -> exit 0 dt=1.4s
+    out: Re-attributing actions for video d5a6932f...
+    out:   21 rallies with match teams, 21 eligible for re-attribution (conf >= 0.70)
+    out:   5df3a352: no changes (teams stamped)
+    out:   072fb8c5: no changes (teams stamped)
+    out:   b4d9c787: no changes (teams stamped)
+    out:   1f4c643a: no changes (teams stamped)
+    out:   37286868: no changes (teams stamped)
+    out:   4d8cf2ff: no changes (teams stamped)
+    out:   c38da325: no changes (teams stamped)
+    out:   adca6b54: no changes (teams stamped)
+    out:   ca0ccd55: no changes (teams stamped)
+    out:   d8b05b01: no changes (teams stamped)
+    out:   02ded716: no changes (teams stamped)
+    out:   7fc329a9: no changes (teams stamped)
+    out:   6c9063c2: no changes (teams stamped)
+    out:   6cf81aeb: no changes (teams stamped)
+    out:   d654e305: no changes (teams stamped)
+    out:   02adc658: no changes (teams stamped)
+    out:   b98e7d3e: no changes (teams stamped)
+    out:   6788aced: no changes (teams stamped)
+    out:   636b7192: no changes (teams stamped)
+    out:   7781bfb7: no changes (teams stamped)
+    out:   2cb5adc8: no changes (teams stamped)
+    out:   Team localization: 21 rallies, Viterbi fallback: 0, label_a=0, 7 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/129 actions re-attributed across 21 rallies
+    out:   Updated 21 player tracks in DB
+    out:   Viterbi serving_team: 7 changed / 21 stamped
+[13:41:08]   OK dt=75.6s
+[13:41:08] [48/52] dd042609 — running pipeline
+  $ rallycut match-players dd042609-e22e-4f60-83ed-038897c88c32 -q -> exit 0 dt=74.9s
+  $ rallycut remap-track-ids dd042609-e22e-4f60-83ed-038897c88c32 -> exit 0 dt=1.7s
+    out: Remapping track IDs for video dd042609...
+    out:   29 rallies with mappings
+    out:   f811cc63: 2493 remapped (T1→P4, T2→P3, T4→P2, T19→P1)
+    out:   ed29eec7: 1565 remapped (T1→P4, T2→P3, T3→P1, T4→P2)
+    out:   21266995: 870 remapped (T1→P2, T2→P1)
+    out:   5c792f3f: already using player IDs
+    out:   b5724a69: already using player IDs
+    out:   9064ba7b: already using player IDs
+    out:   7a9aadfd: already using player IDs
+    out:   85f7b2a6: already using player IDs
+    out:   9ba12ccc: reversed previous remap
+    out:   9ba12ccc: already using player IDs
+    out:   281eafcd: already using player IDs
+    out:   0585f707: already using player IDs
+    out:   113add74: 1369 remapped (T1→P4, T2→P3, T3→P1, T18→P2)
+    out:   381d6268: 350 remapped (T1→P4, T3→P1, T12→P2)
+    out:   64f9a859: 975 remapped (T1→P4, T3→P1, T9→P3)
+    out:   e3080014: 653 remapped (T1→P4, T3→P1, T10→P3)
+    out:   b62005a2: 1812 remapped (T1→P2, T2→P1, T3→P4, T4→P3)
+    out:   71d6ffec: 1410 remapped (T1→P3, T2→P4, T3→P2, T6→P1)
+    out:   09c723ae: 1052 remapped (T1→P3, T2→P4, T3→P2, T5→P1)
+    out:   3814294e: 1058 remapped (T1→P2, T2→P1)
+    out:   93b88976: 1313 remapped (T1→P2, T13→P1, T16→P4, T17→P3)
+    out:   edb45683: 122 remapped (T5→P3)
+    out:   efdbf6b2: 893 remapped (T1→P2, T2→P1, T7→P4)
+    out:   69f86018: 515 remapped (T1→P3, T3→P1, T6→P4)
+    out:   664cb7a5: 1446 remapped (T1→P4, T2→P3, T3→P1, T10→P2)
+    out:   8ecd4f2b: 1242 remapped (T1→P3, T5→P4, T8→P1, T9→P2)
+    out:   defd8312: 1541 remapped (T1→P4, T2→P3, T3→P2, T4→P1)
+    out:   331d0b0c: 1408 remapped (T1→P3, T2→P4, T4→P2, T5→P1)
+    out:   bcae1944: 374 remapped (T11→P4)
+    out:   c9ffb528: already using player IDs
+    out: 
+    out:   Total: 22461 track ID references remapped
+    out:   Updated 20 player tracks in DB
+  $ rallycut reattribute-actions dd042609-e22e-4f60-83ed-038897c88c32 -> exit 0 dt=1.2s
+    out: Re-attributing actions for video dd042609...
+    out:   29 rallies with match teams, 12 eligible for re-attribution (conf >= 0.70)
+    out:   21266995: no changes (teams stamped)
+    out:   7a9aadfd: no changes (teams stamped)
+    out:   9ba12ccc: no changes (teams stamped)
+    out:   85f7b2a6: no changes (teams stamped)
+    out:   281eafcd: no changes (teams stamped)
+    out:   0585f707: no changes (teams stamped)
+    out:   5c792f3f: no changes (teams stamped)
+    out:   b5724a69: no changes (teams stamped)
+    out:   9064ba7b: no changes (teams stamped)
+    out:   f811cc63: no changes (teams stamped)
+    out:   ed29eec7: no changes (teams stamped)
+    out:   113add74: no changes (teams stamped)
+    out:   381d6268: no changes (teams stamped)
+    out:   64f9a859: no changes (teams stamped)
+    out:   e3080014: no changes (teams stamped)
+    out:   3814294e: no changes (teams stamped)
+    out:   93b88976: no changes (teams stamped)
+    out:   edb45683: no changes (teams stamped)
+    out:   efdbf6b2: no changes (teams stamped)
+    out:   b62005a2: no changes (teams stamped)
+    out:   71d6ffec: no changes (teams stamped)
+    out:   69f86018: no changes (teams stamped)
+    out:   664cb7a5: no changes (teams stamped)
+    out:   8ecd4f2b: no changes (teams stamped)
+    out:   defd8312: no changes (teams stamped)
+    out:   331d0b0c: no changes (teams stamped)
+    out:   09c723ae: no changes (teams stamped)
+    out:   bcae1944: 1/7 actions re-attributed
+    out:   c9ffb528: no changes (teams stamped)
+    out:   Team localization: 29 rallies, Viterbi fallback: 0, label_a=0, 7 serving_team 
+    out: changes
+    out: 
+    out:   Total: 1/126 actions re-attributed across 29 rallies
+    out:   Updated 29 player tracks in DB
+    out:   Viterbi serving_team: 7 changed / 29 stamped
+[13:42:26]   OK dt=77.7s
+[13:42:26] [49/52] eb693a6f — running pipeline
+  $ rallycut match-players eb693a6f-30df-4265-9291-eea46b6a1426 -q -> exit 0 dt=19.5s
+  $ rallycut remap-track-ids eb693a6f-30df-4265-9291-eea46b6a1426 -> exit 0 dt=1.3s
+    out: Remapping track IDs for video eb693a6f...
+    out:   7 rallies with mappings
+    out:   df3ba73b: reversed previous remap
+    out:   df3ba73b: already using player IDs
+    out:   a67c04fb: already using player IDs
+    out:   4c0f4c83: already using player IDs
+    out:   cbf17cce: already using player IDs
+    out:   721bb968: reversed previous remap
+    out:   721bb968: already using player IDs
+    out:   61f79c70: reversed previous remap
+    out:   61f79c70: already using player IDs
+    out:   2d3cb54b: already using player IDs
+    out: 
+    out:   Total: 0 track ID references remapped
+  $ rallycut reattribute-actions eb693a6f-30df-4265-9291-eea46b6a1426 -> exit 0 dt=1.2s
+    out: Re-attributing actions for video eb693a6f...
+    out:   7 rallies with match teams, 1 eligible for re-attribution (conf >= 0.70)
+    out:   df3ba73b: no changes (teams stamped)
+    out:   a67c04fb: no changes (teams stamped)
+    out:   4c0f4c83: no changes (teams stamped)
+    out:   cbf17cce: no changes (teams stamped)
+    out:   721bb968: no changes (teams stamped)
+    out:   61f79c70: no changes (teams stamped)
+    out:   2d3cb54b: no changes (teams stamped)
+    out:   Team localization: 7 rallies, Viterbi fallback: 0, label_a=0, 1 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/58 actions re-attributed across 7 rallies
+    out:   Updated 7 player tracks in DB
+    out:   Viterbi serving_team: 1 changed / 7 stamped
+[13:42:48]   OK dt=21.9s
+[13:42:48] [50/52] edc81438 — running pipeline
+  $ rallycut match-players edc81438-10bc-431d-ae88-5c609f3fae93 -q -> exit 0 dt=21.2s
+  $ rallycut remap-track-ids edc81438-10bc-431d-ae88-5c609f3fae93 -> exit 0 dt=1.3s
+    out: Remapping track IDs for video edc81438...
+    out:   7 rallies with mappings
+    out:   5e2e58fb: already using player IDs
+    out:   c094b07f: already using player IDs
+    out:   0a376585: 846 remapped (T1→P2, T2→P4, T24→P1, T26→P3)
+    out:   7c87c77c: 90 remapped (T7→P4)
+    out:   1a9e7831: 900 remapped (T1→P3, T2→P4, T4→P1, T7→P2)
+    out:   c563a7d7: 1245 remapped (T1→P4, T2→P1, T7→P3, T22→P2)
+    out:   0016a4d0: 1958 remapped (T1→P4, T16→P3, T24→P1, T53→P2)
+    out: 
+    out:   Total: 5039 track ID references remapped
+    out:   Updated 5 player tracks in DB
+  $ rallycut reattribute-actions edc81438-10bc-431d-ae88-5c609f3fae93 -> exit 0 dt=1.1s
+    out: Re-attributing actions for video edc81438...
+    out:   7 rallies with match teams, 7 eligible for re-attribution (conf >= 0.70)
+    out:   5e2e58fb: no changes (teams stamped)
+    out:   c094b07f: no changes (teams stamped)
+    out:   0a376585: no changes (teams stamped)
+    out:   7c87c77c: no changes (teams stamped)
+    out:   1a9e7831: 1/5 actions re-attributed
+    out:   c563a7d7: no changes (teams stamped)
+    out:   0016a4d0: no changes (teams stamped)
+    out:   Team localization: 7 rallies, Viterbi fallback: 0, label_a=0, 1 serving_team 
+    out: changes
+    out: 
+    out:   Total: 1/38 actions re-attributed across 7 rallies
+    out:   Updated 7 player tracks in DB
+    out:   Viterbi serving_team: 1 changed / 7 stamped
+[13:43:11]   OK dt=23.6s
+[13:43:11]   progress: 50/52 ok=50 fail=0 ETA=1.1min
+[13:43:11] [51/52] fb83f876 — running pipeline
+  $ rallycut match-players fb83f876-7288-44ce-b8e4-4151bc7da4df -q -> exit 0 dt=20.1s
+  $ rallycut remap-track-ids fb83f876-7288-44ce-b8e4-4151bc7da4df -> exit 0 dt=1.3s
+    out: Remapping track IDs for video fb83f876...
+    out:   6 rallies with mappings
+    out:   d474b2ad: already using player IDs
+    out:   a11d3733: reversed previous remap
+    out:   a11d3733: 2148 remapped (T1→P3, T2→P4, T3→P1, T4→P2)
+    out:   c9c9bdc2: reversed previous remap
+    out:   c9c9bdc2: already using player IDs
+    out:   19089729: already using player IDs
+    out:   a9bd5acb: reversed previous remap
+    out:   a9bd5acb: already using player IDs
+    out:   9e03194b: 2041 remapped (T1→P3, T2→P4, T3→P1, T4→P2)
+    out: 
+    out:   Total: 4189 track ID references remapped
+    out:   Updated 2 player tracks in DB
+  $ rallycut reattribute-actions fb83f876-7288-44ce-b8e4-4151bc7da4df -> exit 0 dt=1.1s
+    out: Re-attributing actions for video fb83f876...
+    out:   6 rallies with match teams, 6 eligible for re-attribution (conf >= 0.70)
+    out:   d474b2ad: no changes (teams stamped)
+    out:   a11d3733: no changes (teams stamped)
+    out:   c9c9bdc2: no changes (teams stamped)
+    out:   19089729: no changes (teams stamped)
+    out:   a9bd5acb: no changes (teams stamped)
+    out:   9e03194b: no changes (teams stamped)
+    out:   Team localization: 6 rallies, Viterbi fallback: 0, label_a=1, 3 serving_team 
+    out: changes
+    out: 
+    out:   Total: 0/47 actions re-attributed across 6 rallies
+    out:   Updated 6 player tracks in DB
+    out:   Viterbi serving_team: 3 changed / 6 stamped
+[13:43:34]   OK dt=22.5s
+[13:43:34] [52/52] ff175026 — running pipeline
+  $ rallycut match-players ff175026-bd5b-4349-b390-188438da2005 -q -> exit 0 dt=64.5s
+  $ rallycut remap-track-ids ff175026-bd5b-4349-b390-188438da2005 -> exit 0 dt=2.3s
+    out: Remapping track IDs for video ff175026...
+    out:   29 rallies with mappings
+    out:   8ce36875: 2512 remapped (T1→P2, T5→P3, T8→P4, T11→P1)
+    out:   6ecb33c8: 2150 remapped (T8→P3, T12→P4, T16→P1, T18→P2)
+    out:   d0b5034d: 651 remapped (T1→P2, T2→P1)
+    out:   47d53c40: 858 remapped (T2→P4, T5→P2, T7→P3)
+    out:   4eb2391e: 1279 remapped (T1→P2, T2→P1, T3→P4, T4→P3)
+    out:   c48eeb7d: 1822 remapped (T1→P4, T2→P3, T8→P2, T9→P1)
+    out:   288f3d74: 591 remapped (T1→P3, T2→P4, T3→P1)
+    out:   0def0bf2: 1791 remapped (T1→P4, T2→P3, T7→P1, T9→P2)
+    out:   1f6a9b94: 1183 remapped (T1→P4, T2→P3, T3→P2, T4→P1)
+    out:   173a4a61: 1547 remapped (T1→P3, T4→P2, T5→P4, T7→P1)
+    out:   3151a902: 1352 remapped (T1→P3, T2→P1, T4→P2, T5→P4)
+    out:   059d1c87: 848 remapped (T1→P2, T2→P3, T3→P4, T7→P1)
+    out:   fa863c08: 632 remapped (T1→P2, T2→P4, T4→P1)
+    out:   f4c93b25: already using player IDs
+    out:   d4c4e650: 1350 remapped (T1→P4, T2→P3, T3→P2, T8→P1)
+    out:   3c466abc: 1140 remapped (T3→P2, T4→P1, T5→P4, T9→P3)
+    out:   008b5411: 1545 remapped (T1→P3, T3→P4, T4→P2, T7→P1)
+    out:   9f1e1231: 550 remapped (T4→P3, T7→P1, T8→P4)
+    out:   75a780d2: 1166 remapped (T1→P4, T2→P1, T3→P2, T7→P3)
+    out:   d865985c: 433 remapped (T3→P2, T7→P1)
+    out:   6935b412: 739 remapped (T1→P2, T8→P1)
+    out:   94382303: already using player IDs
+    out:   bb1c9802: 683 remapped (T1→P2, T2→P1)
+    out:   5319cfef: 487 remapped (T2→P3, T3→P4, T6→P2)
+    out:   d41b0541: 824 remapped (T1→P2, T2→P1, T3→P4, T4→P3)
+    out:   b1a2e1db: 2059 remapped (T1→P4, T2→P3, T3→P2, T4→P1)
+    out:   47466a40: 1975 remapped (T1→P3, T2→P4, T3→P2, T9→P1)
+    out:   ee142f52: 944 remapped (T1→P4, T2→P3, T3→P2, T5→P1)
+    out:   333edd7d: 411 remapped (T6→P1, T7→P4)
+    out: 
+    out:   Total: 31522 track ID references remapped
+    out:   Updated 27 player tracks in DB
+  $ rallycut reattribute-actions ff175026-bd5b-4349-b390-188438da2005 -> exit 0 dt=1.3s
+    out: Re-attributing actions for video ff175026...
+    out:   29 rallies with match teams, 28 eligible for re-attribution (conf >= 0.70)
+    out:   c48eeb7d: no changes (teams stamped)
+    out:   288f3d74: no changes (teams stamped)
+    out:   0def0bf2: no changes (teams stamped)
+    out:   1f6a9b94: no changes (teams stamped)
+    out:   94382303: no changes (teams stamped)
+    out:   173a4a61: no changes (teams stamped)
+    out:   3151a902: 1/4 actions re-attributed
+    out:   059d1c87: no changes (teams stamped)
+    out:   fa863c08: no changes (teams stamped)
+    out:   8ce36875: 2/10 actions re-attributed
+    out:   bb1c9802: no changes (teams stamped)
+    out:   6ecb33c8: no changes (teams stamped)
+    out:   5319cfef: no changes (teams stamped)
+    out:   d41b0541: no changes (teams stamped)
+    out:   b1a2e1db: no changes (teams stamped)
+    out:   f4c93b25: no changes (teams stamped)
+    out:   d4c4e650: no changes (teams stamped)
+    out:   3c466abc: 1/4 actions re-attributed
+    out:   008b5411: no changes (teams stamped)
+    out:   47466a40: 1/10 actions re-attributed
+    out:   ee142f52: no changes (teams stamped)
+    out:   333edd7d: no changes (teams stamped)
+    out:   9f1e1231: no changes (teams stamped)
+    out:   75a780d2: no changes (teams stamped)
+    out:   d865985c: no changes (teams stamped)
+    out:   6935b412: 1/7 actions re-attributed
+    out:   d0b5034d: no changes (teams stamped)
+    out:   47d53c40: 1/3 actions re-attributed
+    out:   4eb2391e: no changes (teams stamped)
+    out:   Team localization: 28 rallies, Viterbi fallback: 1, label_a=1, 3 serving_team 
+    out: changes
+    out: 
+    out:   Total: 7/120 actions re-attributed across 29 rallies
+    out:   Updated 29 player tracks in DB
+    out:   Viterbi serving_team: 3 changed / 29 stamped
+[13:44:42]   OK dt=68.1s
+[13:44:42] DONE wall=28.6min ok=52 fail=0

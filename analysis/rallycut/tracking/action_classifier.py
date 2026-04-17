@@ -31,6 +31,8 @@ from typing import TYPE_CHECKING, Any, overload
 from rallycut.tracking.contact_detector import Contact, ContactSequence, ball_crossed_net
 
 if TYPE_CHECKING:
+    import numpy as np
+
     from rallycut.court.calibration import CourtCalibrator
     from rallycut.tracking.action_type_classifier import ActionTypeClassifier
     from rallycut.tracking.ball_tracker import BallPosition
@@ -3376,6 +3378,7 @@ def classify_rally_actions(
     track_to_player: dict[int, int] | None = None,
     formation_semantic_flip: bool = False,
     camera_height: float = 0.0,
+    sequence_probs: np.ndarray | None = None,
 ) -> RallyActions:
     """Convenience function to classify actions in a rally.
 
@@ -3424,6 +3427,16 @@ def classify_rally_actions(
             to correct the physical-near team convention on flipped rallies.
             True when the cumulative side-switch count before this rally is
             odd. Caller computes from `match_analysis_json.sideSwitchDetected`.
+        sequence_probs: Optional MS-TCN++ per-frame action probabilities
+            (shape ``(NUM_CLASSES, T)``) from
+            `rallycut.tracking.sequence_action_runtime.get_sequence_probs`.
+            When provided, `apply_sequence_override` runs after Viterbi to
+            replace non-serve action types with MS-TCN++ argmax (guarded by
+            relative-confidence + attack-preserve + dig-preserve ratios).
+            Pass None to disable the override. Callers that also pass
+            `sequence_probs` into `detect_contacts(...)` benefit from the
+            in-detector two-signal rescue gate (contact_detector.py:2135-2144)
+            for `rejected_by_classifier` FN_contacts.
 
     Returns:
         RallyActions with all classified actions. `serving_team` property
@@ -3519,5 +3532,14 @@ def classify_rally_actions(
         )
         if formation_team is not None:
             result.formation_serving_team = formation_team
+
+    # MS-TCN++ sequence override — replaces non-serve action types with the
+    # model's per-frame argmax, guarded by OVERRIDE_RELATIVE_CONF_K +
+    # ATTACK_PRESERVE_RATIO + DIG_GUARD_RATIO. Runs last so it operates on
+    # the final post-reattribute action list (matching the historical CLI
+    # ordering at track_player.py:991-1001). Pass None to disable.
+    if sequence_probs is not None:
+        from rallycut.tracking.sequence_action_runtime import apply_sequence_override
+        apply_sequence_override(result, sequence_probs)
 
     return result

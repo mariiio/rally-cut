@@ -6,19 +6,29 @@ data, and attempts to auto-map old track_ids to current ones.
 Usage:
     cd analysis
     uv run python scripts/diagnose_gt_track_mismatch.py
+    uv run python scripts/diagnose_gt_track_mismatch.py --classify \
+        --out reports/gt_integrity_diagnosis.json \
+        --auto-fix-videos-out reports/gt_integrity_auto_fix_video_ids.txt
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import math
 from collections import defaultdict
 from dataclasses import dataclass
+from pathlib import Path
 
 from rich.console import Console
 from rich.table import Table
 
-from scripts.eval_action_detection import load_rallies_with_action_gt
 from rallycut.tracking.player_tracker import PlayerPosition
+from scripts.eval_action_detection import (
+    RallyData,
+    _load_track_to_player_maps,
+    load_rallies_with_action_gt,
+)
 
 console = Console()
 
@@ -60,7 +70,182 @@ def find_nearest_track_at_frame(
     return best_tid, best_dist
 
 
+def _classify_rally(
+    rally: RallyData,
+    t2p: dict[int, int] | None,
+) -> dict:
+    """Classify rally GT integrity into clean / auto_fixable / gt_orphaned.
+
+    GT `playerTrackId` is canonical (1-4) per eval_action_detection.py:493-497.
+    `positions_json` trackIds may be raw (post-retrack) or canonical (post-remap).
+    `trackToPlayer` (t2p) maps raw → canonical.
+
+    Resolvability per avail track `t`: after remap, track contributes player
+    `t` (direct) and/or `t2p[t]` (if mapped). Union across `avail_tids` gives
+    the set of canonical player IDs reachable from current tracking.
+
+    - clean: gt_tids ⊆ avail_tids (already aligned, no remap needed).
+    - auto_fixable: broken AND gt_tids ⊆ resolvable (running
+      `remap-track-ids` will align positions_json with GT).
+    - gt_orphaned: gt_tids contain IDs not resolvable from current tracks.
+      GT references a player that is no longer represented by any current
+      track — neither remap nor pipeline rerun recovers them. These need
+      S3 backup restore, OR position-based spatial repair (ballX/ballY),
+      OR manual re-label.
+    """
+    gt_tids = {gt.player_track_id for gt in rally.gt_labels if gt.player_track_id >= 0}
+    avail_tids: set[int] = set()
+    if rally.positions_json:
+        for pp in rally.positions_json:
+            tid = pp.get("trackId")
+            if isinstance(tid, int):
+                avail_tids.add(tid)
+
+    if not gt_tids:
+        return {
+            "status": "clean",
+            "reason": "no GT labels with playerTrackId",
+            "gt_tids": [],
+            "avail_tids": sorted(avail_tids),
+            "t2p_present": bool(t2p),
+        }
+
+    if gt_tids <= avail_tids:
+        return {
+            "status": "clean",
+            "reason": "GT tids already in positions_json",
+            "gt_tids": sorted(gt_tids),
+            "avail_tids": sorted(avail_tids),
+            "t2p_present": bool(t2p),
+        }
+
+    # Compute resolvable set: every avail_tid `t` contributes `t` itself
+    # (if left unmapped) AND `t2p[t]` (if it's a key in the map, remap would
+    # rewrite it). Union over all current tracks.
+    resolvable: set[int] = set(avail_tids)
+    if t2p:
+        for t in avail_tids:
+            if t in t2p:
+                resolvable.add(t2p[t])
+
+    unresolvable = gt_tids - resolvable
+
+    if not unresolvable:
+        return {
+            "status": "auto_fixable",
+            "reason": "remap-track-ids would align positions_json with GT",
+            "gt_tids": sorted(gt_tids),
+            "avail_tids": sorted(avail_tids),
+            "resolvable": sorted(resolvable),
+            "t2p_present": bool(t2p),
+            "fix": "remap-track-ids",
+        }
+
+    return {
+        "status": "gt_orphaned",
+        "reason": "GT playerTrackIds do not correspond to any current track",
+        "gt_tids": sorted(gt_tids),
+        "avail_tids": sorted(avail_tids),
+        "unresolvable_gt_tids": sorted(unresolvable),
+        "resolvable": sorted(resolvable),
+        "t2p_present": bool(t2p),
+        "fix": "S3 backup restore OR spatial repair OR manual re-label",
+    }
+
+
+def run_classify(
+    out_path: Path,
+    auto_fix_videos_out: Path,
+) -> None:
+    """Classify every GT rally into clean / auto_fixable / needs_restore.
+
+    Emits `out_path` (JSON) and `auto_fix_videos_out` (unique video IDs for
+    auto_fixable rallies, one per line — feed into recover_match_state.py).
+    """
+    rallies = load_rallies_with_action_gt()
+    if not rallies:
+        console.print("[red]No rallies found.[/red]")
+        return
+
+    video_ids = {r.video_id for r in rallies}
+    t2p_maps = _load_track_to_player_maps(video_ids)
+
+    per_rally: list[dict] = []
+    status_counts: dict[str, int] = defaultdict(int)
+    auto_fix_videos: set[str] = set()
+    orphaned_videos: set[str] = set()
+
+    for idx, rally in enumerate(rallies):
+        t2p = t2p_maps.get(rally.rally_id)
+        cls = _classify_rally(rally, t2p)
+        cls["rally_id"] = rally.rally_id
+        cls["video_id"] = rally.video_id
+        cls["n_gt_labels"] = len(rally.gt_labels)
+        per_rally.append(cls)
+        status_counts[cls["status"]] += 1
+        if cls["status"] == "auto_fixable":
+            auto_fix_videos.add(rally.video_id)
+        elif cls["status"] == "gt_orphaned":
+            orphaned_videos.add(rally.video_id)
+
+        if (idx + 1) % 25 == 0 or idx == len(rallies) - 1:
+            console.print(
+                f"[{idx+1}/{len(rallies)}] {rally.rally_id[:8]} → {cls['status']}"
+            )
+
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(
+        json.dumps(
+            {
+                "total_rallies": len(rallies),
+                "status_counts": dict(status_counts),
+                "auto_fix_video_count": len(auto_fix_videos),
+                "orphaned_video_count": len(orphaned_videos),
+                "per_rally": per_rally,
+            },
+            indent=2,
+        )
+    )
+
+    auto_fix_videos_out.parent.mkdir(parents=True, exist_ok=True)
+    auto_fix_videos_out.write_text(
+        "\n".join(sorted(auto_fix_videos)) + ("\n" if auto_fix_videos else "")
+    )
+
+    console.print(f"\n[bold]GT Integrity Classification ({len(rallies)} rallies)[/bold]")
+    for status in ("clean", "auto_fixable", "gt_orphaned"):
+        console.print(f"  {status:20s} {status_counts.get(status, 0):4d}")
+    console.print(f"\n  auto_fix videos: {len(auto_fix_videos)}")
+    console.print(f"  orphaned videos: {len(orphaned_videos)}")
+    console.print(f"\n  → {out_path}")
+    console.print(f"  → {auto_fix_videos_out}")
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--classify",
+        action="store_true",
+        help="Emit JSON classification (clean|auto_fixable|needs_restore) + video IDs",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=Path("reports/gt_integrity_diagnosis.json"),
+        help="Output JSON path when --classify is set",
+    )
+    parser.add_argument(
+        "--auto-fix-videos-out",
+        type=Path,
+        default=Path("reports/gt_integrity_auto_fix_video_ids.txt"),
+        help="Output TXT (one video_id per line) for auto_fixable rallies",
+    )
+    args = parser.parse_args()
+
+    if args.classify:
+        run_classify(args.out, args.auto_fix_videos_out)
+        return
+
     rallies = load_rallies_with_action_gt()
     if not rallies:
         console.print("[red]No rallies found.[/red]")
@@ -151,7 +336,7 @@ def main() -> None:
 
     console.print(rally_table)
 
-    console.print(f"\n[bold]Summary[/bold]")
+    console.print("\n[bold]Summary[/bold]")
     console.print(f"  Total rallies: {len(rallies)}")
     console.print(f"  Rallies with mismatches: {len(mismatches)}")
     console.print(f"  Total GT labels: {total_gt_labels}")
@@ -159,7 +344,7 @@ def main() -> None:
     console.print(f"  Unique missing track IDs: {total_missing_tids}")
 
     # Group by video to see patterns
-    console.print(f"\n[bold]Mismatches by Video[/bold]")
+    console.print("\n[bold]Mismatches by Video[/bold]")
     by_video: dict[str, list[MismatchInfo]] = defaultdict(list)
     for m in mismatches:
         by_video[m.video_id].append(m)
@@ -190,7 +375,7 @@ def main() -> None:
 
     # Try auto-mapping: for each rally with mismatches, check if stored actions
     # have track_ids that ARE in available_tids → those are the "current" mapping
-    console.print(f"\n[bold]Auto-Mapping Feasibility[/bold]")
+    console.print("\n[bold]Auto-Mapping Feasibility[/bold]")
 
     # Check if stored actions use current track_ids
     stored_match = 0
@@ -216,7 +401,7 @@ def main() -> None:
 
     # Check GT labels that have ballX/ballY — we can try to find the nearest
     # current track at that position
-    console.print(f"\n[bold]Position-Based Track Mapping (using GT ball position)[/bold]")
+    console.print("\n[bold]Position-Based Track Mapping (using GT ball position)[/bold]")
 
     mappable = 0
     unmappable = 0
@@ -294,7 +479,7 @@ def main() -> None:
         console.print(map_table)
 
     # Final recommendation
-    console.print(f"\n[bold]Recommendation[/bold]")
+    console.print("\n[bold]Recommendation[/bold]")
     console.print(f"  Option 1: Re-label {len(mismatches)} rallies in web editor (most reliable)")
     console.print(f"  Option 2: Auto-update {mappable} GT labels using nearest-track mapping")
     if stored_match > 0:

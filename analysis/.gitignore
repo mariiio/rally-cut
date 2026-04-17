@@ -67,6 +67,10 @@ reports/merge_veto/per_pass_sweep/
 reports/merge_veto/session8_sweep/
 reports/minimal_processing/sweep/
 
+# DB snapshots (large, regeneratable via pg_dump; kept locally for rollback)
+reports/*.sql.gz
+reports/*.sql
+
 # Training artifacts (large, regeneratable)
 reid_training_data/
 reid_loocv_sweep.txt

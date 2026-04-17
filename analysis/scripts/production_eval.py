@@ -17,8 +17,9 @@ ball/player JSON and runs stages 9–14 of `track_player.py` end-to-end:
                                           production two-pass enrichment's
                                           end state)
     4. `detect_contacts`                 (contact_detector.py)
-    5. `classify_rally_actions`          (action_classifier.py)
-    6. `apply_sequence_override`         (sequence_action_runtime.py)
+    5. `classify_rally_actions`          (action_classifier.py; internally
+                                          applies the MS-TCN++ override when
+                                          `sequence_probs` is non-None)
 
 Then it computes honest aggregate metrics with rerun variance bars and
 reports any rallies production couldn't process in a `production_rejected`
@@ -135,7 +136,6 @@ from rallycut.tracking.contact_detector import (  # noqa: E402
 from rallycut.tracking.match_tracker import verify_team_assignments  # noqa: E402
 from rallycut.tracking.player_tracker import PlayerPosition  # noqa: E402
 from rallycut.tracking.sequence_action_runtime import (  # noqa: E402
-    apply_sequence_override,
     get_sequence_probs,
 )
 
@@ -540,7 +540,10 @@ def _run_rally(
         sequence_probs=None if ctx.skip_seq_enriched_contact_gbm else sequence_probs,
     )
 
-    # Stage 13 — action classification (state machine + GBM + repair + etc.).
+    # Stage 13 + 14 — action classification + MS-TCN++ override. The
+    # override is wired inside `classify_rally_actions` since 2026-04-17;
+    # passing None for `sequence_probs` preserves the `skip_sequence_override`
+    # ablation (non-serve types stay at the GBM's top-1 pick).
     rally_actions = classify_rally_actions(
         contact_sequence,
         rally.rally_id,
@@ -550,11 +553,8 @@ def _run_rally(
         track_to_player=track_to_player,
         formation_semantic_flip=formation_semantic_flip,
         camera_height=camera_height,
+        sequence_probs=None if ctx.skip_sequence_override else sequence_probs,
     )
-
-    # Stage 14 — MS-TCN++ hybrid override (serves exempt).
-    if sequence_probs is not None and not ctx.skip_sequence_override:
-        apply_sequence_override(rally_actions, sequence_probs)
 
     return [a.to_dict() for a in rally_actions.actions], rally_actions
 

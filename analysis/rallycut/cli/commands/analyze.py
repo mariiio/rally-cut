@@ -54,10 +54,7 @@ def classify_actions(
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.contact_detector import detect_contacts
     from rallycut.tracking.player_tracker import PlayerPosition
-    from rallycut.tracking.sequence_action_runtime import (
-        apply_sequence_override,
-        get_sequence_probs,
-    )
+    from rallycut.tracking.sequence_action_runtime import get_sequence_probs
 
     # Load tracking data
     with open(input_json) as f:
@@ -118,6 +115,14 @@ def classify_actions(
             team_assignments, player_positions,
         )
 
+    # Compute MS-TCN++ per-frame probs once; threaded into both the
+    # in-detector two-signal rescue gate and classify_rally_actions'
+    # internal apply_sequence_override.
+    sequence_probs = get_sequence_probs(
+        ball_positions, player_positions, court_split_y,
+        data.get("frameCount") or 0, team_assignments,
+    )
+
     # Step 1: Contact detection
     contact_seq = detect_contacts(
         ball_positions=ball_positions,
@@ -125,25 +130,21 @@ def classify_actions(
         net_y=court_split_y,
         frame_count=data.get("frameCount"),
         team_assignments=team_assignments,
+        sequence_probs=sequence_probs,
     )
 
     if not quiet:
         console.print(f"\n  Contacts detected: {contact_seq.num_contacts}")
         console.print(f"  Net Y estimate: {contact_seq.net_y:.3f}")
 
-    # Step 2: Action classification
+    # Step 2: Action classification (includes the MS-TCN++ override internally
+    # when sequence_probs is passed — mirrors track-players --actions so this
+    # CLI matches production action classification behavior).
     rally_actions = classify_rally_actions(
-        contact_seq, team_assignments=team_assignments,
+        contact_seq,
+        team_assignments=team_assignments,
+        sequence_probs=sequence_probs,
     )
-
-    # Step 2b: MS-TCN++ sequence-model override (mirrors track-players --actions
-    # so this CLI matches production action classification behavior).
-    sequence_probs = get_sequence_probs(
-        ball_positions, player_positions, court_split_y,
-        data.get("frameCount") or 0, team_assignments,
-    )
-    if sequence_probs is not None:
-        apply_sequence_override(rally_actions, sequence_probs)
 
     if not quiet:
         console.print(f"  Actions classified: {len(rally_actions.actions)}")
@@ -242,10 +243,7 @@ def rank_highlights(
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.contact_detector import detect_contacts
     from rallycut.tracking.player_tracker import PlayerPosition
-    from rallycut.tracking.sequence_action_runtime import (
-        apply_sequence_override,
-        get_sequence_probs,
-    )
+    from rallycut.tracking.sequence_action_runtime import get_sequence_probs
 
     all_features: list[HighlightFeatures] = []
 
@@ -294,23 +292,26 @@ def rank_highlights(
             from rallycut.tracking.match_tracker import verify_team_assignments
 
             ta = verify_team_assignments(ta, player_positions)
-        contact_seq = detect_contacts(
-            ball_positions, player_positions or None, net_y=court_split_y,
-            frame_count=data.get("frameCount"),
-            team_assignments=ta,
-        )
-        rally_actions = classify_rally_actions(
-            contact_seq, rally_id=rally_id, team_assignments=ta,
-        )
-
-        # MS-TCN++ sequence-model override (mirrors track-players --actions
-        # so highlight scoring sees the same action types production produces).
+        # Compute MS-TCN++ probs once; threaded into both detect_contacts
+        # (two-signal rescue gate) and classify_rally_actions (internal
+        # apply_sequence_override). Mirrors track-players --actions so the
+        # highlight scorer sees the same action types production produces.
         sequence_probs = get_sequence_probs(
             ball_positions, player_positions, court_split_y,
             data.get("frameCount") or 0, ta,
         )
-        if sequence_probs is not None:
-            apply_sequence_override(rally_actions, sequence_probs)
+        contact_seq = detect_contacts(
+            ball_positions, player_positions or None, net_y=court_split_y,
+            frame_count=data.get("frameCount"),
+            team_assignments=ta,
+            sequence_probs=sequence_probs,
+        )
+        rally_actions = classify_rally_actions(
+            contact_seq,
+            rally_id=rally_id,
+            team_assignments=ta,
+            sequence_probs=sequence_probs,
+        )
 
         # Compute rally stats
         stats = compute_match_stats(
