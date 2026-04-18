@@ -180,6 +180,17 @@ class ContactDetectionConfig:
     # (effect of contact) several frames before the actual contact (cause).
     enable_trajectory_refinement: bool = True
     trajectory_refinement_window: int = 3  # Search ±N frames for peak direction change
+
+    # Direction-change peak candidates: scan direction_change across all frames
+    # and fire at local maxima above a threshold. Existing generators (velocity
+    # peak, inflection, reversal) detect the EFFECT of contact (velocity spike)
+    # which lags the actual contact by several frames. This generator fires at
+    # the cause (peak direction change), filling gaps where other generators
+    # place candidates >5 frames from the true contact.
+    enable_direction_change_candidates: bool = True
+    direction_change_candidate_min_deg: float = 25.0  # Min direction change to qualify
+    direction_change_candidate_prominence: float = 10.0  # Min prominence for peaks
+
     # Court position baselines (fixed defaults assuming net_y≈0.5).
     # action_classifier.py computes dynamic baselines from actual net_y instead.
     baseline_y_near: float = 0.82  # Near baseline Y threshold
@@ -1519,6 +1530,52 @@ def estimate_net_position(
     return (min(y_values) + max(y_values)) / 2
 
 
+def _find_direction_change_candidates(
+    ball_by_frame: dict[int, BallPosition],
+    confident_frames: list[int],
+    min_angle_deg: float = 25.0,
+    check_frames: int = 8,
+    min_distance_frames: int = 12,
+    prominence: float = 10.0,
+) -> list[int]:
+    """Find candidate frames at local maxima of direction change.
+
+    Existing generators (velocity peaks, inflections) detect the EFFECT of
+    a contact (the velocity spike after the hit). This generator detects the
+    CAUSE — the frame where the ball trajectory changes direction most sharply.
+
+    Uses scipy find_peaks on the direction_change signal to find local maxima
+    above min_angle_deg with sufficient prominence.
+    """
+    from scipy.signal import find_peaks as _find_peaks
+
+    if len(confident_frames) < 3:
+        return []
+
+    # Compute direction change at every confident frame
+    dc_values = []
+    dc_frames = []
+    for frame in confident_frames:
+        dc = compute_direction_change(ball_by_frame, frame, check_frames)
+        dc_values.append(dc)
+        dc_frames.append(frame)
+
+    if not dc_values:
+        return []
+
+    dc_array = np.array(dc_values)
+
+    # Find peaks in the direction-change signal
+    peak_indices, _ = _find_peaks(
+        dc_array,
+        height=min_angle_deg,
+        prominence=prominence,
+        distance=min_distance_frames,
+    )
+
+    return [dc_frames[i] for i in peak_indices]
+
+
 def _refine_candidates_to_trajectory_peak(
     candidate_frames: list[int],
     ball_by_frame: dict[int, BallPosition],
@@ -1880,8 +1937,26 @@ def detect_contacts(
         ball_by_frame, confident_frames, estimated_net_y, cfg.min_peak_distance_frames
     )
 
+    # Step 5g: Find direction-change peak candidates
+    # Detects the CAUSE of contact (peak trajectory change) rather than the
+    # EFFECT (velocity spike). Fills gaps where velocity/inflection generators
+    # fire >5 frames from the actual contact.
+    direction_change_frames: list[int] = []
+    if cfg.enable_direction_change_candidates:
+        direction_change_frames = _find_direction_change_candidates(
+            ball_by_frame,
+            confident_frames,
+            min_angle_deg=cfg.direction_change_candidate_min_deg,
+            check_frames=cfg.direction_check_frames,
+            min_distance_frames=cfg.min_peak_distance_frames,
+            prominence=cfg.direction_change_candidate_prominence,
+        )
+
     # Step 6: Merge all candidates.
-    # Priority: velocity peaks > inflections > reversals > deceleration > parabolic > net-crossing.
+    # Direction-change peaks get HIGHEST priority because they fire at the actual
+    # contact frame (cause), while velocity/inflection fire at the effect (velocity
+    # spike several frames later). When both fire within min_distance, the
+    # direction-change frame is kept — it's closer to GT and produces better features.
     # _merge_candidates keeps the first arg's frames, adding second arg's only
     # if no existing candidate is within min_distance_frames.
     inflection_and_reversal = _merge_candidates(
@@ -1899,9 +1974,15 @@ def detect_contacts(
         with_deceleration, parabolic_frames, cfg.min_peak_distance_frames
     )
     # Add net-crossing candidates (lowest priority — fills gaps from other detectors)
-    candidate_frames = _merge_candidates(
+    with_net_crossing = _merge_candidates(
         with_parabolic, net_crossing_frames, cfg.min_peak_distance_frames
     )
+    # Merge direction-change peaks LAST but with HIGHER priority: direction-change
+    # frames replace nearby velocity/inflection frames because they're closer to
+    # the actual contact. _merge_candidates keeps first arg, so we swap the order.
+    candidate_frames = _merge_candidates(
+        direction_change_frames, with_net_crossing, cfg.min_peak_distance_frames
+    ) if direction_change_frames else with_net_crossing
 
     # Step 5f: Player-motion candidates — detect contacts from player body motion
     # near the ball, even when ball trajectory doesn't change (blocks, soft touches)

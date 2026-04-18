@@ -36,6 +36,7 @@ from rallycut.tracking.contact_detector import (
     _count_consecutive_detections,
     _filter_noise_spikes,
     _find_deceleration_candidates,
+    _find_direction_change_candidates,
     _find_inflection_candidates,
     _find_nearest_player,
     _find_nearest_players,
@@ -200,9 +201,25 @@ def extract_candidate_features(
     with_parabolic = _merge_candidates(
         with_deceleration, parabolic_frames, cfg.min_peak_distance_frames
     )
-    candidate_frames = _merge_candidates(
+
+    # Direction-change peak candidates (must match detect_contacts merge order)
+    direction_change_frames: list[int] = []
+    if cfg.enable_direction_change_candidates:
+        direction_change_frames = _find_direction_change_candidates(
+            ball_by_frame, confident_frames,
+            min_angle_deg=cfg.direction_change_candidate_min_deg,
+            check_frames=cfg.direction_check_frames,
+            min_distance_frames=cfg.min_peak_distance_frames,
+            prominence=cfg.direction_change_candidate_prominence,
+        )
+
+    with_net_crossing = _merge_candidates(
         with_parabolic, net_crossing_frames, cfg.min_peak_distance_frames
     )
+    # Direction-change peaks get highest priority (closer to actual contact)
+    candidate_frames = _merge_candidates(
+        direction_change_frames, with_net_crossing, cfg.min_peak_distance_frames
+    ) if direction_change_frames else with_net_crossing
 
     # Build velocity lookup
     velocity_lookup = dict(zip(frames, smoothed))
