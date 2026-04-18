@@ -179,7 +179,7 @@ class ContactDetectionConfig:
     # corrects the common misalignment where generators detect the velocity peak
     # (effect of contact) several frames before the actual contact (cause).
     enable_trajectory_refinement: bool = True
-    trajectory_refinement_window: int = 3  # Search ±N frames for peak direction change
+    trajectory_refinement_window: int = 5  # Search ±N frames for peak direction change
 
     # Direction-change peak candidates: scan direction_change across all frames
     # and fire at local maxima above a threshold. Existing generators (velocity
