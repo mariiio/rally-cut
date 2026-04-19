@@ -81,6 +81,12 @@ class CandidateFeatures:
     nearest_active_arm_extension_change: float = 0.0
     nearest_pose_confidence_mean: float = 0.0
     nearest_both_arms_raised: float = 0.0
+    # Sequence model context: max non-background action probability from
+    # MS-TCN++ within ±5 frames. Provides temporal context that single-frame
+    # trajectory features lack — the model sees the full rally trajectory
+    # shape and player positions. Replaces the crude frames_since_last as
+    # the primary temporal signal. 0.0 when sequence model unavailable.
+    seq_max_nonbg: float = 0.0
 
     def to_array(self) -> np.ndarray:
         """Convert to numpy feature array for classifier input."""
@@ -111,6 +117,7 @@ class CandidateFeatures:
             self.nearest_active_arm_extension_change,
             self.nearest_pose_confidence_mean,
             self.nearest_both_arms_raised,
+            self.seq_max_nonbg,
         ], dtype=np.float64)
 
     @staticmethod
@@ -141,6 +148,7 @@ class CandidateFeatures:
             "nearest_active_arm_extension_change",
             "nearest_pose_confidence_mean",
             "nearest_both_arms_raised",
+            "seq_max_nonbg",
         ]
 
 

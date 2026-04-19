@@ -1104,6 +1104,21 @@ def main() -> None:
 
             match_teams = match_teams_by_rally.get(rally.rally_id)
 
+            # Compute MS-TCN++ per-frame action probs for the seq_max_nonbg
+            # contact classifier feature. The sequence model provides temporal
+            # context that single-frame trajectory features lack.
+            from rallycut.tracking.sequence_action_runtime import (  # noqa: PLC0415
+                get_sequence_probs,
+            )
+            seq_probs = get_sequence_probs(
+                ball_positions=ball_positions,
+                player_positions=player_positions,
+                court_split_y=rally.court_split_y,
+                frame_count=rally.frame_count or 0,
+                team_assignments=match_teams,
+                calibrator=calibrators.get(rally.video_id),
+            )
+
             contacts = detect_contacts(
                 ball_positions=ball_positions,
                 player_positions=player_positions,
@@ -1114,6 +1129,7 @@ def main() -> None:
                 use_classifier=not args.no_classifier,
                 team_assignments=match_teams,
                 court_calibrator=calibrators.get(rally.video_id),
+                sequence_probs=seq_probs,
             )
 
             # Build ReID predictions if classifier available for this video

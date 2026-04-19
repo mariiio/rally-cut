@@ -2099,6 +2099,17 @@ def detect_contacts(
             return False
         return bool(seq_peak_nonbg[lo:hi + 1].max() >= seq_recovery_tau)
 
+    def _get_seq_max_nonbg(frame: int, window: int = 5) -> float:
+        """Max non-background sequence model probability within ±window frames."""
+        if sequence_probs is None or sequence_probs.ndim != 2 or sequence_probs.shape[0] < 2:
+            return 0.0
+        t_seq = sequence_probs.shape[1]
+        lo = max(0, frame - window)
+        hi = min(t_seq - 1, frame + window)
+        if hi < lo:
+            return 0.0
+        return float(sequence_probs[1:, lo:hi + 1].max())
+
     net_zone = 0.08  # ±8% of screen around net
     contacts: list[Contact] = []
     prev_accepted_frame = 0  # Track ACCEPTED contacts for frames_since_last
@@ -2275,6 +2286,7 @@ def detect_contacts(
                 nearest_active_arm_extension_change=pose_arm_ext_change,
                 nearest_pose_confidence_mean=pose_conf_mean,
                 nearest_both_arms_raised=pose_both_arms_raised,
+                seq_max_nonbg=_get_seq_max_nonbg(frame),
             )
             results = classifier.predict([features])
             is_validated, confidence = results[0]

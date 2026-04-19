@@ -379,10 +379,16 @@ def extract_candidate_features(
         # Consecutive ball detections around frame
         consec = _count_consecutive_detections(ball_by_frame, frame)
 
-        # NOTE 2026-04-07: seq_p_* features removed from CandidateFeatures
-        # (audit found GBM importance exactly 0). `sequence_probs` parameter
-        # is retained on this function for backward compat with callers.
-        _ = sequence_probs  # explicitly mark as unused
+        # Sequence model context: max non-background probability within ±5 frames.
+        # Provides temporal context that single-frame features lack.
+        seq_max_nonbg = 0.0
+        if sequence_probs is not None and sequence_probs.ndim == 2 and sequence_probs.shape[0] >= 2:
+            t_seq = sequence_probs.shape[1]
+            window = 5
+            lo = max(0, frame - window)
+            hi = min(t_seq - 1, frame + window)
+            if hi >= lo:
+                seq_max_nonbg = float(sequence_probs[1:, lo:hi + 1].max())
 
         # Pose features for nearest player (0.0 when keypoints unavailable)
         (
@@ -426,6 +432,7 @@ def extract_candidate_features(
             nearest_active_arm_extension_change=pose_arm_ext_change,
             nearest_pose_confidence_mean=pose_conf_mean,
             nearest_both_arms_raised=pose_both_arms_raised,
+            seq_max_nonbg=seq_max_nonbg,
         )
 
         features_list.append(features)
@@ -500,10 +507,34 @@ def main() -> None:
     per_rally_table.add_column("Negative", justify="right")
     per_rally_table.add_column("GT Labels", justify="right")
 
+    # Pre-compute sequence model probs for all rallies (temporal context feature)
+    from rallycut.tracking.sequence_action_runtime import get_sequence_probs
+    console.print("[dim]Computing sequence model probs for temporal context...[/dim]")
+    seq_probs_cache: dict[str, np.ndarray | None] = {}
+    for rally in rallies:
+        bps = [
+            BallPos(frame_number=bp["frameNumber"], x=bp["x"], y=bp["y"],
+                    confidence=bp.get("confidence", 1.0))
+            for bp in (rally.ball_positions_json or [])
+            if bp.get("x", 0) > 0 or bp.get("y", 0) > 0
+        ]
+        _pps = [
+            PlayerPos(frame_number=pp["frameNumber"], track_id=pp["trackId"],
+                x=pp["x"], y=pp["y"], width=pp["width"], height=pp["height"],
+                confidence=pp.get("confidence", 1.0), keypoints=pp.get("keypoints"))
+            for pp in (rally.positions_json or [])
+        ]
+        seq_probs_cache[rally.rally_id] = get_sequence_probs(
+            bps, _pps, rally.court_split_y, rally.frame_count or 0, None,
+        )
+    n_with_seq = sum(1 for v in seq_probs_cache.values() if v is not None)
+    console.print(f"[dim]  {n_with_seq}/{len(rallies)} rallies have sequence probs[/dim]")
+
     for rally in rallies:
         gt_frames = [gt.frame for gt in rally.gt_labels]
         features_list, candidate_frames = extract_candidate_features(
             rally, config=contact_config, gt_frames=gt_frames,
+            sequence_probs=seq_probs_cache.get(rally.rally_id),
         )
 
         if not features_list:
