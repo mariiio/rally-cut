@@ -441,7 +441,7 @@ def extract_candidate_features(
 def label_candidates(
     candidate_frames: list[int],
     gt_labels: list[GtLabel],
-    tolerance: int = 5,
+    tolerance: int = 7,
 ) -> list[int]:
     """Label candidates as 1 (matches GT) or 0 (no match).
 
@@ -466,7 +466,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train contact classifier")
     parser.add_argument("--threshold", type=float, default=0.35, help="Classifier threshold (default: 0.35, end-to-end optimal)")
     parser.add_argument("--output", type=str, default="weights/contact_classifier/contact_classifier.pkl")
-    parser.add_argument("--tolerance", type=int, default=5, help="Frame tolerance for GT matching")
+    parser.add_argument("--tolerance", type=int, default=7, help="Frame tolerance for GT matching (default: 7, ~233ms at 30fps)")
     parser.add_argument("--positive-weight", type=float, default=1.0, help="Weight multiplier for positive samples (recall bias)")
     parser.add_argument("--config", type=str, help="JSON config overrides for ContactDetectionConfig")
     args = parser.parse_args()

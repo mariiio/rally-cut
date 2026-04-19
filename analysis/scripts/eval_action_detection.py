@@ -910,7 +910,7 @@ def _run_threshold_sweep(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate action detection vs ground truth")
     parser.add_argument("--rally", type=str, help="Specific rally ID to evaluate")
-    parser.add_argument("--tolerance-ms", type=int, default=167, help="Time tolerance in ms for matching (default: 167, ~5 frames at 30fps)")
+    parser.add_argument("--tolerance-ms", type=int, default=233, help="Time tolerance in ms for matching (default: 233, ~7 frames at 30fps). GT labels mark visual contact; trajectory change appears 3-9 frames later.")
     parser.add_argument("--stored", action="store_true", help="Use stored actions from DB instead of re-running detection (default: re-detect)")
     parser.add_argument("--config", type=str, help="JSON config overrides for ContactDetectionConfig")
     parser.add_argument("--classifier", type=str, help="Path to trained contact classifier model")
