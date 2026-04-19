@@ -195,8 +195,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Build action detection error corpus")
     parser.add_argument("--rally", type=str, help="Specific rally ID")
     parser.add_argument(
-        "--tolerance-ms", type=int, default=167,
-        help="Frame matching tolerance in ms (default: 167)",
+        "--tolerance-ms", type=int, default=233,
+        help="Frame matching tolerance in ms (default: 233, ~7 frames at 30fps)",
     )
     args = parser.parse_args()
 
