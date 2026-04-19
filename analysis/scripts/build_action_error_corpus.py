@@ -217,6 +217,33 @@ def main() -> None:
         print("  No contact classifier — using hand-tuned gates")
 
     video_ids = {r.video_id for r in rallies}
+
+    # Load court calibrations (must match eval pipeline)
+    from rallycut.court.calibration import CourtCalibrator
+    from rallycut.evaluation.tracking.db import load_court_calibration
+    calibrators: dict[str, CourtCalibrator | None] = {}
+    for vid in video_ids:
+        corners = load_court_calibration(vid)
+        if corners and len(corners) == 4:
+            cal = CourtCalibrator()
+            cal.calibrate([(c["x"], c["y"]) for c in corners])
+            calibrators[vid] = cal
+        else:
+            calibrators[vid] = None
+
+    # Fetch video names for dashboard display
+    video_names: dict[str, str] = {}
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT id, name FROM videos WHERE id = ANY(%s)",
+                    [list(video_ids)],
+                )
+                for vid, name in cur.fetchall():
+                    video_names[vid] = name or ""
+    except Exception:
+        pass  # Non-critical — dashboard works without names
     from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
     rally_pos_lookup: dict[str, list[PlayerPos]] = {}
     for r in rallies:
@@ -264,6 +291,7 @@ def main() -> None:
                     rec = {
                         "rally_id": rally.rally_id,
                         "video_id": rally.video_id,
+                        "video_name": video_names.get(rally.video_id, ""),
                         "fps": rally.fps,
                         "start_ms": rally.start_ms,
                         "gt_frame": gt.frame,
@@ -337,6 +365,7 @@ def main() -> None:
                 frame_count=rally.frame_count or None,
                 classifier=classifier,
                 team_assignments=match_teams,
+                court_calibrator=calibrators.get(rally.video_id),
                 sequence_probs=sequence_probs,
             )
 
@@ -411,6 +440,7 @@ def main() -> None:
                     rec = {
                         "rally_id": rally.rally_id,
                         "video_id": rally.video_id,
+                        "video_name": video_names.get(rally.video_id, ""),
                         "fps": rally.fps,
                         "start_ms": rally.start_ms,
                         "gt_frame": m.gt_frame,
@@ -448,6 +478,7 @@ def main() -> None:
                     rec = {
                         "rally_id": rally.rally_id,
                         "video_id": rally.video_id,
+                        "video_name": video_names.get(rally.video_id, ""),
                         "fps": rally.fps,
                         "start_ms": rally.start_ms,
                         "gt_frame": m.gt_frame,
@@ -485,6 +516,7 @@ def main() -> None:
                     rec = {
                         "rally_id": rally.rally_id,
                         "video_id": rally.video_id,
+                        "video_name": video_names.get(rally.video_id, ""),
                         "fps": rally.fps,
                         "start_ms": rally.start_ms,
                         "gt_frame": m.gt_frame,
