@@ -65,7 +65,7 @@ class CandidateFeatures:
     ball_y_relative_net: float  # Ball Y minus net_y (negative = far side)
     is_net_crossing: bool  # Ball crosses net_y within ±5 frames
     # Temporal features
-    frames_since_last: int  # Frames since previous candidate (0 if first)
+    frames_since_last: int  # Frames since previous accepted contact (0 if first)
     # Player bbox motion (peak frame-to-frame deltas in ±5 frames around candidate)
     best_player_max_d_y: float = 0.0  # Max d_y across all nearby players
     best_player_max_d_height: float = 0.0  # Max d_height across all nearby players

@@ -1576,11 +1576,32 @@ def _find_direction_change_candidates(
     return [dc_frames[i] for i in peak_indices]
 
 
+def compute_seq_max_nonbg(
+    sequence_probs: np.ndarray | None,
+    frame: int,
+    window: int = 5,
+) -> float:
+    """Max non-background sequence model probability within ±window frames.
+
+    Returns 0.0 when sequence_probs is None or the frame is out of range.
+    Used as a contact classifier feature providing temporal context from the
+    MS-TCN++ model that single-frame trajectory features lack.
+    """
+    if sequence_probs is None or sequence_probs.ndim != 2 or sequence_probs.shape[0] < 2:
+        return 0.0
+    t_seq = sequence_probs.shape[1]
+    lo = max(0, frame - window)
+    hi = min(t_seq - 1, frame + window)
+    if hi < lo:
+        return 0.0
+    return float(sequence_probs[1:, lo:hi + 1].max())
+
+
 def _refine_candidates_to_trajectory_peak(
     candidate_frames: list[int],
     ball_by_frame: dict[int, BallPosition],
     direction_check_frames: int = 8,
-    search_window: int = 3,
+    search_window: int = 5,
     first_frame: int = 0,
     serve_window_frames: int = 60,
 ) -> list[int]:
@@ -1592,7 +1613,7 @@ def _refine_candidates_to_trajectory_peak(
     ±search_window frames for the peak direction change.
 
     Constraints (informed by 364-rally diagnostic):
-    - Search window capped at ±3 frames (not ±8). Wider windows cause serves
+    - Search window capped at ±5 frames (not ±8). Wider windows cause serves
       to jump 8-16 frames to the ball-toss peak instead of the contact frame.
     - Candidates in the serve window (first 60 frames) are NOT refined — serve
       trajectories have multiple direction-change peaks (toss, contact, arc)
@@ -2034,7 +2055,7 @@ def detect_contacts(
                     candidate_frames = sorted(candidate_set_check | {receive_frame})
                     n_post_serve = 1
 
-    # Step 6b: Trajectory-peak refinement (constrained ±3 frames, skip serves).
+    # Step 6b: Trajectory-peak refinement (constrained ±5 frames, skip serves).
     # Shifts trajectory candidates to their local direction-change peak. Applied
     # BEFORE proximity candidates so proximity search starts from refined positions.
     if cfg.enable_trajectory_refinement:
@@ -2100,15 +2121,7 @@ def detect_contacts(
         return bool(seq_peak_nonbg[lo:hi + 1].max() >= seq_recovery_tau)
 
     def _get_seq_max_nonbg(frame: int, window: int = 5) -> float:
-        """Max non-background sequence model probability within ±window frames."""
-        if sequence_probs is None or sequence_probs.ndim != 2 or sequence_probs.shape[0] < 2:
-            return 0.0
-        t_seq = sequence_probs.shape[1]
-        lo = max(0, frame - window)
-        hi = min(t_seq - 1, frame + window)
-        if hi < lo:
-            return 0.0
-        return float(sequence_probs[1:, lo:hi + 1].max())
+        return compute_seq_max_nonbg(sequence_probs, frame, window)
 
     net_zone = 0.08  # ±8% of screen around net
     contacts: list[Contact] = []
@@ -2462,6 +2475,7 @@ def detect_contacts(
         f"{len(inflection_frames)} inflections + "
         f"{len(deceleration_frames)} decel + "
         f"{len(parabolic_frames)} parabolic + "
+        f"{len(direction_change_frames)} dir-change + "
         f"{len(net_crossing_frames)} net-cross + "
         f"{n_post_serve} post-serve + "
         f"{n_player_motion} player-motion + "

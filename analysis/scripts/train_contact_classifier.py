@@ -49,6 +49,7 @@ from rallycut.tracking.contact_detector import (
     _refine_candidates_to_trajectory_peak,
     _smooth_signal,
     compute_direction_change,
+    compute_seq_max_nonbg,
     estimate_net_position,
 )
 from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
@@ -74,7 +75,8 @@ def extract_candidate_features(
     Args:
         rally: Rally data with ball/player positions.
         config: Contact detection configuration.
-        sequence_probs: No-op, kept for backward compat.
+        sequence_probs: MS-TCN++ per-frame action probs (NUM_CLASSES, T).
+            Used to compute seq_max_nonbg feature for temporal context.
         gt_frames: Optional GT contact frames. When provided, frames_since_last
             is computed from the last GT-matched candidate (approximating
             inference semantics where it's measured from last accepted contact).
@@ -380,15 +382,7 @@ def extract_candidate_features(
         consec = _count_consecutive_detections(ball_by_frame, frame)
 
         # Sequence model context: max non-background probability within ±5 frames.
-        # Provides temporal context that single-frame features lack.
-        seq_max_nonbg = 0.0
-        if sequence_probs is not None and sequence_probs.ndim == 2 and sequence_probs.shape[0] >= 2:
-            t_seq = sequence_probs.shape[1]
-            window = 5
-            lo = max(0, frame - window)
-            hi = min(t_seq - 1, frame + window)
-            if hi >= lo:
-                seq_max_nonbg = float(sequence_probs[1:, lo:hi + 1].max())
+        seq_max_nonbg = compute_seq_max_nonbg(sequence_probs, frame)
 
         # Pose features for nearest player (0.0 when keypoints unavailable)
         (

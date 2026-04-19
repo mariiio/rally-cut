@@ -108,6 +108,18 @@ def extract_features_for_rally(
                 keypoints=kps,
             ))
 
+    # Compute sequence probs for seq_max_nonbg feature consistency
+    from rallycut.tracking.sequence_action_runtime import (  # noqa: PLC0415
+        get_sequence_probs,
+    )
+    seq_probs = get_sequence_probs(
+        ball_positions=ball_positions,
+        player_positions=player_positions,
+        court_split_y=rally.court_split_y,
+        frame_count=rally.frame_count or 0,
+        team_assignments=None,
+    )
+
     # Re-run contact detection
     contact_seq = detect_contacts(
         ball_positions=ball_positions,
@@ -115,6 +127,7 @@ def extract_features_for_rally(
         config=config,
         net_y=rally.court_split_y,
         frame_count=rally.frame_count or None,
+        sequence_probs=seq_probs,
     )
 
     if not contact_seq.contacts:
