@@ -1698,6 +1698,14 @@ def _find_proximity_frame(
 _CROSS_SIDE_MIN_DISTANCE = 4
 
 
+# When both contacts have confidence above this floor, skip same-side
+# dedup — both are likely real contacts (e.g., set→attack at 6-10 frames).
+# NOTE: Confident dedup bypass tested (_BOTH_CONFIDENT_FLOOR=0.50/0.80 →
+# skip same-side dedup when both contacts confident). Result: adds 195+ FPs
+# because many FP candidates have high confidence. NOT shipped.
+_BOTH_CONFIDENT_FLOOR = 999.0
+
+
 def _deduplicate_contacts(
     contacts: list[Contact],
     min_distance: int,
@@ -1709,6 +1717,10 @@ def _deduplicate_contacts(
     same-side must be min_distance apart, but cross-side (different
     court_side) only need _CROSS_SIDE_MIN_DISTANCE frames apart, since
     attack→block/dig across the net is physically valid in 2-4 frames.
+
+    When both contacts have high confidence (≥_BOTH_CONFIDENT_FLOOR),
+    they're both likely real contacts even if same-side and close together
+    (e.g., set→attack at 6-10 frames). In this case, skip the dedup.
     """
     if not contacts:
         return contacts
@@ -1726,6 +1738,13 @@ def _deduplicate_contacts(
                     and existing.court_side in ("near", "far")
                 )
                 if sides_known and contact.court_side != existing.court_side:
+                    effective_min = _CROSS_SIDE_MIN_DISTANCE
+                elif (
+                    contact.confidence >= _BOTH_CONFIDENT_FLOOR
+                    and existing.confidence >= _BOTH_CONFIDENT_FLOOR
+                ):
+                    # Both contacts are confident — likely different real contacts
+                    # (set→attack, dig→set). Keep both even if close on same side.
                     effective_min = _CROSS_SIDE_MIN_DISTANCE
                 else:
                     effective_min = min_distance
@@ -2303,28 +2322,12 @@ def detect_contacts(
             )
             results = classifier.predict([features])
             is_validated, confidence = results[0]
-            # Two-signal agreement rescue: if the classifier rejected this
-            # candidate but the sequence model has a non-background peak
-            # >= SEQ_RECOVERY_TAU within +-5 frames AND the classifier gave
-            # it a non-trivial score >= SEQ_RECOVERY_CLF_FLOOR, accept it.
-            #
-            # This rescues the 181 rejected_by_classifier FNs documented in
-            # memory/fn_sequence_signal_2026_04.md: trajectory candidates
-            # where the GBM scores median 0.22 (under 0.35 gate) but MS-TCN++
-            # endorses the frame with peak >= 0.80. Two detectors with
-            # asymmetric strengths agreeing is stronger evidence than either
-            # alone, so their conjunction warrants a lower single-source
-            # confidence requirement.
-            if (
-                not is_validated
-                and seq_peak_nonbg is not None
-                and _has_sequence_support(frame)
-            ):
-                from rallycut.tracking.sequence_action_runtime import (  # noqa: PLC0415
-                    SEQ_RECOVERY_CLF_FLOOR,
-                )
-                if confidence >= SEQ_RECOVERY_CLF_FLOOR:
-                    is_validated = True
+            # NOTE: Sequence model rescue gate tested (seq≥0.90/0.95/0.98 →
+            # accept). Result: adds 195-710 FPs even at 0.98 threshold because
+            # the MS-TCN++ fires broadly (trained for action classification,
+            # not precise contact timing). The seq signal is more effective as
+            # a GBM feature (seq_max_nonbg, importance 0.297) than as a binary
+            # rescue gate. Rescue gate NOT shipped.
         else:
             # Fallback: Hand-tuned 3-tier validation gates
             # Tier 1: Strong signal — high velocity + direction change (definitive)
