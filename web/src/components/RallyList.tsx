@@ -29,6 +29,7 @@ import MenuItem from '@mui/material/MenuItem';
 import ListItemIcon from '@mui/material/ListItemIcon';
 import ListItemText from '@mui/material/ListItemText';
 import AddIcon from '@mui/icons-material/Add';
+import ErrorOutlineIcon from '@mui/icons-material/ErrorOutline';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
@@ -39,7 +40,7 @@ import { Rally, Match } from '@/types/rally';
 import { designTokens } from '@/app/theme';
 import { ConfirmDialog } from './ConfirmDialog';
 import { ExportOptionsDialog, ExportOptions } from './ExportOptionsDialog';
-import { removeVideoFromSession, renameVideo, confirmRallies, getConfirmationStatus, restoreOriginalVideo } from '@/services/api';
+import { removeVideoFromSession, renameVideo, confirmRallies, getConfirmationStatus, restoreOriginalVideo, getMatchAnalysis } from '@/services/api';
 import { syncService } from '@/services/syncService';
 import { ConfirmationStatus } from '@/constants/enums';
 
@@ -124,6 +125,42 @@ export function RallyList() {
   const [exportType, setExportType] = useState<'match' | 'rally' | 'all'>('all');
   const [matchToDownload, setMatchToDownload] = useState<Match | null>(null);
   const [rallyToDownload, setRallyToDownload] = useState<Rally | null>(null);
+
+  // Per-rally identity confidence from match-analysis. Low-confidence rallies
+  // render a small warning badge so users can see where the crop-guided
+  // assignment was uncertain. Fetched once per active match; re-fetched
+  // whenever runMatchAnalysis completes (via window event, keeping this
+  // decoupled from the matchAnalysisService callback chain).
+  const [identityConfidenceByRally, setIdentityConfidenceByRally] = useState<
+    Record<string, number>
+  >({});
+  useEffect(() => {
+    if (!activeMatchId) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        // Match.id is the video UUID.
+        const analysis = await getMatchAnalysis(activeMatchId);
+        if (cancelled || !analysis) return;
+        const map: Record<string, number> = {};
+        for (const entry of analysis.rallies) {
+          map[entry.rallyId] = entry.assignmentConfidence;
+        }
+        setIdentityConfidenceByRally(map);
+      } catch {
+        // Non-fatal — no badge will render.
+      }
+    };
+    load();
+    // Refresh when a match-analysis run finishes (dispatched by the crop
+    // dialog's handleRerunMatching — listener keeps components decoupled).
+    const handler = () => load();
+    window.addEventListener('match-analysis-updated', handler);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('match-analysis-updated', handler);
+    };
+  }, [activeMatchId]);
 
   // Poll for confirmation status when confirming
   useEffect(() => {
@@ -672,6 +709,24 @@ export function RallyList() {
                             {rally.duration.toFixed(1)}s
                           </Typography>
                         </Box>
+
+                        {/* Identity-confidence badge (crop-guided match) */}
+                        {(() => {
+                          if (!rally._backendId) return null;
+                          const conf = identityConfidenceByRally[rally._backendId];
+                          if (conf === undefined || conf >= 0.45) return null;
+                          return (
+                            <Tooltip title={`Player identity uncertain (confidence ${(conf * 100).toFixed(0)}%). Open the Player Reference Crops dialog to add more distinctive crops.`}>
+                              <ErrorOutlineIcon
+                                sx={{
+                                  fontSize: 14,
+                                  color: 'warning.main',
+                                  flexShrink: 0,
+                                }}
+                              />
+                            </Tooltip>
+                          );
+                        })()}
 
                         {/* Highlight color dots */}
                         {rallyHighlights.length > 0 && (

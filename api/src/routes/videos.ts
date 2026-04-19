@@ -692,6 +692,121 @@ router.post(
 );
 
 /**
+ * POST /v1/videos/:id/player-reference-crops/validate
+ * Pre-flight check on the currently-assigned crops. Blocks "Re-run Matching"
+ * until prototypes are separable enough to produce reliable identity
+ * anchors (see analysis/rallycut/tracking/crop_guided_identity.py).
+ */
+router.post(
+  "/v1/videos/:id/player-reference-crops/validate",
+  requireUser,
+  validateRequest({ params: z.object({ id: uuidSchema }) }),
+  async (req, res, next) => {
+    try {
+      const video = await prisma.video.findFirst({
+        where: { id: req.params.id, userId: req.userId!, deletedAt: null },
+      });
+      if (!video) {
+        return res.status(404).json({ error: "Video not found" });
+      }
+      const { validateReferenceCrops } = await import(
+        "../services/referenceCropsService.js"
+      );
+      const result = await validateReferenceCrops(req.params.id);
+      return res.json(result);
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+/**
+ * POST /v1/videos/:id/player-reference-crops/suggest
+ * Compute ranked candidate reference crops per player slot using a
+ * diversity-aware sampler (farthest-point on DINOv2 embedding space +
+ * temporal spread). Requires match-analysis to have run at least once.
+ */
+router.post(
+  "/v1/videos/:id/player-reference-crops/suggest",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: z.object({
+      numCandidates: z.number().int().min(1).max(20).optional(),
+    }).optional(),
+  }),
+  async (req, res, next) => {
+    try {
+      const video = await prisma.video.findFirst({
+        where: { id: req.params.id, userId: req.userId!, deletedAt: null },
+      });
+      if (!video) {
+        return res.status(404).json({ error: "Video not found" });
+      }
+      const { suggestReferenceCrops } = await import(
+        "../services/referenceCropsService.js"
+      );
+      const numCandidates = req.body?.numCandidates ?? 6;
+      const result = await suggestReferenceCrops(req.params.id, numCandidates);
+      return res.json(result);
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+/**
+ * POST /v1/videos/:id/player-reference-crops/pre-assign
+ * Given a candidate list (typically from `/suggest`), return the player
+ * slot each candidate is most likely to belong to based on the current
+ * match-analysis trackToPlayer mapping. Used to pre-fill the dialog so
+ * users confirm instead of manually assigning.
+ */
+router.post(
+  "/v1/videos/:id/player-reference-crops/pre-assign",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+    body: z.object({
+      candidates: z.array(
+        z.object({
+          rallyId: z.string(),
+          trackId: z.number().int(),
+          frameMs: z.number().int().nonnegative(),
+          bbox: z.object({
+            x: z.number(),
+            y: z.number(),
+            w: z.number(),
+            h: z.number(),
+          }),
+          detectionConfidence: z.number(),
+        })
+      ),
+    }),
+  }),
+  async (req, res, next) => {
+    try {
+      const video = await prisma.video.findFirst({
+        where: { id: req.params.id, userId: req.userId!, deletedAt: null },
+      });
+      if (!video) {
+        return res.status(404).json({ error: "Video not found" });
+      }
+      const { preAssignCandidates } = await import(
+        "../services/referenceCropsService.js"
+      );
+      const preAssigned = await preAssignCandidates(
+        req.params.id,
+        req.body.candidates
+      );
+      return res.json({ candidates: preAssigned });
+    } catch (error) {
+      return next(error);
+    }
+  }
+);
+
+/**
  * DELETE /v1/videos/:id/player-reference-crops/:cropId
  * Delete a player reference crop
  */

@@ -23,7 +23,9 @@ import {
   getMatchAnalysis,
   getPlayerTrack,
   runMatchAnalysis,
+  validateReferenceCrops,
   type PlayerPosition as ApiPlayerPosition,
+  type ReferenceCropValidationResult,
 } from '@/services/api';
 
 const TRACK_COLORS = ['#4caf50', '#2196f3', '#ff9800', '#9c27b0'];
@@ -60,6 +62,8 @@ export function PlayerReferenceCropDialog({ open, videoId, onClose }: PlayerRefe
   const [saving, setSaving] = useState(false);
   const [rerunning, setRerunning] = useState(false);
   const [rerunStep, setRerunStep] = useState('');
+  const [validation, setValidation] = useState<ReferenceCropValidationResult | null>(null);
+  const [validating, setValidating] = useState(false);
 
   const proxyUrl = useEditorStore((state) => state.proxyUrl);
   const videoUrl = useEditorStore((state) => state.videoUrl);
@@ -267,6 +271,9 @@ export function PlayerReferenceCropDialog({ open, videoId, onClose }: PlayerRefe
       await runMatchAnalysis(videoId, (progress) => {
         setRerunStep(progress.step || `Step ${progress.index}/${progress.total}`);
       });
+      // Let other components (rally list confidence badge, match-stats)
+      // refresh without prop-drilling a callback.
+      window.dispatchEvent(new CustomEvent('match-analysis-updated', { detail: { videoId } }));
       setRerunStep('');
       setRerunning(false);
     } catch (error) {
@@ -285,6 +292,50 @@ export function PlayerReferenceCropDialog({ open, videoId, onClose }: PlayerRefe
     }
     return grouped;
   }, [referenceCrops]);
+
+  // Debounced pre-flight validator. Runs ~600 ms after any change to the
+  // user's crop selection. The validator short-circuits immediately if a
+  // player is missing crops (cheap SQL read) — only does DINOv2 prototype
+  // math when all 4 players have coverage, so the slow path only fires
+  // once the selection is complete.
+  useEffect(() => {
+    if (!open || !videoId || referenceCropsLoading) return;
+    if (referenceCrops.length === 0) {
+      setValidation(null);
+      return;
+    }
+
+    let cancelled = false;
+    setValidating(true);
+    const timeout = setTimeout(() => {
+      validateReferenceCrops(videoId)
+        .then((result) => {
+          if (!cancelled) setValidation(result);
+        })
+        .catch((err) => {
+          console.error('Reference-crop validation failed:', err);
+          if (!cancelled) setValidation(null);
+        })
+        .finally(() => {
+          if (!cancelled) setValidating(false);
+        });
+    }, 600);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeout);
+    };
+  }, [open, videoId, referenceCrops, referenceCropsLoading]);
+
+  const validationPassed = validation?.pass === true;
+  const blockingIssues = useMemo(
+    () => (validation?.issues ?? []).filter(i => i.code !== 'few_crops'),
+    [validation],
+  );
+  const warnings = useMemo(
+    () => (validation?.issues ?? []).filter(i => i.code === 'few_crops'),
+    [validation],
+  );
 
   const hasAnyCrops = referenceCrops.length > 0;
   const isLoading = totalToLoad > 0 && loadingProgress < totalToLoad;
@@ -316,14 +367,29 @@ export function PlayerReferenceCropDialog({ open, videoId, onClose }: PlayerRefe
                   {rerunStep}
                 </Typography>
               )}
-              <Button
-                color="inherit"
-                startIcon={rerunning ? <CircularProgress size={16} color="inherit" /> : <RefreshIcon />}
-                onClick={handleRerunMatching}
-                disabled={rerunning}
+              {validating && !rerunning && (
+                <Typography variant="body2" sx={{ color: 'grey.400', mr: 1 }}>
+                  Validating crops...
+                </Typography>
+              )}
+              <Tooltip
+                title={
+                  !validationPassed && blockingIssues.length > 0
+                    ? `Fix ${blockingIssues.length} issue${blockingIssues.length === 1 ? '' : 's'} below before re-running`
+                    : ''
+                }
               >
-                {rerunning ? 'Running...' : 'Re-run Matching'}
-              </Button>
+                <span>
+                  <Button
+                    color="inherit"
+                    startIcon={rerunning ? <CircularProgress size={16} color="inherit" /> : <RefreshIcon />}
+                    onClick={handleRerunMatching}
+                    disabled={rerunning || validating || !validationPassed}
+                  >
+                    {rerunning ? 'Running...' : 'Re-run Matching'}
+                  </Button>
+                </span>
+              </Tooltip>
             </>
           )}
         </Toolbar>
@@ -336,8 +402,61 @@ export function PlayerReferenceCropDialog({ open, videoId, onClose }: PlayerRefe
             Assigned Crops
           </Typography>
           <Typography variant="body2" sx={{ color: 'grey.500', mb: 2 }}>
-            Click a candidate on the right to assign it to a player. 2-4 crops per player recommended.
+            Click a candidate on the right to assign it to a player. Label
+            as many or as few players as you like — single-player labeling
+            is valid and will fix swaps involving that player. 2-4 diverse
+            crops per labeled player is recommended.
           </Typography>
+
+          {/* Pre-flight validation feedback */}
+          {validation && hasAnyCrops && (
+            <Box
+              sx={{
+                mb: 2,
+                p: 1.5,
+                borderRadius: 1,
+                bgcolor: validationPassed
+                  ? 'rgba(76, 175, 80, 0.08)'
+                  : 'rgba(244, 67, 54, 0.08)',
+                border: `1px solid ${
+                  validationPassed
+                    ? 'rgba(76, 175, 80, 0.3)'
+                    : 'rgba(244, 67, 54, 0.3)'
+                }`,
+              }}
+            >
+              <Typography
+                variant="body2"
+                sx={{
+                  fontWeight: 'bold',
+                  color: validationPassed ? 'success.light' : 'error.light',
+                  mb: blockingIssues.length > 0 || warnings.length > 0 ? 0.5 : 0,
+                }}
+              >
+                {validationPassed
+                  ? 'Crops look good — ready to re-run matching'
+                  : `${blockingIssues.length} issue${blockingIssues.length === 1 ? '' : 's'} to fix before re-running`}
+              </Typography>
+              {blockingIssues.map((issue, idx) => (
+                <Typography
+                  key={`block-${idx}`}
+                  variant="caption"
+                  sx={{ color: 'error.light', display: 'block', mt: 0.5 }}
+                >
+                  • {issue.message}
+                </Typography>
+              ))}
+              {warnings.map((issue, idx) => (
+                <Typography
+                  key={`warn-${idx}`}
+                  variant="caption"
+                  sx={{ color: 'warning.light', display: 'block', mt: 0.5 }}
+                >
+                  • {issue.message}
+                </Typography>
+              ))}
+            </Box>
+          )}
 
           {referenceCropsLoading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>

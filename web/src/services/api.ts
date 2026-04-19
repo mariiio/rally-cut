@@ -2128,6 +2128,111 @@ export async function deletePlayerReferenceCrop(videoId: string, cropId: string)
 }
 
 // ============================================================================
+// Reference-crop quality validator / suggester (Part A crop-guided identity)
+// ============================================================================
+
+export interface ReferenceCropValidationIssue {
+  code: string;
+  message: string;
+  playerId: number | null;
+}
+
+export interface ReferenceCropValidationResult {
+  videoId: string;
+  pass: boolean;
+  issues: ReferenceCropValidationIssue[];
+  cropCounts: Record<string, number>;
+}
+
+/**
+ * Run the pre-flight quality validator on the video's currently-assigned
+ * reference crops. The "Re-run Matching" button should stay disabled while
+ * `pass === false`; each issue's `message` is designed to be rendered
+ * inline with no further formatting.
+ */
+export async function validateReferenceCrops(videoId: string): Promise<ReferenceCropValidationResult> {
+  const response = await fetch(
+    `${API_BASE_URL}/v1/videos/${videoId}/player-reference-crops/validate`,
+    {
+      method: 'POST',
+      headers: getHeaders('application/json'),
+    },
+  );
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to validate reference crops: ${response.status}`);
+  }
+  return response.json();
+}
+
+export interface CandidateCropInfo {
+  rallyId: string;
+  trackId: number;
+  frameMs: number;
+  bbox: { x: number; y: number; w: number; h: number };
+  detectionConfidence: number;
+}
+
+export interface ReferenceCropSuggestions {
+  videoId: string;
+  candidates: Record<string, CandidateCropInfo[]>;
+}
+
+/**
+ * Diversity-aware candidate crops per player slot. Used to pre-populate the
+ * dialog with high-quality ranked candidates instead of ad-hoc auto-sampled
+ * ones.
+ */
+export async function suggestReferenceCrops(
+  videoId: string,
+  numCandidates = 6,
+): Promise<ReferenceCropSuggestions> {
+  const response = await fetch(
+    `${API_BASE_URL}/v1/videos/${videoId}/player-reference-crops/suggest`,
+    {
+      method: 'POST',
+      headers: getHeaders('application/json'),
+      body: JSON.stringify({ numCandidates }),
+    },
+  );
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to suggest reference crops: ${response.status}`);
+  }
+  return response.json();
+}
+
+export interface PreAssignedCandidate extends CandidateCropInfo {
+  suggestedPlayerId: number;
+  confidence: number;
+}
+
+/**
+ * Pre-assign candidate crops to player slots using the existing
+ * match-analysis trackToPlayer mapping. The dialog uses this to
+ * pre-fill the grid — user confirms instead of manually assigning.
+ */
+export async function preAssignReferenceCrops(
+  videoId: string,
+  candidates: CandidateCropInfo[],
+): Promise<PreAssignedCandidate[]> {
+  const response = await fetch(
+    `${API_BASE_URL}/v1/videos/${videoId}/player-reference-crops/pre-assign`,
+    {
+      method: 'POST',
+      headers: getHeaders('application/json'),
+      body: JSON.stringify({ candidates }),
+    },
+  );
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to pre-assign reference crops: ${response.status}`);
+  }
+  const data = await response.json();
+  return data.candidates;
+}
+
+// ============================================================================
 // Label Studio Integration (Ground Truth Labeling)
 // ============================================================================
 

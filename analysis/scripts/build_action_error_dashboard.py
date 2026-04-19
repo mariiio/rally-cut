@@ -298,6 +298,16 @@ const FEEDBACK_OPTIONS = {
 let currentTab = 'all';
 let openCards = new Set();
 
+function formatTimestamp(e) {
+  const startMs = e.start_ms || 0;
+  const fps = e.fps || 30;
+  const frameMs = (e.gt_frame || 0) / fps * 1000;
+  const totalSec = Math.round((startMs + frameMs) / 1000);
+  const min = Math.floor(totalSec / 60);
+  const sec = totalSec % 60;
+  return min + ':' + String(sec).padStart(2, '0');
+}
+
 function lsKey(e) { return 'aed_' + e.rally_id + '_' + e.gt_frame; }
 function getUserData(e) { try { return JSON.parse(localStorage.getItem(lsKey(e)) || 'null'); } catch { return null; } }
 function setUserData(e, d) { const x = getUserData(e) || {}; localStorage.setItem(lsKey(e), JSON.stringify({...x, ...d})); }
@@ -516,7 +526,8 @@ function renderContext(e) {
       <div class="ctx-item">Ball max gap: <strong>${rq.ball_max_gap_frames || '?'}f</strong></div>
       <div class="ctx-item">Players tracked: <strong>${rq.player_track_count || '?'}</strong></div>
       <div class="ctx-item">Rally: <strong>${(e.rally_id||'').substring(0,8)}</strong></div>
-      <div class="ctx-item">Video: <strong>${(e.video_id||'').substring(0,8)}</strong></div>
+      <div class="ctx-item">Video: <strong>${(e.video_id||'').substring(0,8)}</strong> ${e.video_name ? '(' + e.video_name + ')' : ''}</div>
+      <div class="ctx-item">Time: <strong>${formatTimestamp(e)}</strong></div>
       <div class="ctx-item">FPS: <strong>${e.fps}</strong></div>
     </div>
   `;
