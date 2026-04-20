@@ -745,11 +745,16 @@ class GameStateClassifier:
                     return_tensors="pt",
                 )
 
-            # Move to device
+            # Move to device and match model dtype (FP16 on Volta+)
             with profiler.time(
                 "videomae", "to_device", batch_size=batch_size, device=self.device
             ):
-                inputs = {k: v.to(self.device) for k, v in inputs.items()}
+                model_dtype = next(self._model.parameters()).dtype
+                inputs = {
+                    k: v.to(self.device).to(model_dtype) if v.is_floating_point()
+                    else v.to(self.device)
+                    for k, v in inputs.items()
+                }
 
             # Extract encoder features (not going through classifier head)
             with profiler.time(
@@ -762,6 +767,19 @@ class GameStateClassifier:
                 )
                 with ctx:
                     pixel_values = inputs["pixel_values"]
+
+                    # Belt-and-suspenders dtype match: torch.compile and some
+                    # HF models re-infer parameter dtype after wrapping. Cast
+                    # right before forward to match the layer that will do the
+                    # matmul, not just the root model.
+                    if self.model_variant == "v2":
+                        target_dtype = next(self._model.model.parameters()).dtype
+                    else:
+                        target_dtype = next(
+                            self._model.videomae.parameters()
+                        ).dtype
+                    if pixel_values.dtype != target_dtype:
+                        pixel_values = pixel_values.to(target_dtype)
 
                     if self.model_variant == "v2":
                         # VideoMAEv2 (AutoModel): model.model is VisionTransformer
