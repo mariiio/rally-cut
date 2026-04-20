@@ -86,6 +86,16 @@ class TransitionMatrix:
     ) -> float:
         """Log transition probability.
 
+        Backoff order when the exact (prev_action, gap_bucket, cross) triple
+        is not observed in the training data:
+          1. Same (prev, cross), adjacent gap bucket (bucket+1 first since
+             real transitions tend to skew later than expected due to
+             tracker lag; then bucket-1).
+          2. Same (prev, bucket), any cross label (last resort; cross-team
+             transitions are semantically distinct, so this can be wrong,
+             but it beats a pure uniform fallback).
+          3. Uniform ``1 / NUM_ACTIONS``.
+
         Args:
             prev_action: Previous accepted action, or None if no prior
                 acceptance (first contact in rally).
@@ -100,13 +110,25 @@ class TransitionMatrix:
             base = 0.35 if cur_action == "serve" else (0.65 / (NUM_ACTIONS - 1))
             return float(np.log(max(self.eps, base)))
 
-        key = f"{prev_action}|{_bucket(gap)}|{cross}"
-        row = self.probs.get(key)
+        target_bucket = _bucket(gap)
+
+        def _lookup(bucket_try: int, cross_try: str) -> dict[str, float] | None:
+            if not 0 <= bucket_try < len(GAP_BUCKETS):
+                return None
+            return self.probs.get(f"{prev_action}|{bucket_try}|{cross_try}")
+
+        # Primary + adjacent-bucket backoff (same cross).
+        row = (
+            _lookup(target_bucket, cross)
+            or _lookup(target_bucket + 1, cross)
+            or _lookup(target_bucket - 1, cross)
+        )
+        # Last-resort: same bucket, any other cross label.
         if row is None:
-            # Back off: ignore cross-team
             for alt in ("cross", "same", "unknown"):
-                alt_key = f"{prev_action}|{_bucket(gap)}|{alt}"
-                row = self.probs.get(alt_key)
+                if alt == cross:
+                    continue
+                row = _lookup(target_bucket, alt)
                 if row is not None:
                     break
         if row is None:
