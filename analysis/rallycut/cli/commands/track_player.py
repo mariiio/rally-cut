@@ -905,6 +905,7 @@ def _run_tracking(
             ContactDetectionConfig,
             detect_contacts,
         )
+        from rallycut.tracking.decoder_runtime import run_decoder_for_production
 
         if not quiet:
             console.print("\n[dim]Running action classification...[/dim]")
@@ -975,14 +976,30 @@ def _run_tracking(
         # Sequence recovery is integrated into `detect_contacts` itself when
         # `sequence_probs` is passed — see `ContactDetectionConfig.enable_sequence_recovery`
         # and `SEQ_RECOVERY_TAU` / `SEQ_RECOVERY_CLF_FLOOR` in sequence_action_runtime.py.
+        # Named config so the candidate decoder (below) sees the same knobs as
+        # detect_contacts — both call into the same candidate extraction path.
+        contact_cfg = ContactDetectionConfig()
         contact_seq = detect_contacts(
             ball_positions=ball_positions,
             player_positions=result.positions,
+            config=contact_cfg,
             net_y=result.court_split_y,
             frame_count=result.frame_count or None,
             team_assignments=verified_teams,
             court_calibrator=calibrator,
             sequence_probs=sequence_probs,
+        )
+
+        # Task 5 (2026-04-20): candidate decoder overlay runs alongside
+        # detect_contacts. Graceful fallback to [] when no trained classifier
+        # is on disk. `decoder_contacts` is consumed by classify_rally_actions
+        # to relabel accepted contacts using the Viterbi grammar decode
+        # (+2.64pp Action Acc on full 68-fold LOO A/B — Task 4 report).
+        decoder_contacts = run_decoder_for_production(
+            ball_positions=ball_positions,
+            player_positions=result.positions,
+            sequence_probs=sequence_probs,
+            contact_config=contact_cfg,
         )
 
         # `sequence_probs` threads MS-TCN++ into two effects:
@@ -997,6 +1014,7 @@ def _run_tracking(
             team_assignments=verified_teams,
             calibrator=calibrator,
             sequence_probs=sequence_probs,
+            decoder_contacts=decoder_contacts,
         )
 
         # Play annotations: attack direction, set zones, action zones.

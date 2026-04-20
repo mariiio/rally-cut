@@ -154,3 +154,33 @@ def run_decoder_over_rally(
         skip_penalty=skip_penalty,
         min_accept_prob=min_accept_prob,
     )
+
+
+def run_decoder_for_production(
+    ball_positions: list[BallPos],
+    player_positions: list[PlayerPos],
+    sequence_probs: np.ndarray | None,
+    contact_config: ContactDetectionConfig,
+) -> list[DecodedContact]:
+    """Production helper: loads the default contact classifier from disk and
+    runs the decoder over a rally. Returns [] when no trained classifier is
+    installed (graceful fallback — the overlay becomes a no-op and the
+    pipeline still runs).
+
+    CLI call sites pass the returned list directly to classify_rally_actions
+    as the decoder_contacts= kwarg. No feature flag — Task 4's 68-fold LOO
+    A/B validated +2.64pp Action Acc with zero F1 regression, so the overlay
+    runs unconditionally.
+    """
+    from rallycut.tracking.contact_classifier import load_contact_classifier
+
+    classifier = load_contact_classifier()
+    if classifier is None or not classifier.is_trained:
+        return []
+    return run_decoder_over_rally(
+        ball_positions=ball_positions,
+        player_positions=player_positions,
+        sequence_probs=sequence_probs,
+        classifier=classifier,
+        contact_config=contact_config,
+    )

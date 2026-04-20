@@ -52,7 +52,8 @@ def classify_actions(
     """
     from rallycut.tracking.action_classifier import classify_rally_actions
     from rallycut.tracking.ball_tracker import BallPosition
-    from rallycut.tracking.contact_detector import detect_contacts
+    from rallycut.tracking.contact_detector import ContactDetectionConfig, detect_contacts
+    from rallycut.tracking.decoder_runtime import run_decoder_for_production
     from rallycut.tracking.player_tracker import PlayerPosition
     from rallycut.tracking.sequence_action_runtime import get_sequence_probs
 
@@ -123,10 +124,13 @@ def classify_actions(
         data.get("frameCount") or 0, team_assignments,
     )
 
-    # Step 1: Contact detection
+    # Step 1: Contact detection. Named config so the candidate decoder sees
+    # the same knobs as detect_contacts (both drive candidate extraction).
+    contact_cfg = ContactDetectionConfig()
     contact_seq = detect_contacts(
         ball_positions=ball_positions,
         player_positions=player_positions if player_positions else None,
+        config=contact_cfg,
         net_y=court_split_y,
         frame_count=data.get("frameCount"),
         team_assignments=team_assignments,
@@ -137,6 +141,16 @@ def classify_actions(
         console.print(f"\n  Contacts detected: {contact_seq.num_contacts}")
         console.print(f"  Net Y estimate: {contact_seq.net_y:.3f}")
 
+    # Task 5 (2026-04-20): candidate decoder overlay. Graceful fallback to []
+    # when no trained classifier is on disk. +2.64pp Action Acc on 68-fold LOO
+    # (Task 4 A/B — reports/decoder_integration_2026_04_20.md).
+    decoder_contacts = run_decoder_for_production(
+        ball_positions=ball_positions,
+        player_positions=player_positions if player_positions else [],
+        sequence_probs=sequence_probs,
+        contact_config=contact_cfg,
+    )
+
     # Step 2: Action classification (includes the MS-TCN++ override internally
     # when sequence_probs is passed — mirrors track-players --actions so this
     # CLI matches production action classification behavior).
@@ -144,6 +158,7 @@ def classify_actions(
         contact_seq,
         team_assignments=team_assignments,
         sequence_probs=sequence_probs,
+        decoder_contacts=decoder_contacts,
     )
 
     if not quiet:
@@ -241,7 +256,8 @@ def rank_highlights(
     from rallycut.statistics.match_stats import compute_match_stats
     from rallycut.tracking.action_classifier import classify_rally_actions
     from rallycut.tracking.ball_tracker import BallPosition
-    from rallycut.tracking.contact_detector import detect_contacts
+    from rallycut.tracking.contact_detector import ContactDetectionConfig, detect_contacts
+    from rallycut.tracking.decoder_runtime import run_decoder_for_production
     from rallycut.tracking.player_tracker import PlayerPosition
     from rallycut.tracking.sequence_action_runtime import get_sequence_probs
 
@@ -300,17 +316,31 @@ def rank_highlights(
             ball_positions, player_positions, court_split_y,
             data.get("frameCount") or 0, ta,
         )
+        # Named config so the candidate decoder sees the same knobs as
+        # detect_contacts (both drive candidate extraction).
+        contact_cfg = ContactDetectionConfig()
         contact_seq = detect_contacts(
-            ball_positions, player_positions or None, net_y=court_split_y,
+            ball_positions, player_positions or None, config=contact_cfg,
+            net_y=court_split_y,
             frame_count=data.get("frameCount"),
             team_assignments=ta,
             sequence_probs=sequence_probs,
+        )
+        # Task 5 (2026-04-20): candidate decoder overlay. Graceful fallback to
+        # [] when no trained classifier is on disk. +2.64pp Action Acc on
+        # 68-fold LOO (Task 4 A/B — reports/decoder_integration_2026_04_20.md).
+        decoder_contacts = run_decoder_for_production(
+            ball_positions=ball_positions,
+            player_positions=player_positions,
+            sequence_probs=sequence_probs,
+            contact_config=contact_cfg,
         )
         rally_actions = classify_rally_actions(
             contact_seq,
             rally_id=rally_id,
             team_assignments=ta,
             sequence_probs=sequence_probs,
+            decoder_contacts=decoder_contacts,
         )
 
         # Compute rally stats
