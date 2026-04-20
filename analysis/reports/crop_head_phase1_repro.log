@@ -1,0 +1,19 @@
+device: mps
+Split: train=53 val=5 test=10
+  train pos=1292 neg=2156 pos_weight=1.67
+  val n=493  test n=902
+   train_loss=0.7785 val_auc=0.8361 (35.3s)
+   train_loss=0.6337 val_auc=0.8560 (36.6s)
+   train_loss=0.6049 val_auc=0.8521 (36.3s)
+   train_loss=0.5446 val_auc=0.8461 (35.3s)
+   train_loss=0.5356 val_auc=0.8548 (35.9s)
+   train_loss=0.5073 val_auc=0.8550 (36.0s)
+   train_loss=0.4789 val_auc=0.8602 (36.0s)
+   train_loss=0.4307 val_auc=0.8673 (39.6s)
+   train_loss=0.4173 val_auc=0.8703 (40.8s)
+Saved checkpoint: weights/crop_head/phase1_repro_seed42.pt
+
+Report: 
+/Users/mario/Personal/Projects/RallyCut/analysis/reports/crop_head_phase1_probe_
+2026-04-20.md
+Verdict: PASS

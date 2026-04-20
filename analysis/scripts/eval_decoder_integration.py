@@ -28,6 +28,7 @@ import logging
 import sys
 import time
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -38,9 +39,11 @@ from rich.table import Table
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from rallycut.evaluation.tracking.db import get_video_path
 from rallycut.tracking.action_classifier import classify_rally_actions
 from rallycut.tracking.candidate_decoder import TransitionMatrix
 from rallycut.tracking.contact_detector import ContactDetectionConfig, detect_contacts
+from rallycut.tracking.crop_head_emitter import CropHeadContactClassifier
 from rallycut.tracking.decoder_runtime import run_decoder_over_rally
 from scripts.eval_action_detection import (
     compute_metrics,
@@ -88,11 +91,18 @@ def _eval_rally_both_arms(
     transitions: TransitionMatrix,
     tolerance_ms: int,
     skip_penalty: float,
+    emitter_factory: Callable[[RallyPrecomputed], Any] | None = None,
 ) -> tuple[ArmResult, ArmResult]:
     """Evaluate ONE rally under both arms.
 
     Same fold-trained classifiers for both arms; the only difference is
     whether ``decoder_contacts`` is passed to ``classify_rally_actions``.
+
+    When ``emitter_factory`` is provided, the experimental arm uses the
+    factory-produced emitter for ``run_decoder_over_rally`` while the
+    baseline arm keeps using the GBM ``contact_clf`` for
+    ``detect_contacts``. This swaps ONLY the decoder's internal emission
+    source — the ``detect_contacts`` path stays on GBM in both arms.
     """
     rally = pre.rally
     _inject_action_classifier(action_clf if action_clf.is_trained else None)
@@ -113,11 +123,14 @@ def _eval_rally_both_arms(
             sequence_probs=pre.sequence_probs,
         )
 
+        decoder_emitter = (
+            emitter_factory(pre) if emitter_factory is not None else contact_clf
+        )
         decoder_contacts = run_decoder_over_rally(
             ball_positions=pre.ball_positions,
             player_positions=pre.player_positions,
             sequence_probs=pre.sequence_probs,
-            classifier=contact_clf,
+            classifier=decoder_emitter,
             contact_config=contact_cfg,
             gt_frames=[gt.frame for gt in rally.gt_labels],
             transitions=transitions,
@@ -395,7 +408,24 @@ def main() -> int:
     parser.add_argument("--out-json", type=str, default=None,
                         help="JSON report path (default: "
                              "reports/decoder_integration_<date>.json)")
+    parser.add_argument(
+        "--emitter",
+        choices=["gbm", "crop_head"],
+        default="gbm",
+        help="Decoder emission source. 'gbm' (default) keeps current "
+             "production. 'crop_head' swaps the decoder's internal emitter "
+             "for CropHeadContactClassifier — the baseline arm stays on GBM.",
+    )
+    parser.add_argument(
+        "--crop-head-weights",
+        type=str,
+        default=None,
+        help="Path to the crop-head checkpoint .pt. Required with --emitter=crop_head.",
+    )
     args = parser.parse_args()
+
+    if args.emitter == "crop_head" and not args.crop_head_weights:
+        parser.error("--emitter=crop_head requires --crop-head-weights PATH")
 
     today = date.today().isoformat().replace("-", "_")
     default_md = f"reports/decoder_integration_{today}.md"
@@ -445,6 +475,42 @@ def main() -> int:
     console.print(
         f"[dim]Loaded transitions: {len(transitions.probs)} contexts[/dim]"
     )
+
+    # --- Experimental-arm emitter factory ---
+    emitter_factory: Callable[[RallyPrecomputed], Any] | None = None
+    video_path_cache: dict[str, Path] = {}
+    if args.emitter == "crop_head":
+        ckpt_path = Path(args.crop_head_weights)
+        if not ckpt_path.exists():
+            console.print(f"[red]Crop-head checkpoint missing: {ckpt_path}[/red]")
+            return 1
+        console.print(
+            f"[bold]Emitter:[/bold] crop_head weights={ckpt_path}"
+        )
+
+        def _crop_head_factory(pre: RallyPrecomputed) -> Any:
+            video_id = pre.rally.video_id
+            vpath = video_path_cache.get(video_id)
+            if vpath is None:
+                resolved = get_video_path(video_id)
+                if resolved is None:
+                    raise RuntimeError(
+                        f"Could not resolve video path for {video_id}"
+                    )
+                vpath = resolved
+                video_path_cache[video_id] = vpath
+            rally_start_frame = round(pre.rally.start_ms * pre.rally.fps / 1000)
+            return CropHeadContactClassifier(
+                checkpoint_path=ckpt_path,
+                video_path=vpath,
+                rally_start_frame=rally_start_frame,
+                ball_positions=pre.ball_positions,
+                player_positions=pre.player_positions,
+            )
+        emitter_factory = _crop_head_factory
+    else:
+        console.print("[bold]Emitter:[/bold] gbm (default)")
+
     console.print(
         f"[bold]Running {len(video_ids)}-fold A/B "
         "(baseline vs decoder overlay)...[/bold]"
@@ -471,6 +537,7 @@ def main() -> int:
             base_arm, over_arm = _eval_rally_both_arms(
                 pre, contact_clf, action_clf, contact_cfg,
                 transitions, args.tolerance_ms, args.skip_penalty,
+                emitter_factory=emitter_factory,
             )
             fold_base_arms.append(base_arm)
             fold_over_arms.append(over_arm)

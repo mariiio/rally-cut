@@ -11,7 +11,7 @@ so production and eval paths use the same code.
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import numpy as np
 
@@ -29,9 +29,22 @@ from rallycut.tracking.candidate_decoder import (
 from rallycut.tracking.candidate_decoder import (
     CandidateFeatures as DecoderCandidateFeatures,
 )
-from rallycut.tracking.contact_classifier import ContactClassifier
 from rallycut.tracking.contact_detector import ContactDetectionConfig
 from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
+
+
+def _is_new_style_emitter(classifier: Any) -> bool:
+    """Distinguish new-style emitters (e.g. CropHeadContactClassifier)
+    from legacy :class:`ContactClassifier` instances.
+
+    New-style emitters consume the candidate list directly and expose a
+    top-level ``predict_proba``. The legacy classifier stores the sklearn
+    GBM at ``self.model`` and pads/truncates a 26-dim feature matrix
+    before calling ``self.model.predict_proba``. We use the presence of a
+    public ``.model`` attribute as the discriminator — new-style emitters
+    intentionally store their torch model at ``self._torch_model``.
+    """
+    return hasattr(classifier, "predict_proba") and not hasattr(classifier, "model")
 
 
 def _build_candidate_features(
@@ -85,16 +98,20 @@ def run_decoder_over_rally(
     ball_positions: list[BallPos],
     player_positions: list[PlayerPos],
     sequence_probs: np.ndarray | None,
-    classifier: ContactClassifier,
+    classifier: Any,
     contact_config: ContactDetectionConfig,
     gt_frames: list[int] | None = None,
     transitions: TransitionMatrix | None = None,
     skip_penalty: float = 1.0,
     min_accept_prob: float = 0.0,
 ) -> list[DecodedContact]:
-    """Run candidate extraction → GBM scoring → Viterbi decode.
+    """Run candidate extraction → emitter scoring → Viterbi decode.
 
     Args:
+        classifier: either a legacy :class:`ContactClassifier` (sklearn GBM
+            at ``.model``) OR a new-style emitter exposing a top-level
+            ``predict_proba(candidates) -> (N, 2)`` and ``is_trained: bool``
+            (e.g. :class:`rallycut.tracking.crop_head_emitter.CropHeadContactClassifier`).
         gt_frames: pass when available (training/eval) so frames_since_last
             uses GT-matched semantics. None in production.
         transitions: defaults to TransitionMatrix.default() (shipped JSON).
@@ -112,8 +129,13 @@ def run_decoder_over_rally(
     from rallycut.tracking.contact_detector import _RallyDataShim
     from scripts.train_contact_classifier import extract_candidate_features
 
-    if classifier.model is None:
-        return []
+    # Early return: untrained classifier → no-op overlay.
+    if _is_new_style_emitter(classifier):
+        if not getattr(classifier, "is_trained", False):
+            return []
+    else:
+        if getattr(classifier, "model", None) is None:
+            return []
     if transitions is None:
         transitions = TransitionMatrix.default()
 
@@ -129,14 +151,20 @@ def run_decoder_over_rally(
     )
     if not feats_list:
         return []
-    x_mat = np.array([f.to_array() for f in feats_list], dtype=np.float64)
-    expected = classifier.model.n_features_in_
-    if x_mat.shape[1] > expected:
-        x_mat = x_mat[:, :expected]
-    elif x_mat.shape[1] < expected:
-        pad = np.zeros((x_mat.shape[0], expected - x_mat.shape[1]))
-        x_mat = np.hstack([x_mat, pad])
-    gbm_probs = classifier.model.predict_proba(x_mat)[:, 1]
+
+    if _is_new_style_emitter(classifier):
+        # New-style emitter consumes the candidate objects directly.
+        gbm_probs = classifier.predict_proba(feats_list)[:, 1]
+    else:
+        # Legacy ContactClassifier: feed the 26-dim feature matrix.
+        x_mat = np.array([f.to_array() for f in feats_list], dtype=np.float64)
+        expected = classifier.model.n_features_in_
+        if x_mat.shape[1] > expected:
+            x_mat = x_mat[:, :expected]
+        elif x_mat.shape[1] < expected:
+            pad = np.zeros((x_mat.shape[0], expected - x_mat.shape[1]))
+            x_mat = np.hstack([x_mat, pad])
+        gbm_probs = classifier.model.predict_proba(x_mat)[:, 1]
 
     ball_by_frame: dict[int, BallPos] = {}
     for bp in ball_positions:

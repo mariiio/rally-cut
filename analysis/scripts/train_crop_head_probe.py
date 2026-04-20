@@ -227,6 +227,12 @@ def main() -> int:
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--out-report", type=str, default=None)
     parser.add_argument("--out-json", type=str, default=None)
+    parser.add_argument(
+        "--save-checkpoint",
+        type=str,
+        default=None,
+        help="Path to save the best (val-AUC-peak) state_dict.",
+    )
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -290,6 +296,7 @@ def main() -> int:
     # --- Training loop ---
     best_val_auc = -1.0
     best_state = None
+    best_epoch = 0
     epoch_rows = []
     for epoch in range(1, args.epochs + 1):
         t0 = time.time()
@@ -305,7 +312,24 @@ def main() -> int:
         epoch_rows.append({"epoch": epoch, "train_loss": train_loss, "val_auc": val_auc, "dt_s": dt})
         if val_auc > best_val_auc:
             best_val_auc = val_auc
+            best_epoch = epoch
             best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+
+    # --- Save best checkpoint (before test eval so config dict survives) ---
+    if args.save_checkpoint and best_state is not None:
+        ckpt_path = Path(args.save_checkpoint)
+        ckpt_path.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({
+            "state_dict": best_state,
+            "input_kind": getattr(args, "input_kind", "concat"),
+            "pool_kind": getattr(args, "pool_kind", "mean"),
+            "backbone_kind": getattr(args, "backbone_kind", "frozen"),
+            "t_window": getattr(args, "t_window", 9),
+            "best_val_auc": best_val_auc,
+            "epoch": best_epoch,
+            "seed": args.seed,
+        }, ckpt_path)
+        console.print(f"[bold]Saved checkpoint:[/bold] {ckpt_path}")
 
     # --- Load best model + eval on test ---
     if best_state is not None:
