@@ -573,7 +573,7 @@ EOF
 - Create: `analysis/scripts/train_crop_head_probe.py`
 
 **Design:**
-- Video-level LOO-style split: 60 train / 5 val / 3 test (hold-out the 3 test videos consistently, across the whole Phase 1).
+- Video-level split: **53 train / 5 val / 10 test** (hold out the 10 test videos consistently across Phase 1). Rationale: 10 test videos ≈ 300 samples total; at 30-50 positives per group the binomial SE is ≈3pp, making the 15pp orthogonality gap gate robust at 95% confidence. A smaller test set (e.g. 3 videos) leaves the gate marginally detectable and risks false-NO-GO on noise. Select the 10 test videos deterministically (sorted video_id, every 7th) for reproducibility.
 - Training: frozen backbone (no gradients to it), only MLP head trained. AdamW(lr=1e-3, weight_decay=1e-4). BCEWithLogitsLoss with `pos_weight` to balance classes. Batch size 64. Epochs 15.
 - Eval on held-out 3 test videos:
   - AUC (overall) and per-class (serve/receive/set/attack/dig/block)
