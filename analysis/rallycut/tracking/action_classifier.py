@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, overload
 
+from rallycut.tracking.candidate_decoder import DecodedContact
 from rallycut.tracking.contact_detector import Contact, ContactSequence, ball_crossed_net
 
 if TYPE_CHECKING:
@@ -3379,6 +3380,7 @@ def classify_rally_actions(
     formation_semantic_flip: bool = False,
     camera_height: float = 0.0,
     sequence_probs: np.ndarray | None = None,
+    decoder_contacts: list[DecodedContact] | None = None,
 ) -> RallyActions:
     """Convenience function to classify actions in a rally.
 
@@ -3541,5 +3543,11 @@ def classify_rally_actions(
     if sequence_probs is not None:
         from rallycut.tracking.sequence_action_runtime import apply_sequence_override
         apply_sequence_override(result, sequence_probs)
+
+    if decoder_contacts is not None:
+        from rallycut.tracking.decoder_overlay import apply_decoder_labels
+        result, _overlay_stat = apply_decoder_labels(
+            result, decoder_contacts, tol_frames=3,
+        )
 
     return result
