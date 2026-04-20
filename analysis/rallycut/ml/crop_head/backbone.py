@@ -1,6 +1,8 @@
 """Frozen ImageNet-pretrained ResNet-18 feature extractor for crop inputs."""
 from __future__ import annotations
 
+from typing import cast
+
 import torch
 import torch.nn as nn
 from torchvision import models
@@ -27,6 +29,8 @@ class FrozenResNet18(nn.Module):
 
     @torch.no_grad()
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = (x - self.mean) / self.std
-        feat = self.backbone(x)
+        mean = cast(torch.Tensor, self.mean)
+        std = cast(torch.Tensor, self.std)
+        x = (x - mean) / std
+        feat: torch.Tensor = self.backbone(x)
         return feat.flatten(1)

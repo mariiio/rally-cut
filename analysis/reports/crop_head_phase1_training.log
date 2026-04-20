@@ -1,0 +1,24 @@
+device: mps
+Split: train=53 val=5 test=10
+  train pos=1292 neg=2156 pos_weight=1.67
+  val n=493  test n=902
+   train_loss=0.7785 val_auc=0.8361 (38.6s)
+   train_loss=0.6337 val_auc=0.8560 (36.2s)
+   train_loss=0.6049 val_auc=0.8521 (35.3s)
+   train_loss=0.5446 val_auc=0.8461 (35.5s)
+   train_loss=0.5356 val_auc=0.8548 (35.2s)
+   train_loss=0.5073 val_auc=0.8550 (35.9s)
+   train_loss=0.4789 val_auc=0.8602 (35.6s)
+   train_loss=0.4307 val_auc=0.8673 (35.1s)
+   train_loss=0.4173 val_auc=0.8703 (35.6s)
+   train_loss=0.3787 val_auc=0.8582 (35.1s)
+   train_loss=0.3757 val_auc=0.8656 (35.2s)
+   train_loss=0.3447 val_auc=0.8614 (36.7s)
+   train_loss=0.3407 val_auc=0.8623 (35.8s)
+   train_loss=0.2845 val_auc=0.8628 (35.8s)
+   train_loss=0.2857 val_auc=0.8573 (35.7s)
+
+Report: 
+/Users/mario/Personal/Projects/RallyCut/analysis/reports/crop_head_phase1_probe_
+2026-04-20.md
+Verdict: PASS

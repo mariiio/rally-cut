@@ -24,4 +24,5 @@ class CropHeadMLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         pooled = x.mean(dim=1)
-        return self.net(pooled).squeeze(-1)
+        out: torch.Tensor = self.net(pooled)
+        return out.squeeze(-1)
