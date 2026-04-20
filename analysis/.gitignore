@@ -36,6 +36,8 @@ htmlcov/
 # Session 5 — small result/corpus files, committed for reproducibility.
 !reports/occlusion_resolver/events.json
 !reports/occlusion_resolver/event_scores.json
+# Candidate decoder — runtime-loaded transition matrix (committed for reproducibility).
+!rallycut/data/contact_transitions.json
 
 # Pseudo-labels and training frames (generated from database)
 experiments/pseudo_labels*/

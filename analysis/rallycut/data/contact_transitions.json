@@ -1,0 +1,547 @@
+{
+  "gap_buckets": [
+    "0-5",
+    "6-15",
+    "16-40",
+    "41-120",
+    "121-+"
+  ],
+  "actions": [
+    "serve",
+    "receive",
+    "set",
+    "attack",
+    "dig",
+    "block"
+  ],
+  "laplace_alpha": 0.5,
+  "counts": {
+    "serve|receive|3|cross": 63,
+    "receive|set|3|same": 150,
+    "set|attack|3|same": 258,
+    "serve|receive|3|same": 36,
+    "receive|set|3|cross": 62,
+    "set|attack|3|cross": 117,
+    "receive|attack|3|cross": 5,
+    "attack|dig|3|same": 14,
+    "dig|set|3|same": 91,
+    "attack|dig|2|same": 52,
+    "dig|set|3|cross": 45,
+    "set|dig|4|cross": 1,
+    "receive|dig|3|same": 3,
+    "dig|attack|3|cross": 13,
+    "serve|receive|2|unknown": 21,
+    "receive|set|3|unknown": 23,
+    "set|attack|3|unknown": 35,
+    "attack|dig|1|unknown": 4,
+    "dig|attack|3|same": 23,
+    "attack|dig|2|unknown": 15,
+    "dig|set|3|unknown": 20,
+    "dig|set|2|same": 25,
+    "dig|attack|3|unknown": 4,
+    "serve|receive|2|same": 54,
+    "attack|dig|2|cross": 105,
+    "dig|set|2|cross": 10,
+    "serve|receive|2|cross": 150,
+    "attack|dig|3|cross": 58,
+    "attack|attack|3|cross": 5,
+    "receive|attack|3|unknown": 3,
+    "attack|dig|3|unknown": 3,
+    "attack|dig|1|same": 9,
+    "attack|dig|1|cross": 26,
+    "dig|attack|1|same": 1,
+    "dig|attack|2|same": 14,
+    "dig|attack|1|cross": 1,
+    "set|attack|2|same": 31,
+    "attack|block|0|same": 9,
+    "set|attack|2|cross": 8,
+    "attack|block|0|cross": 16,
+    "block|dig|2|same": 1,
+    "receive|set|2|same": 20,
+    "serve|receive|3|unknown": 6,
+    "attack|attack|2|cross": 11,
+    "receive|attack|3|same": 15,
+    "receive|dig|3|cross": 6,
+    "set|dig|3|same": 3,
+    "block|dig|1|same": 3,
+    "dig|dig|3|same": 2,
+    "block|dig|2|cross": 6,
+    "receive|set|2|unknown": 6,
+    "receive|set|2|cross": 8,
+    "dig|dig|3|cross": 7,
+    "block|dig|2|unknown": 4,
+    "attack|attack|2|same": 5,
+    "attack|block|0|unknown": 2,
+    "set|attack|4|same": 2,
+    "attack|block|1|cross": 1,
+    "block|set|2|same": 1,
+    "dig|attack|2|unknown": 3,
+    "attack|block|2|cross": 1,
+    "attack|dig|4|cross": 1,
+    "serve|set|3|cross": 1,
+    "set|set|3|same": 1,
+    "block|attack|3|same": 1,
+    "set|attack|2|unknown": 3,
+    "attack|attack|1|same": 1,
+    "dig|attack|2|cross": 3,
+    "receive|attack|2|cross": 3,
+    "dig|set|2|unknown": 2,
+    "receive|dig|4|cross": 1,
+    "dig|set|4|same": 1,
+    "set|dig|3|cross": 2,
+    "attack|set|1|cross": 1,
+    "receive|attack|2|same": 4,
+    "receive|dig|2|same": 1,
+    "attack|attack|3|same": 1,
+    "dig|dig|4|cross": 1,
+    "block|set|3|unknown": 1,
+    "dig|dig|2|same": 1,
+    "attack|set|2|cross": 2,
+    "set|set|2|same": 1,
+    "attack|block|1|same": 1,
+    "dig|receive|3|cross": 1
+  },
+  "probs": {
+    "serve|3|cross": {
+      "serve": 0.007462686567164179,
+      "receive": 0.9477611940298507,
+      "set": 0.022388059701492536,
+      "attack": 0.007462686567164179,
+      "dig": 0.007462686567164179,
+      "block": 0.007462686567164179
+    },
+    "receive|3|same": {
+      "serve": 0.0029239766081871343,
+      "receive": 0.0029239766081871343,
+      "set": 0.8801169590643275,
+      "attack": 0.09064327485380116,
+      "dig": 0.02046783625730994,
+      "block": 0.0029239766081871343
+    },
+    "set|3|same": {
+      "serve": 0.0018867924528301887,
+      "receive": 0.0018867924528301887,
+      "set": 0.005660377358490566,
+      "attack": 0.9754716981132076,
+      "dig": 0.013207547169811321,
+      "block": 0.0018867924528301887
+    },
+    "serve|3|same": {
+      "serve": 0.01282051282051282,
+      "receive": 0.9358974358974359,
+      "set": 0.01282051282051282,
+      "attack": 0.01282051282051282,
+      "dig": 0.01282051282051282,
+      "block": 0.01282051282051282
+    },
+    "receive|3|cross": {
+      "serve": 0.006578947368421052,
+      "receive": 0.006578947368421052,
+      "set": 0.8223684210526315,
+      "attack": 0.07236842105263158,
+      "dig": 0.08552631578947369,
+      "block": 0.006578947368421052
+    },
+    "set|3|cross": {
+      "serve": 0.004098360655737705,
+      "receive": 0.004098360655737705,
+      "set": 0.004098360655737705,
+      "attack": 0.9631147540983607,
+      "dig": 0.020491803278688523,
+      "block": 0.004098360655737705
+    },
+    "attack|3|same": {
+      "serve": 0.027777777777777776,
+      "receive": 0.027777777777777776,
+      "set": 0.027777777777777776,
+      "attack": 0.08333333333333333,
+      "dig": 0.8055555555555556,
+      "block": 0.027777777777777776
+    },
+    "dig|3|same": {
+      "serve": 0.004201680672268907,
+      "receive": 0.004201680672268907,
+      "set": 0.7689075630252101,
+      "attack": 0.19747899159663865,
+      "dig": 0.02100840336134454,
+      "block": 0.004201680672268907
+    },
+    "attack|2|same": {
+      "serve": 0.008333333333333333,
+      "receive": 0.008333333333333333,
+      "set": 0.008333333333333333,
+      "attack": 0.09166666666666666,
+      "dig": 0.875,
+      "block": 0.008333333333333333
+    },
+    "dig|3|cross": {
+      "serve": 0.007246376811594203,
+      "receive": 0.021739130434782608,
+      "set": 0.6594202898550725,
+      "attack": 0.1956521739130435,
+      "dig": 0.10869565217391304,
+      "block": 0.007246376811594203
+    },
+    "set|4|cross": {
+      "serve": 0.125,
+      "receive": 0.125,
+      "set": 0.125,
+      "attack": 0.125,
+      "dig": 0.375,
+      "block": 0.125
+    },
+    "serve|2|unknown": {
+      "serve": 0.020833333333333332,
+      "receive": 0.8958333333333334,
+      "set": 0.020833333333333332,
+      "attack": 0.020833333333333332,
+      "dig": 0.020833333333333332,
+      "block": 0.020833333333333332
+    },
+    "receive|3|unknown": {
+      "serve": 0.017241379310344827,
+      "receive": 0.017241379310344827,
+      "set": 0.8103448275862069,
+      "attack": 0.1206896551724138,
+      "dig": 0.017241379310344827,
+      "block": 0.017241379310344827
+    },
+    "set|3|unknown": {
+      "serve": 0.013157894736842105,
+      "receive": 0.013157894736842105,
+      "set": 0.013157894736842105,
+      "attack": 0.9342105263157895,
+      "dig": 0.013157894736842105,
+      "block": 0.013157894736842105
+    },
+    "attack|1|unknown": {
+      "serve": 0.07142857142857142,
+      "receive": 0.07142857142857142,
+      "set": 0.07142857142857142,
+      "attack": 0.07142857142857142,
+      "dig": 0.6428571428571429,
+      "block": 0.07142857142857142
+    },
+    "attack|2|unknown": {
+      "serve": 0.027777777777777776,
+      "receive": 0.027777777777777776,
+      "set": 0.027777777777777776,
+      "attack": 0.027777777777777776,
+      "dig": 0.8611111111111112,
+      "block": 0.027777777777777776
+    },
+    "dig|3|unknown": {
+      "serve": 0.018518518518518517,
+      "receive": 0.018518518518518517,
+      "set": 0.7592592592592593,
+      "attack": 0.16666666666666666,
+      "dig": 0.018518518518518517,
+      "block": 0.018518518518518517
+    },
+    "dig|2|same": {
+      "serve": 0.011627906976744186,
+      "receive": 0.011627906976744186,
+      "set": 0.5930232558139535,
+      "attack": 0.3372093023255814,
+      "dig": 0.03488372093023256,
+      "block": 0.011627906976744186
+    },
+    "serve|2|same": {
+      "serve": 0.008771929824561403,
+      "receive": 0.956140350877193,
+      "set": 0.008771929824561403,
+      "attack": 0.008771929824561403,
+      "dig": 0.008771929824561403,
+      "block": 0.008771929824561403
+    },
+    "attack|2|cross": {
+      "serve": 0.004098360655737705,
+      "receive": 0.004098360655737705,
+      "set": 0.020491803278688523,
+      "attack": 0.0942622950819672,
+      "dig": 0.8647540983606558,
+      "block": 0.012295081967213115
+    },
+    "dig|2|cross": {
+      "serve": 0.03125,
+      "receive": 0.03125,
+      "set": 0.65625,
+      "attack": 0.21875,
+      "dig": 0.03125,
+      "block": 0.03125
+    },
+    "serve|2|cross": {
+      "serve": 0.0032679738562091504,
+      "receive": 0.9836601307189542,
+      "set": 0.0032679738562091504,
+      "attack": 0.0032679738562091504,
+      "dig": 0.0032679738562091504,
+      "block": 0.0032679738562091504
+    },
+    "attack|3|cross": {
+      "serve": 0.007575757575757576,
+      "receive": 0.007575757575757576,
+      "set": 0.007575757575757576,
+      "attack": 0.08333333333333333,
+      "dig": 0.8863636363636364,
+      "block": 0.007575757575757576
+    },
+    "attack|3|unknown": {
+      "serve": 0.08333333333333333,
+      "receive": 0.08333333333333333,
+      "set": 0.08333333333333333,
+      "attack": 0.08333333333333333,
+      "dig": 0.5833333333333334,
+      "block": 0.08333333333333333
+    },
+    "attack|1|same": {
+      "serve": 0.03571428571428571,
+      "receive": 0.03571428571428571,
+      "set": 0.03571428571428571,
+      "attack": 0.10714285714285714,
+      "dig": 0.6785714285714286,
+      "block": 0.10714285714285714
+    },
+    "attack|1|cross": {
+      "serve": 0.016129032258064516,
+      "receive": 0.016129032258064516,
+      "set": 0.04838709677419355,
+      "attack": 0.016129032258064516,
+      "dig": 0.8548387096774194,
+      "block": 0.04838709677419355
+    },
+    "dig|1|same": {
+      "serve": 0.125,
+      "receive": 0.125,
+      "set": 0.125,
+      "attack": 0.375,
+      "dig": 0.125,
+      "block": 0.125
+    },
+    "dig|1|cross": {
+      "serve": 0.125,
+      "receive": 0.125,
+      "set": 0.125,
+      "attack": 0.375,
+      "dig": 0.125,
+      "block": 0.125
+    },
+    "set|2|same": {
+      "serve": 0.014285714285714285,
+      "receive": 0.014285714285714285,
+      "set": 0.04285714285714286,
+      "attack": 0.9,
+      "dig": 0.014285714285714285,
+      "block": 0.014285714285714285
+    },
+    "attack|0|same": {
+      "serve": 0.041666666666666664,
+      "receive": 0.041666666666666664,
+      "set": 0.041666666666666664,
+      "attack": 0.041666666666666664,
+      "dig": 0.041666666666666664,
+      "block": 0.7916666666666666
+    },
+    "set|2|cross": {
+      "serve": 0.045454545454545456,
+      "receive": 0.045454545454545456,
+      "set": 0.045454545454545456,
+      "attack": 0.7727272727272727,
+      "dig": 0.045454545454545456,
+      "block": 0.045454545454545456
+    },
+    "attack|0|cross": {
+      "serve": 0.02631578947368421,
+      "receive": 0.02631578947368421,
+      "set": 0.02631578947368421,
+      "attack": 0.02631578947368421,
+      "dig": 0.02631578947368421,
+      "block": 0.868421052631579
+    },
+    "block|2|same": {
+      "serve": 0.1,
+      "receive": 0.1,
+      "set": 0.3,
+      "attack": 0.1,
+      "dig": 0.3,
+      "block": 0.1
+    },
+    "receive|2|same": {
+      "serve": 0.017857142857142856,
+      "receive": 0.017857142857142856,
+      "set": 0.7321428571428571,
+      "attack": 0.16071428571428573,
+      "dig": 0.05357142857142857,
+      "block": 0.017857142857142856
+    },
+    "serve|3|unknown": {
+      "serve": 0.05555555555555555,
+      "receive": 0.7222222222222222,
+      "set": 0.05555555555555555,
+      "attack": 0.05555555555555555,
+      "dig": 0.05555555555555555,
+      "block": 0.05555555555555555
+    },
+    "block|1|same": {
+      "serve": 0.08333333333333333,
+      "receive": 0.08333333333333333,
+      "set": 0.08333333333333333,
+      "attack": 0.08333333333333333,
+      "dig": 0.5833333333333334,
+      "block": 0.08333333333333333
+    },
+    "block|2|cross": {
+      "serve": 0.05555555555555555,
+      "receive": 0.05555555555555555,
+      "set": 0.05555555555555555,
+      "attack": 0.05555555555555555,
+      "dig": 0.7222222222222222,
+      "block": 0.05555555555555555
+    },
+    "receive|2|unknown": {
+      "serve": 0.05555555555555555,
+      "receive": 0.05555555555555555,
+      "set": 0.7222222222222222,
+      "attack": 0.05555555555555555,
+      "dig": 0.05555555555555555,
+      "block": 0.05555555555555555
+    },
+    "receive|2|cross": {
+      "serve": 0.03571428571428571,
+      "receive": 0.03571428571428571,
+      "set": 0.6071428571428571,
+      "attack": 0.25,
+      "dig": 0.03571428571428571,
+      "block": 0.03571428571428571
+    },
+    "block|2|unknown": {
+      "serve": 0.07142857142857142,
+      "receive": 0.07142857142857142,
+      "set": 0.07142857142857142,
+      "attack": 0.07142857142857142,
+      "dig": 0.6428571428571429,
+      "block": 0.07142857142857142
+    },
+    "attack|0|unknown": {
+      "serve": 0.1,
+      "receive": 0.1,
+      "set": 0.1,
+      "attack": 0.1,
+      "dig": 0.1,
+      "block": 0.5
+    },
+    "set|4|same": {
+      "serve": 0.1,
+      "receive": 0.1,
+      "set": 0.1,
+      "attack": 0.5,
+      "dig": 0.1,
+      "block": 0.1
+    },
+    "dig|2|unknown": {
+      "serve": 0.0625,
+      "receive": 0.0625,
+      "set": 0.3125,
+      "attack": 0.4375,
+      "dig": 0.0625,
+      "block": 0.0625
+    },
+    "attack|4|cross": {
+      "serve": 0.125,
+      "receive": 0.125,
+      "set": 0.125,
+      "attack": 0.125,
+      "dig": 0.375,
+      "block": 0.125
+    },
+    "block|3|same": {
+      "serve": 0.125,
+      "receive": 0.125,
+      "set": 0.125,
+      "attack": 0.375,
+      "dig": 0.125,
+      "block": 0.125
+    },
+    "set|2|unknown": {
+      "serve": 0.08333333333333333,
+      "receive": 0.08333333333333333,
+      "set": 0.08333333333333333,
+      "attack": 0.5833333333333334,
+      "dig": 0.08333333333333333,
+      "block": 0.08333333333333333
+    },
+    "receive|4|cross": {
+      "serve": 0.125,
+      "receive": 0.125,
+      "set": 0.125,
+      "attack": 0.125,
+      "dig": 0.375,
+      "block": 0.125
+    },
+    "dig|4|same": {
+      "serve": 0.125,
+      "receive": 0.125,
+      "set": 0.375,
+      "attack": 0.125,
+      "dig": 0.125,
+      "block": 0.125
+    },
+    "dig|4|cross": {
+      "serve": 0.125,
+      "receive": 0.125,
+      "set": 0.125,
+      "attack": 0.125,
+      "dig": 0.375,
+      "block": 0.125
+    },
+    "block|3|unknown": {
+      "serve": 0.125,
+      "receive": 0.125,
+      "set": 0.375,
+      "attack": 0.125,
+      "dig": 0.125,
+      "block": 0.125
+    }
+  },
+  "marginals": {
+    "serve|serve": 0.0,
+    "serve|receive": 0.9969788519637462,
+    "serve|set": 0.0030211480362537764,
+    "serve|attack": 0.0,
+    "serve|dig": 0.0,
+    "serve|block": 0.0,
+    "receive|serve": 0.0,
+    "receive|receive": 0.0,
+    "receive|set": 0.867741935483871,
+    "receive|attack": 0.0967741935483871,
+    "receive|dig": 0.035483870967741936,
+    "receive|block": 0.0,
+    "set|serve": 0.0,
+    "set|receive": 0.0,
+    "set|set": 0.004329004329004329,
+    "set|attack": 0.9826839826839827,
+    "set|dig": 0.012987012987012988,
+    "set|block": 0.0,
+    "attack|serve": 0.0,
+    "attack|receive": 0.0,
+    "attack|set": 0.008746355685131196,
+    "attack|attack": 0.06705539358600583,
+    "attack|dig": 0.8367346938775511,
+    "attack|block": 0.08746355685131195,
+    "dig|serve": 0.0,
+    "dig|receive": 0.0037313432835820895,
+    "dig|set": 0.7238805970149254,
+    "dig|attack": 0.23134328358208955,
+    "dig|dig": 0.041044776119402986,
+    "dig|block": 0.0,
+    "block|serve": 0.0,
+    "block|receive": 0.0,
+    "block|set": 0.11764705882352941,
+    "block|attack": 0.058823529411764705,
+    "block|dig": 0.8235294117647058,
+    "block|block": 0.0
+  },
+  "kl_mean": 0.8195851113932194,
+  "kl_median": 0.8225076233243989,
+  "verdict": "PARTIAL STRUCTURE \u2014 PROCEED WITH CAUTION"
+}
