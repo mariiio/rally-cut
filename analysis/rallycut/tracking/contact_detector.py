@@ -2500,3 +2500,45 @@ def detect_contacts(
         ball_positions=confident_positions,
         player_positions=player_positions or [],
     )
+
+
+@dataclass
+class _RallyDataShim:
+    """Minimal RallyData substitute for scripts.train_contact_classifier.extract_candidate_features.
+
+    Matches the attribute subset that function reads:
+      ball_positions_json, positions_json, court_split_y, frame_count,
+      gt_labels (optional — only iterated by the trainer caller, never by
+      ``extract_candidate_features`` itself when ``gt_frames`` is passed).
+
+    Not for general use — only by `decoder_runtime.run_decoder_over_rally`.
+    """
+    ball_positions_json: list[dict]
+    positions_json: list[dict]
+    court_split_y: float | None
+    frame_count: int
+    gt_labels: list  # accepts GtLabel or [] — never iterated when gt_frames passed
+
+    @classmethod
+    def from_positions(
+        cls,
+        ball_positions: list[BallPosition],
+        player_positions: list[PlayerPosition],
+    ) -> _RallyDataShim:
+        ball_json = [
+            {
+                "frameNumber": bp.frame_number,
+                "x": bp.x,
+                "y": bp.y,
+                "confidence": bp.confidence,
+            }
+            for bp in ball_positions
+        ]
+        player_json = [pp.to_dict() for pp in player_positions]
+        return cls(
+            ball_positions_json=ball_json,
+            positions_json=player_json,
+            court_split_y=None,
+            frame_count=max((bp.frame_number for bp in ball_positions), default=0) + 1,
+            gt_labels=[],
+        )
