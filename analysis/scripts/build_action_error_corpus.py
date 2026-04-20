@@ -147,6 +147,36 @@ def compute_rally_quality(rally: RallyData) -> RallyQuality:
     )
 
 
+def _seq_peak_at_frame(
+    sequence_probs: "np.ndarray | None",
+    frame: int,
+    window: int = 5,
+) -> tuple[float, str, float]:
+    """Return (peak_nonbg_prob, argmax_action_name, argmax_action_prob) within ±window.
+
+    Mirrors the rescue-gate window in contact_detector.py:2132-2140 so the
+    corpus field is directly comparable to SEQ_RECOVERY_TAU=0.80. Returns
+    (0.0, "", 0.0) when sequence_probs is unavailable.
+    """
+    if sequence_probs is None or sequence_probs.size == 0:
+        return 0.0, "", 0.0
+    from rallycut.tracking.candidate_decoder import ACTIONS as _SEQ_ACTIONS  # local
+    T = sequence_probs.shape[1]
+    lo = max(0, frame - window)
+    hi = min(T - 1, frame + window)
+    if hi < lo:
+        return 0.0, "", 0.0
+    win = sequence_probs[1:, lo:hi + 1]
+    if win.size == 0:
+        return 0.0, "", 0.0
+    peak_nonbg = float(win.max())
+    peak_col = int(win.max(axis=0).argmax())
+    peak_channel = int(win[:, peak_col].argmax())
+    peak_action = _SEQ_ACTIONS[peak_channel] if 0 <= peak_channel < len(_SEQ_ACTIONS) else ""
+    peak_prob = float(win[peak_channel, peak_col])
+    return peak_nonbg, peak_action, peak_prob
+
+
 def compute_contact_quality(
     rally: RallyData,
     gt_frame: int,
@@ -420,6 +450,7 @@ def main() -> None:
             ]
             fn_diagnostics = diagnose_rally_fns(
                 rally, fn_labels, classifier, tolerance_frames,
+                sequence_probs=sequence_probs,
             )
             fn_diag_map = {d.gt_frame: d for d in fn_diagnostics}
 
@@ -461,6 +492,9 @@ def main() -> None:
                         "direction_change_deg": diag.direction_change_deg if diag else 0.0,
                         "player_distance": diag.player_distance if diag else float("inf"),
                         "player_present": diag.player_present if diag else False,
+                        "seq_peak_nonbg_within_5f": diag.seq_peak_nonbg_within_5f if diag else 0.0,
+                        "seq_peak_action": diag.seq_peak_action if diag else "",
+                        "seq_peak_action_prob": diag.seq_peak_action_prob if diag else 0.0,
                         **asdict(cq),
                     }
                     f_corpus.write(json.dumps(rec, default=str) + "\n")
@@ -474,6 +508,9 @@ def main() -> None:
                         if p.get("frame") == m.pred_frame:
                             pred = p
                             break
+                    seq_peak, seq_act, seq_prob = _seq_peak_at_frame(
+                        sequence_probs, m.gt_frame,
+                    )
 
                     rec = {
                         "rally_id": rally.rally_id,
@@ -499,6 +536,9 @@ def main() -> None:
                         "direction_change_deg": 0.0,
                         "player_distance": 0.0,
                         "player_present": True,
+                        "seq_peak_nonbg_within_5f": seq_peak,
+                        "seq_peak_action": seq_act,
+                        "seq_peak_action_prob": seq_prob,
                         **asdict(cq),
                     }
                     f_corpus.write(json.dumps(rec, default=str) + "\n")
@@ -512,6 +552,9 @@ def main() -> None:
                         if p.get("frame") == m.pred_frame:
                             pred = p
                             break
+                    seq_peak, seq_act, seq_prob = _seq_peak_at_frame(
+                        sequence_probs, m.gt_frame,
+                    )
 
                     rec = {
                         "rally_id": rally.rally_id,
@@ -537,6 +580,9 @@ def main() -> None:
                         "direction_change_deg": 0.0,
                         "player_distance": 0.0,
                         "player_present": True,
+                        "seq_peak_nonbg_within_5f": seq_peak,
+                        "seq_peak_action": seq_act,
+                        "seq_peak_action_prob": seq_prob,
                         **asdict(cq),
                     }
                     f_corpus.write(json.dumps(rec, default=str) + "\n")

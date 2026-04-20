@@ -101,6 +101,14 @@ class FNDiagnostic:
     nearest_candidate_accepted: bool  # Was it accepted by classifier?
     classifier_confidence: float  # Classifier score of nearest candidate (0 if none)
 
+    # MS-TCN++ sequence signal near GT frame (within ±5f).
+    # Populated when sequence_probs is passed through; 0.0 / "" when absent.
+    # Enables slicing FNs by "below CLF_FLOOR but strong seq" vs "no seq signal"
+    # without re-running get_sequence_probs downstream.
+    seq_peak_nonbg_within_5f: float = 0.0  # max over non-bg action channels, ±5f window
+    seq_peak_action: str = ""              # argmax action at the peak frame ("" if no seq)
+    seq_peak_action_prob: float = 0.0      # prob of that argmax action
+
 
 def _reconstruct_ball_player_data(
     rally: RallyData,
@@ -387,8 +395,24 @@ def diagnose_rally_fns(
     fn_labels: list[GtLabel],
     classifier: ContactClassifier | None,
     tolerance_frames: int,
+    sequence_probs: "np.ndarray | None" = None,
 ) -> list[FNDiagnostic]:
-    """Compute diagnostics for each FN contact in a rally."""
+    """Compute diagnostics for each FN contact in a rally.
+
+    ``sequence_probs``: optional MS-TCN++ per-frame probs shaped
+    ``(NUM_CLASSES, T)`` with channel 0 = background and channels 1..6
+    matching ``ACTIONS`` from ``candidate_decoder``. When present, each FN
+    record is annotated with the seq peak + argmax within ±5f of the GT
+    frame, so downstream audits can separate ``rejected_by_classifier`` FNs
+    that had strong seq support (below CLF_FLOOR) from those without.
+    """
+    # Action labels for argmax decoding of sequence_probs. Kept local to
+    # avoid importing candidate_decoder at module scope (heavyweight).
+    if sequence_probs is not None:
+        from rallycut.tracking.candidate_decoder import ACTIONS as _SEQ_ACTIONS
+    else:
+        _SEQ_ACTIONS = []  # unused
+
     if not fn_labels:
         return []
 
@@ -579,6 +603,28 @@ def diagnose_rally_fns(
         else:
             category = "no_candidate"
 
+        # Seq peak ±5f around GT frame. Uses the same window as the
+        # production rescue gate (contact_detector.py:2132-2140) so the
+        # recorded value is directly comparable to SEQ_RECOVERY_TAU=0.80.
+        seq_peak_nonbg = 0.0
+        seq_peak_action_name = ""
+        seq_peak_prob = 0.0
+        if sequence_probs is not None and sequence_probs.size > 0:
+            T = sequence_probs.shape[1]
+            lo = max(0, frame - 5)
+            hi = min(T - 1, frame + 5)
+            if hi >= lo:
+                # Non-bg peak (channels 1..end, i.e. drop background at 0)
+                window = sequence_probs[1:, lo:hi + 1]
+                if window.size > 0:
+                    seq_peak_nonbg = float(window.max())
+                    # Argmax action at the peak frame within window
+                    peak_col = int(window.max(axis=0).argmax())
+                    peak_action_channel = int(window[:, peak_col].argmax())
+                    seq_peak_prob = float(window[peak_action_channel, peak_col])
+                    if 0 <= peak_action_channel < len(_SEQ_ACTIONS):
+                        seq_peak_action_name = _SEQ_ACTIONS[peak_action_channel]
+
         diagnostics.append(FNDiagnostic(
             rally_id=rally.rally_id,
             gt_frame=frame,
@@ -596,6 +642,9 @@ def diagnose_rally_fns(
             nearest_candidate_distance=nearest_candidate_distance,
             nearest_candidate_accepted=nearest_candidate_accepted,
             classifier_confidence=classifier_confidence,
+            seq_peak_nonbg_within_5f=seq_peak_nonbg,
+            seq_peak_action=seq_peak_action_name,
+            seq_peak_action_prob=seq_peak_prob,
         ))
 
     return diagnostics

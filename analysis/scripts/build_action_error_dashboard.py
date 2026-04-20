@@ -55,29 +55,71 @@ def friendly_category(e: dict) -> str:
 def friendly_reason(e: dict) -> str:
     ec = e.get("error_class", "")
     fn_cat = e.get("fn_subcategory", "")
+    seq_peak = e.get("seq_peak_nonbg_within_5f", 0.0)
+    seq_act = e.get("seq_peak_action", "")
+    seq_prob = e.get("seq_peak_action_prob", 0.0)
+    seq_suffix = ""
+    if seq_peak:
+        seq_suffix = f" · seq={seq_act}({seq_prob:.2f})"
 
     if ec == "FN_contact":
         if fn_cat == "ball_dropout":
-            return f"Ball lost for {e.get('ball_gap_frames', '?')} frames around this contact"
+            return f"Ball lost for {e.get('ball_gap_frames', '?')} frames around this contact{seq_suffix}"
         if fn_cat == "rejected_by_classifier":
             conf = e.get("classifier_conf", 0)
-            return f"Contact candidate found but scored too low ({conf:.2f}, needs 0.35)"
+            return (
+                f"Candidate scored {conf:.2f} (threshold 0.40, rescue floor 0.20)"
+                f"{seq_suffix}"
+            )
         if fn_cat == "rejected_by_gates":
-            return "Contact candidate found but rejected by validation rules"
+            return f"Candidate rejected by validation rules{seq_suffix}"
         if fn_cat == "no_player_nearby":
-            return "Ball contact detected but no player close enough"
+            return f"Candidate fired but no player in 0.15 radius{seq_suffix}"
         if fn_cat == "deduplicated":
-            return "Contact merged with a nearby stronger contact"
+            return f"Contact merged with a nearby stronger contact{seq_suffix}"
         if fn_cat == "no_candidate":
-            return "Ball trajectory didn't show enough change to trigger detection"
+            return f"Ball trajectory didn't trigger any candidate generator{seq_suffix}"
         if fn_cat == "no_ball_data":
             return "No ball tracking data for this rally"
         return fn_cat or "Unknown reason"
     elif ec == "wrong_action":
-        return f"Detected as '{e.get('pred_action', '?')}' instead of '{e.get('gt_action', '?')}'"
+        return (
+            f"Detected as '{e.get('pred_action', '?')}' instead of "
+            f"'{e.get('gt_action', '?')}'{seq_suffix}"
+        )
     elif ec == "wrong_player":
-        return f"Attributed to player T{e.get('pred_player_track_id', '?')} instead of T{e.get('gt_player_track_id', '?')}"
+        return (
+            f"Attributed to T{e.get('pred_player_track_id', '?')} instead of "
+            f"T{e.get('gt_player_track_id', '?')}{seq_suffix}"
+        )
     return ""
+
+
+def decoder_rescuable(e: dict) -> bool:
+    """Matches the seq argmax == gt_action AND seq_prob ≥ 0.80 signature.
+
+    Only meaningful on FN_contact + wrong_action — the decoder fuses
+    emissions for the contact-accept / action-label decision. It does not
+    touch player attribution, so wrong_player records are always marked
+    non-rescuable here regardless of seq signal.
+    """
+    if e.get("error_class") == "wrong_player":
+        return False
+    if e.get("seq_peak_action") != e.get("gt_action"):
+        return False
+    return float(e.get("seq_peak_action_prob", 0.0)) >= 0.80
+
+
+def seq_disagreement(e: dict) -> bool:
+    """`rejected_by_classifier` FN where GBM ≈ 0 but seq ≈ 1 — the §2.1
+    max-margin disagreement audit bucket."""
+    if e.get("error_class") != "FN_contact":
+        return False
+    if e.get("fn_subcategory") != "rejected_by_classifier":
+        return False
+    if float(e.get("classifier_conf", 0.0)) >= 0.05:
+        return False
+    return float(e.get("seq_peak_nonbg_within_5f", 0.0)) >= 0.95
 
 
 def generate_html(errors: list[dict[str, Any]], tags: dict[str, dict[str, str]]) -> str:
@@ -88,6 +130,8 @@ def generate_html(errors: list[dict[str, Any]], tags: dict[str, dict[str, str]])
         e["_reason"] = friendly_reason(e)
         e["_tag"] = t.get("tag", "")
         e["_notes"] = t.get("notes", "")
+        e["_decoder_rescuable"] = decoder_rescuable(e)
+        e["_seq_disagreement"] = seq_disagreement(e)
 
     errors_json = json.dumps(errors, default=str)
     tags_json = json.dumps(tags, default=str)
@@ -185,6 +229,12 @@ body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-
   padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;
   background: #e0e7ff; color: #3730a3;
 }
+.card-flag {
+  padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 700;
+  white-space: nowrap;
+}
+.card-flag.decoder { background: #dcfce7; color: #14532d; border: 1px solid #86efac; }
+.card-flag.seq-dis { background: #fee2e2; color: #7f1d1d; border: 1px solid #fca5a5; }
 .card-chevron { color: var(--muted); font-size: 16px; transition: transform 0.2s; }
 .error-card.open .card-chevron { transform: rotate(90deg); }
 
@@ -321,9 +371,23 @@ function init() {
 function renderApp() {
   const cats = { missed_contact: 0, wrong_action_type: 0, wrong_player: 0 };
   const tagged = { total: 0 };
-  ERRORS.forEach(e => { cats[e._cat] = (cats[e._cat]||0) + 1; if (getTag(e)) tagged.total++; });
+  let decoderCount = 0;
+  let seqDisCount = 0;
+  ERRORS.forEach(e => {
+    cats[e._cat] = (cats[e._cat]||0) + 1;
+    if (getTag(e)) tagged.total++;
+    if (e._decoder_rescuable) decoderCount++;
+    if (e._seq_disagreement) seqDisCount++;
+  });
 
-  const filtered = currentTab === 'all' ? ERRORS : ERRORS.filter(e => e._cat === currentTab);
+  let filtered = ERRORS;
+  if (currentTab === 'decoder_rescuable') {
+    filtered = ERRORS.filter(e => e._decoder_rescuable);
+  } else if (currentTab === 'seq_disagreement') {
+    filtered = ERRORS.filter(e => e._seq_disagreement);
+  } else if (currentTab !== 'all') {
+    filtered = ERRORS.filter(e => e._cat === currentTab);
+  }
 
   document.getElementById('app').innerHTML = `
     <div class="header">
@@ -333,6 +397,8 @@ function renderApp() {
         <button class="tab ${currentTab==='missed_contact'?'active':''}" onclick="setTab('missed_contact')">${CATEGORIES.missed_contact.icon} Not Detected<span class="count">${cats.missed_contact}</span></button>
         <button class="tab ${currentTab==='wrong_action_type'?'active':''}" onclick="setTab('wrong_action_type')">${CATEGORIES.wrong_action_type.icon} Wrong Type<span class="count">${cats.wrong_action_type}</span></button>
         <button class="tab ${currentTab==='wrong_player'?'active':''}" onclick="setTab('wrong_player')">${CATEGORIES.wrong_player.icon} Wrong Player<span class="count">${cats.wrong_player}</span></button>
+        <button class="tab ${currentTab==='decoder_rescuable'?'active':''}" onclick="setTab('decoder_rescuable')">🟢 Decoder-rescuable<span class="count">${decoderCount}</span></button>
+        <button class="tab ${currentTab==='seq_disagreement'?'active':''}" onclick="setTab('seq_disagreement')">⚠️ Max GBM↔seq disagree<span class="count">${seqDisCount}</span></button>
       </div>
     </div>
     <div class="content">
@@ -373,6 +439,11 @@ function renderCard(e, idx) {
     titleHtml = `<span class="action-gt">${e.gt_action}</span> — wrong player attributed`;
   }
 
+  const flagsHtml = [
+    e._decoder_rescuable ? '<span class="card-flag decoder" title="seq argmax == gt_action AND prob ≥ 0.80 — Viterbi decoder would likely fix">decoder-fix</span>' : '',
+    e._seq_disagreement ? '<span class="card-flag seq-dis" title="GBM conf < 0.05 but seq ≥ 0.95 — max-margin emission disagreement">seq↔gbm disagree</span>' : '',
+  ].filter(Boolean).join(' ');
+
   return `
     <div class="error-card cat-${e._cat} ${isOpen?'open':''}" id="card-${idx}">
       <div class="card-header" onclick="toggle(${idx})">
@@ -381,6 +452,7 @@ function renderCard(e, idx) {
           <div class="card-title">${titleHtml}</div>
           <div class="card-reason">${e._reason}</div>
         </div>
+        ${flagsHtml}
         ${tag ? `<span class="card-tag-indicator">${friendlyTag(tag)}</span>` : ''}
         <span class="card-meta">${rally8} f:${e.gt_frame}</span>
         <span class="card-chevron">▶</span>
@@ -464,6 +536,9 @@ function renderDetail(e, idx) {
 }
 
 function renderComparison(e) {
+  const seqRow = (e.seq_peak_nonbg_within_5f !== undefined && e.seq_peak_nonbg_within_5f > 0)
+    ? `<div class="comp-row"><span class="comp-key">Seq (MS-TCN++) ±5f</span><span class="comp-val">${e.seq_peak_action || '?'} ${(e.seq_peak_action_prob||0).toFixed(2)} (peak ${(e.seq_peak_nonbg_within_5f||0).toFixed(2)})</span></div>`
+    : '';
   if (e._cat === 'missed_contact') {
     return `
       <div class="comparison">
@@ -472,12 +547,15 @@ function renderComparison(e) {
           <div class="comp-row"><span class="comp-key">Action</span><span class="comp-val">${e.gt_action}</span></div>
           <div class="comp-row"><span class="comp-key">Frame</span><span class="comp-val">${e.gt_frame}</span></div>
           <div class="comp-row"><span class="comp-key">Player</span><span class="comp-val">T${e.gt_player_track_id} (green box)</span></div>
+          ${seqRow}
         </div>
         <div class="comp-box pred">
           <div class="comp-label">What Happened</div>
           <div class="comp-row"><span class="comp-key">Detection</span><span class="comp-val">Not detected</span></div>
           <div class="comp-row"><span class="comp-key">Failure</span><span class="comp-val">${e.fn_subcategory || '?'}</span></div>
-          <div class="comp-row"><span class="comp-key">Classifier score</span><span class="comp-val">${(e.classifier_conf||0).toFixed(3)}</span></div>
+          <div class="comp-row"><span class="comp-key">GBM conf</span><span class="comp-val">${(e.classifier_conf||0).toFixed(3)}</span></div>
+          <div class="comp-row"><span class="comp-key">Nearest cand</span><span class="comp-val">${e.nearest_cand_dist !== undefined ? e.nearest_cand_dist + 'f' : '–'}</span></div>
+          <div class="comp-row"><span class="comp-key">Player dist</span><span class="comp-val">${e.player_distance !== undefined && isFinite(e.player_distance) ? e.player_distance.toFixed(3) : '∞'}</span></div>
         </div>
       </div>
     `;
@@ -490,12 +568,14 @@ function renderComparison(e) {
           <div class="comp-row"><span class="comp-key">Action</span><span class="comp-val">${e.gt_action}</span></div>
           <div class="comp-row"><span class="comp-key">Frame</span><span class="comp-val">${e.gt_frame}</span></div>
           <div class="comp-row"><span class="comp-key">Player</span><span class="comp-val">T${e.gt_player_track_id}</span></div>
+          ${seqRow}
         </div>
         <div class="comp-box pred">
           <div class="comp-label">Prediction</div>
           <div class="comp-row"><span class="comp-key">Action</span><span class="comp-val">${e.pred_action}</span></div>
           <div class="comp-row"><span class="comp-key">Frame</span><span class="comp-val">${e.pred_frame || '—'}</span></div>
           <div class="comp-row"><span class="comp-key">Player</span><span class="comp-val">T${e.pred_player_track_id || '?'}</span></div>
+          <div class="comp-row"><span class="comp-key">GBM conf</span><span class="comp-val">${(e.classifier_conf||0).toFixed(3)}</span></div>
         </div>
       </div>
     `;
@@ -507,6 +587,7 @@ function renderComparison(e) {
         <div class="comp-row"><span class="comp-key">Action</span><span class="comp-val">${e.gt_action}</span></div>
         <div class="comp-row"><span class="comp-key">Player</span><span class="comp-val">T${e.gt_player_track_id} (green box)</span></div>
         <div class="comp-row"><span class="comp-key">Frame</span><span class="comp-val">${e.gt_frame}</span></div>
+        ${seqRow}
       </div>
       <div class="comp-box pred">
         <div class="comp-label">Prediction</div>
@@ -520,11 +601,15 @@ function renderComparison(e) {
 
 function renderContext(e) {
   const rq = e.rally_quality || {};
+  const seqStr = (e.seq_peak_nonbg_within_5f !== undefined && e.seq_peak_nonbg_within_5f > 0)
+    ? `${e.seq_peak_action || '?'} ${(e.seq_peak_action_prob||0).toFixed(2)}`
+    : '—';
   return `
     <div class="context-bar">
       <div class="ctx-item">Ball coverage: <strong>${rq.ball_coverage_pct || '?'}%</strong></div>
       <div class="ctx-item">Ball max gap: <strong>${rq.ball_max_gap_frames || '?'}f</strong></div>
       <div class="ctx-item">Players tracked: <strong>${rq.player_track_count || '?'}</strong></div>
+      <div class="ctx-item">Seq argmax ±5f: <strong>${seqStr}</strong></div>
       <div class="ctx-item">Rally: <strong>${(e.rally_id||'').substring(0,8)}</strong></div>
       <div class="ctx-item">Video: <strong>${(e.video_id||'').substring(0,8)}</strong> ${e.video_name ? '(' + e.video_name + ')' : ''}</div>
       <div class="ctx-item">Time: <strong>${formatTimestamp(e)}</strong></div>
