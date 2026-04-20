@@ -1,0 +1,48 @@
+Loading GT rallies...
+  364 rallies across 68 videos
+Pre-computing features for all rallies...
+  [25/364] (4s elapsed)
+  [50/364] (6s elapsed)
+  [75/364] (7s elapsed)
+  [100/364] (9s elapsed)
+  [125/364] (11s elapsed)
+  [150/364] (13s elapsed)
+  [175/364] (16s elapsed)
+  [200/364] (17s elapsed)
+  [225/364] (20s elapsed)
+  [250/364] (21s elapsed)
+  [275/364] (23s elapsed)
+  [300/364] (25s elapsed)
+  [325/364] (27s elapsed)
+  [350/364] (29s elapsed)
+  [364/364] (30s elapsed)
+  364 rallies with features (30s)
+Loaded transitions: 50 contexts
+Running 5-fold A/B (baseline vs decoder overlay)...
+  [1/5] 073cb11b (5r): F1 65.1%->65.1% acc 92.9%->100.0% (16s)
+  [2/5] 07fedbd4 (7r): F1 90.1%->90.1% acc 100.0%->100.0% (18s)
+  [3/5] 0a383519 (10r): F1 84.1%->84.1% acc 86.5%->97.3% (17s)
+  [4/5] 16458e78 (7r): F1 89.5%->89.5% acc 82.4%->88.2% (16s)
+  [5/5] 1a5da176 (5r): F1 80.0%->80.0% acc 100.0%->100.0% (17s)
+
+Completed 5 folds in 2.0 min
+  Baseline: F1=83.33%  Acc=91.72%
+  Overlay : F1=83.33%  Acc=96.55%
+  Delta  : dF1=+0.00%  dAcc=+4.83%
+  Folds where arms differ: 3/5
+
+Verdict: PASS
+Per-class F1 delta (overlay - baseline) 
+┏━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━┓
+┃ Class   ┃ Base F1 ┃ Over F1 ┃  Delta ┃
+┡━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━┩
+│ serve   │  66.67% │  72.41% │ +5.75% │
+│ receive │  77.97% │  84.75% │ +6.78% │
+│ set     │  88.00% │  90.91% │ +2.91% │
+│ attack  │  83.87% │  87.23% │ +3.36% │
+│ dig     │  59.26% │  60.71% │ +1.46% │
+│ block   │  50.00% │  50.00% │ +0.00% │
+└─────────┴─────────┴─────────┴────────┘
+
+Markdown: reports/decoder_integration_2026_04_20.md
+JSON: reports/decoder_integration_2026_04_20.json
