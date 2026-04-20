@@ -28,14 +28,11 @@ Decoding:
 from __future__ import annotations
 
 import json
-import logging
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-
-logger = logging.getLogger(__name__)
 
 ACTIONS = ["serve", "receive", "set", "attack", "dig", "block"]
 ACTION_TO_IDX = {a: i for i, a in enumerate(ACTIONS)}
@@ -68,7 +65,6 @@ class TransitionMatrix:
     action_j -> probability.
     """
     probs: dict[str, dict[str, float]]
-    num_actions: int = NUM_ACTIONS
     # Fallback P when we have no prior context (first contact) or no entry
     uniform: float = 1.0 / NUM_ACTIONS
     # Minimum probability floor for stability (avoid -inf log)

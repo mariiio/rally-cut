@@ -163,8 +163,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--threshold", type=float, default=0.30)
     parser.add_argument("--tolerance-ms", type=int, default=233)
-    parser.add_argument("--transitions", type=str,
-                        default="reports/transition_matrix_2026_04_20.json")
+    parser.add_argument("--transitions", type=str, default=None,
+                        help="Transition matrix JSON (default: shipped matrix).")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--out", type=str,
                         default="reports/decoder_no_fsl_sweep_2026_04_20.md")
@@ -173,7 +173,10 @@ def main() -> None:
     console.print(f"[dim]Zeroing out feature idx {FSL_FEATURE_IDX} "
                   f"({ContactFeatureVec.feature_names()[FSL_FEATURE_IDX]})[/dim]")
 
-    transitions = TransitionMatrix.from_json(args.transitions)
+    transitions = (
+        TransitionMatrix.from_json(args.transitions) if args.transitions
+        else TransitionMatrix.default()
+    )
 
     rallies = load_rallies_with_action_gt()
     contact_cfg = ContactDetectionConfig()

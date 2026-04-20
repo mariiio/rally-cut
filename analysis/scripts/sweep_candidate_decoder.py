@@ -159,8 +159,8 @@ def main() -> None:
     parser.add_argument("--threshold", type=float, default=0.30)
     parser.add_argument("--tolerance-ms", type=int, default=233)
     parser.add_argument("--min-accept-prob", type=float, default=0.0)
-    parser.add_argument("--transitions", type=str,
-                        default="reports/transition_matrix_2026_04_20.json")
+    parser.add_argument("--transitions", type=str, default=None,
+                        help="Transition matrix JSON (default: shipped matrix).")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--out", type=str,
                         default="reports/candidate_decoder_sweep_2026_04_20.md")
@@ -175,7 +175,10 @@ def main() -> None:
         {"name": "sp1.5 / no-act", "skip_penalty": 1.5, "use_action_emission": False},
     ]
 
-    transitions = TransitionMatrix.from_json(args.transitions)
+    transitions = (
+        TransitionMatrix.from_json(args.transitions) if args.transitions
+        else TransitionMatrix.default()
+    )
     console.print(f"[dim]Transitions: {len(transitions.probs)} contexts[/dim]")
 
     rallies = load_rallies_with_action_gt()

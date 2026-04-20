@@ -7,7 +7,8 @@ learned transition matrix from Phase CRF-0 as structural prior.
 Reuses:
 - ``_precompute`` + ``_train_fold`` + ``_eval_rally`` plumbing from
   ``eval_loo_video.py``.
-- ``TransitionMatrix`` from ``reports/transition_matrix_2026_04_20.json``.
+- ``TransitionMatrix.default()`` (shipped at
+  ``rallycut/data/contact_transitions.json``).
 - ``match_contacts`` Hungarian ±7f from ``eval_action_detection.py``.
 
 Apples-to-apples vs the 88.0% Phase-0 baseline.
@@ -181,8 +182,9 @@ def main() -> None:
     parser.add_argument("--min-accept-prob", type=float, default=0.0,
                         help="GBM prob floor below which candidates are "
                              "pre-filtered")
-    parser.add_argument("--transitions", type=str,
-                        default="reports/transition_matrix_2026_04_20.json")
+    parser.add_argument("--transitions", type=str, default=None,
+                        help="Path to transition-matrix JSON. Default uses "
+                             "TransitionMatrix.default() (rallycut/data/contact_transitions.json).")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--out", type=str,
                         default="reports/candidate_decoder_loo_2026_04_20.md")
@@ -191,7 +193,10 @@ def main() -> None:
     args = parser.parse_args()
 
     t_start = time.time()
-    transitions = TransitionMatrix.from_json(args.transitions)
+    transitions = (
+        TransitionMatrix.from_json(args.transitions) if args.transitions
+        else TransitionMatrix.default()
+    )
     console.print(f"[dim]Loaded transitions: {len(transitions.probs)} contexts[/dim]")
 
     rallies = load_rallies_with_action_gt()
