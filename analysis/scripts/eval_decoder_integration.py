@@ -76,7 +76,7 @@ BASELINE_SANITY_TOL = 0.003
 # docs/superpowers/briefs/2026-04-21-contact-rescue-stepback.md.
 # Do NOT modify after measurement runs.
 RESCUE_GATE_F1_DELTA = 0.010           # Contact F1 delta >= +1.0pp
-RESCUE_GATE_ACC_DELTA = 0.0            # Action Acc delta >= 0.0pp (no degrade)
+RESCUE_GATE_ACC_DELTA = 0.0            # Action Acc delta >= 0.0pp (flat is acceptable, no regression)
 RESCUE_GATE_PER_CLASS_REGRESSION = -0.015  # per-class F1 regression <= 1.5pp
 RESCUE_BLOCK_EXEMPT_FLOOR = -0.050     # block class exempt up to -5pp
 
@@ -163,6 +163,8 @@ def _eval_rally_both_arms(
         if rescue_in_treatment:
             # Rescue A/B: BOTH arms use the shipped decoder overlay so the
             # delta isolates the rescue branch against real production.
+            # Four call sites total in this function — keep in sync if the
+            # classify_rally_actions signature changes.
             baseline_actions = classify_rally_actions(
                 contact_seq_base, rally_id=rally.rally_id,
                 use_classifier=action_clf.is_trained,
