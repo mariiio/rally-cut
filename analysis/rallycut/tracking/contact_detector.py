@@ -38,6 +38,14 @@ logger = logging.getLogger(__name__)
 # Ball detector confidence is bimodal: either 0.0 (no detection) or >=0.3 (confident).
 _CONFIDENCE_THRESHOLD = 0.3
 
+# Rescue branch thresholds — see docs/superpowers/briefs/2026-04-21-contact-rescue-stepback.md.
+# The rule accepts a candidate the GBM rejected (p < 0.30) when GBM is very
+# confidently against (p < 0.10) AND MS-TCN++ is very confidently for
+# (seq_max_nonbg within ±5f >= 0.95). Candidate-level simulation: +1115 rescued
+# near-GT at 77.5% precision.
+_RESCUE_GBM_CEILING = 0.10
+_RESCUE_SEQ_FLOOR = 0.95
+
 # Cached temporal attributor (loaded once from disk on first use)
 _temporal_attributor_cache: dict[str, TemporalAttributionInference | None] = {}
 
@@ -1597,6 +1605,34 @@ def compute_seq_max_nonbg(
     return float(sequence_probs[1:, lo:hi + 1].max())
 
 
+def _apply_rescue_branch(
+    is_validated: bool,
+    gbm_prob: float,
+    seq_max_nonbg: float,
+    *,
+    enable_rescue: bool,
+) -> bool:
+    """Apply the stepback rescue rule to a classifier decision.
+
+    The rule accepts a candidate iff:
+        gbm_prob >= classifier.threshold              (baseline)
+      OR
+        gbm_prob < _RESCUE_GBM_CEILING                (GBM very confidently against)
+        AND seq_max_nonbg >= _RESCUE_SEQ_FLOOR        (MS-TCN++ very confidently for)
+
+    The first clause is already encoded in ``is_validated`` (the classifier's
+    threshold check). This helper only decides whether to OR in the second
+    clause. When ``enable_rescue`` is False, returns ``is_validated`` unchanged.
+
+    See: docs/superpowers/briefs/2026-04-21-contact-rescue-stepback.md
+    """
+    if is_validated:
+        return True
+    if not enable_rescue:
+        return False
+    return gbm_prob < _RESCUE_GBM_CEILING and seq_max_nonbg >= _RESCUE_SEQ_FLOOR
+
+
 def _refine_candidates_to_trajectory_peak(
     candidate_frames: list[int],
     ball_by_frame: dict[int, BallPosition],
@@ -1817,6 +1853,7 @@ def detect_contacts(
     team_assignments: dict[int, int] | None = None,
     court_calibrator: CourtCalibrator | None = None,
     sequence_probs: np.ndarray | None = None,
+    enable_rescue: bool = False,
 ) -> ContactSequence:
     """Detect ball contacts from trajectory inflection points and velocity peaks.
 
@@ -1858,6 +1895,11 @@ def detect_contacts(
             are injected; only pre-existing trajectory candidates are
             rescued. The old 7 `seq_p_*` features on `CandidateFeatures`
             were dropped pre-2026-04-07.
+        enable_rescue: When True, accept candidates the GBM rejected (p < 0.30)
+            when p < _RESCUE_GBM_CEILING (0.10) AND max(sequence_probs[1:,
+            f±5]) >= _RESCUE_SEQ_FLOOR (0.95). Default False (production
+            baseline). Source of truth:
+            docs/superpowers/briefs/2026-04-21-contact-rescue-stepback.md
 
     Returns:
         ContactSequence with all detected contacts.
@@ -2322,6 +2364,12 @@ def detect_contacts(
             )
             results = classifier.predict([features])
             is_validated, confidence = results[0]
+            is_validated = _apply_rescue_branch(
+                is_validated,
+                confidence,
+                _get_seq_max_nonbg(frame),
+                enable_rescue=enable_rescue,
+            )
             # NOTE: Sequence model rescue gate tested (seq≥0.90/0.95/0.98 →
             # accept). Result: adds 195-710 FPs even at 0.98 threshold because
             # the MS-TCN++ fires broadly (trained for action classification,
