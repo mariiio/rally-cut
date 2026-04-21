@@ -18,13 +18,30 @@ Baseline F1 is slightly better than the stale corpus claimed, meaning the target
 
 Three diagnostics preceded this memo. Two are directly tied to the specific FN universe and thus shifted under the rebuild; one is mechanism-level and carries over unchanged.
 
-### 1. Cat 7 "dedup-kill" is NOT primarily dedup
+### 1. Cat 7 "dedup-kill" is NOT primarily dedup — **CONFIRMED CLEANER ON V2**
 
-**Original finding (stale corpus, n=84):** 56 loop_rejected / 25 phantom / 2 no-cand / 1 actual dedup.
+**v2 mechanism trace (n=78 primary Cat 7):**
 
-**v2 corpus:** 78 primary Cat 7 (+4 Cat 7+4 = 82 total); structural breakdown expected similar given the underlying mechanism hasn't changed. The "dedup-kill" label remains a misnomer — the attribution script checks `detect_contacts` OUTPUT not internal dedup.
+| Mechanism | Stale (n=84) | v2 (n=78) |
+|---|---|---|
+| `loop_rejected` | 56 | **77** |
+| `false_positive_cat7_label` | 25 | **0** |
+| `no_candidate_in_window` | 2 | 0 |
+| `dedup_eliminated` | 1 | 1 |
 
-**Implication (unchanged):** proposals targeting the dedup `_deduplicate_contacts` pass are wrong lever for ~99% of the Cat 7 population. The actual mechanism for most cases is classifier-loop rejection inside `detect_contacts` — identical mechanism to Cat 2, just mis-labeled because the two diagnostics use different feature-computation paths.
+**All 25 phantom-Cat-7 false positives disappeared on v2.** They were stale-corpus artifacts — contacts the current pipeline DOES detect correctly, mis-labeled by the stale corpus's record.
+
+**77 of 78 primary Cat 7 cases in v2 are classifier-rejections inside `detect_contacts`**, not dedup eliminations. Identical mechanism to Cat 2 — just mis-labeled by `diagnose_fn_stage_attribution.py` because that script's `dedup_survived` check tests the OUTPUT of detect_contacts, not the internal dedup pass.
+
+**Consolidated classifier-rejection pool (v2):**
+- Cat 7 loop_rejected: 77
+- Cat 2 kin_underreports: 31
+- Cat 2b kin_moderate: 9
+- Cat 4 dual_occlusion: 10
+- Cat 3 kin_maximal: 4
+- = **131 classifier-rejection FNs**, 58% of all 225 non-block FNs.
+
+**Implication:** Fix I (drop `frames_since_last`) targets a 131-case pool, not the ~87 estimated pre-rebuild. Leverage is proportionally larger.
 
 ### 2. Cat 6 ball-gap is a WASB recall ceiling
 
@@ -65,11 +82,11 @@ Phase 5 proposed 5 fixes. Three were invalidated by diagnostics regardless of co
 
 ### Fix I — Drop `frames_since_last` feature
 
-**Rationale.** Attribution shows it's top-1 blocker in 40% of Cat 2 FNs. Since Cat 2 (31) + the ~56 mis-labeled Cat 7 loop_rejected cases = ~87 rejected-classifier FNs likely share the same mechanism, fixing this feature touches a ~87-case pool. Feature has documented train/inference divergence.
+**Rationale.** Attribution shows it's top-1 blocker in 40% of Cat 2 FNs. The consolidated classifier-rejection pool in v2 is **131 FNs** (Cat 2 + Cat 2b + Cat 3 + Cat 4 + the 77 Cat 7 loop_rejected cases re-categorized as classifier-rejections). Same mechanism throughout.
 
 **Risk.** Global importance is low (~0.03) per prior measurement, but low global importance ≠ safe to drop (as Phase 5's earlier error showed). Must validate with 68-fold LOO A/B.
 
-**Realistic recovery:** if it lands at the 0.3pp gate, ~7 FNs. If it cascades as hypothesized, up to ~30.
+**Realistic recovery:** if attribution's 40% top-1-blocker rate holds across the 131-case pool, ~52 cases are potentially rescuable. Conservative estimate at gate minimum: ~10-15 FNs. Optimistic: ~40 FNs.
 
 ### Fix H — Neutralize `player_distance=inf`
 
@@ -90,11 +107,12 @@ The 25 "phantom Cat 7" cases were largely stale-corpus artifacts. v2 has fewer (
 | | F1 |
 |---|---|
 | v2 baseline | **88.31%** |
-| + Fix I at gate minimum | ≥88.61% |
-| + Fix H at gate minimum | ≥88.76% |
-| Realistic combined recovery | ~89.0-89.4% |
+| + Fix I at gate minimum (+0.3pp F1) | ≥88.61% |
+| + Fix H at gate minimum (+0.15pp F1) | ≥88.76% |
+| Realistic combined recovery (if Fix I recovers 25% of 131-pool) | ~89.7-90.0% |
+| Optimistic combined recovery (40% of 131-pool) | ~90.8% |
 | Target | **92.00%** |
-| **Residual gap after Path A** | **~2.6pp (~60 FNs)** |
+| **Residual gap after optimistic Path A** | **~1.2-2.3pp (~25-50 FNs)** |
 
 **Path A does NOT close the 92% target.** The residual is concentrated in:
 - **Cat 6 (31 FNs) — WASB tracker recall.** Path D (retrain) or Path B (replace). Brief §closed 2026-04-20 already accepts.
