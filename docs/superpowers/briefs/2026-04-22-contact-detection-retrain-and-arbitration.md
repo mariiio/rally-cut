@@ -2,7 +2,15 @@
 
 **For:** fresh-session CV/ML engineer picking up after the 2026-04-21 review.
 **Prior brief:** `docs/superpowers/briefs/2026-04-21-contact-detection-full-review.md` (6-phase diagnostic review, completed).
-**Commits from prior session:** `5b0a1a5` (freshness infra), `1aff8f5` (diagnostic scripts), `0d7cb32` (trainer helper), `82883dd` (review reports), `a0dd13a` (Phase 6 v2-update).
+**Commits from prior session:** `5b0a1a5` (freshness infra), `1aff8f5` (diagnostic scripts), `0d7cb32` (trainer helper), `82883dd` (review reports), `a0dd13a` (Phase 6 v2-update), `d606f60` (this brief).
+
+**Session scope.** This brief covers TWO sessions. Do NOT try both in one pass:
+- **Session N (this one): Phase A + B + C only — MS-TCN++ retrain + v5 baseline.**
+- Session N+1: Phase D (Option B meta-classifier arbitrator). Own kickoff, own gate.
+
+Phase D is spec'd here for continuity but not in this session's scope.
+
+**Noise band definition.** A "pre-registered gate miss" by less than ±0.15pp on F1 is within the eval harness's float-jitter tolerance (per `production_eval_deterministic.md` memory). Missses within the noise band require one confirmatory re-run of the canary fold before interpreting. Misses above ±0.15pp are hard-stops.
 
 ## TL;DR
 
@@ -30,14 +38,24 @@
 
 ## Day 1 checklist (verify before any ML work)
 
-1. **Read the four feedback memories** (in `~/.claude/projects/-Users-mario-Personal-Projects-RallyCut/memory/`):
+1. **Read the four feedback memories FIRST** (in `~/.claude/projects/-Users-mario-Personal-Projects-RallyCut/memory/`):
    - `feedback_corpus_freshness.md` — canary-fingerprint verification is mandatory
    - `feedback_small_sample_probes.md` — small probes don't predict 68-fold LOO (learned the hard way this session)
    - `feedback_unbuffered_output.md` — always `PYTHONUNBUFFERED=1 python -u` for long scripts
    - `feedback_no_truncate_output.md` — never pipe through `head`/`tail -N`
 2. **Run the freshness check on v2.** `cd analysis && uv run python -c "from rallycut.evaluation.corpus_freshness import verify_corpus_fresh, iter_errors; from scripts.build_eval_reconciled_corpus import reproduce_single_fold; from pathlib import Path; verify_corpus_fresh(Path('outputs/action_errors/corpus_eval_reconciled_v2.jsonl'), reproduce_canary_fn=reproduce_single_fold)"`. Must pass. ~1 min.
+   - **If freshness check FAILS:** v2 corpus has drifted. Rebuild before proceeding: `PYTHONUNBUFFERED=1 uv run python -u scripts/build_eval_reconciled_corpus.py --out outputs/action_errors/corpus_eval_reconciled_v2_refresh.jsonl`. Compare to v2 via a quick diff; investigate any semantic change in error records. Do NOT proceed with retrain until baseline is stable.
 3. **Sanity check the MS-TCN++ training script.** See § "Retrain script audit" below.
 4. **Confirm GT stability.** Nobody editing GT mid-retrain. Check `SELECT MAX(created_at) FROM player_tracks WHERE action_ground_truth_json IS NOT NULL` shouldn't advance between you starting retrain and it finishing.
+5. **Backup current production weights before touching anything.** Run:
+   ```
+   cd analysis
+   cp weights/sequence_action/ms_tcn_production.pt \
+      weights/sequence_action/ms_tcn_production.pt.backup_pre_2026_04_22_retrain
+   cp weights/contact_classifier/contact_classifier.pkl \
+      weights/contact_classifier/contact_classifier.pkl.backup_pre_2026_04_22_retrain
+   ```
+   Document the restore commands in the session's output before proceeding. Restore via `cp backup original` if any retrain step regresses.
 
 ## Primary objective — MS-TCN++ retrain + v5 baseline
 
@@ -59,14 +77,30 @@ If you run it as-is, it overwrites `weights/contact_classifier/contact_classifie
 
 ### Execution
 
-1. Verify MS-TCN++ training workflow runs with a smoke test (1-2 epochs, compare loss trajectory to expected).
-2. Run full retrain (60 epochs default, ~2-4 hours on a reasonable CPU; GPU would be faster but CPU is sufficient).
-3. Save ONLY MS-TCN++ weights to `weights/sequence_action/ms_tcn_production.pt`. Do not overwrite the GBM yet.
-4. Smoke-check new model: inference on 3 rallies, verify shape `(7, T)` output, non-bg probabilities look reasonable.
+1. **Smoke test FIRST (mandatory).** Run the forked MS-TCN++ trainer with `--epochs 2 --device cpu` to a temporary output path. Verify: (a) script runs without error, (b) training loss trajectory shows decrease across both epochs, (c) validation loss ≥ training loss (sanity — no data leakage). **If smoke test anomalous: STOP and diagnose. Do NOT proceed to full retrain.** ~10 min.
+2. **Run full retrain** (60 epochs default, ~2-4 hours on CPU; GPU via Modal is faster but CPU is sufficient). Write to a TEMPORARY path first, e.g., `weights/sequence_action/ms_tcn_v5_candidate.pt`. Do NOT overwrite the production path yet.
+3. **Smoke-check new model:** inference on 3 rallies, verify shape `(7, T)` output, per-class probability distributions look reasonable (sums-to-1 ish, non-bg max in {0.3-1.0} range on ground-truth contact frames).
+4. **Once smoke-check passes:** copy to production path `weights/sequence_action/ms_tcn_production.pt`.
 
 ### Retrain the GBM on current features
 
-Once MS-TCN++ is retrained, the GBM's `seq_max_nonbg` feature reads slightly different values (MS-TCN++ output shifted). Retrain GBM via the production training loop (whatever `eval_loo_video._train_fold` uses for LOO is already correct — but for production save, use the equivalent all-data trainer). ~30 seconds CPU. Updates `weights/contact_classifier/contact_classifier.pkl` with a 26-dim GBM matching current inference.
+**Script:** `scripts/train_contact_classifier.py` produces the production-path GBM at `weights/contact_classifier/contact_classifier.pkl`. Verify its default args match production expectations (threshold 0.30, 26-dim features). Run:
+```
+cd analysis && PYTHONUNBUFFERED=1 uv run python -u scripts/train_contact_classifier.py --threshold 0.30
+```
+~30 seconds CPU. Writes to production path.
+
+**Verify dim match before/after:**
+```
+uv run python -c "
+from rallycut.tracking.contact_classifier import load_contact_classifier, CandidateFeatures
+clf = load_contact_classifier()
+print(f'n_features_in: {clf.model.n_features_in_}')
+print(f'expected (feature_names): {len(CandidateFeatures.feature_names())}')
+assert clf.model.n_features_in_ == len(CandidateFeatures.feature_names()), 'dim mismatch!'
+"
+```
+Must print 26 for both. Fail fast if mismatch.
 
 ### Build v5 corpus
 
@@ -75,16 +109,37 @@ Once MS-TCN++ is retrained, the GBM's `seq_max_nonbg` feature reads slightly dif
 ~20 min. Canary fingerprint updates automatically. Compare F1/Action Acc to v2.
 
 **Pre-registered gate for retrain-alone:**
-- F1 Δ ≥ 0pp (no regression)
+- F1 Δ ≥ 0pp (no regression beyond the ±0.15pp noise band)
 - Action Acc Δ ≥ +0.3pp (target for retrain gain)
 - No fold regresses > 0.8pp F1
 - Canary fingerprint changes (expected — new model)
 
-If retrain alone passes the gate, ship as v5 baseline and proceed to Option B. If it regresses, investigate before proceeding.
+**Outcome dispatch:**
+- **Gate passes** (F1 Δ ≥ 0 AND Action Acc Δ ≥ +0.3): ship v5 as the new baseline. STOP this session. Option B is a new session. Update MEMORY.md per § Post-session documentation below.
+- **Gate miss within noise band** (F1 Δ ∈ [-0.15, 0]pp, Action Acc Δ ∈ [0.15, 0.30]pp): re-run canary fold to confirm, then ship v5 if confirmed.
+- **Gate miss beyond noise band** (F1 Δ < -0.15pp OR Action Acc Δ < +0.15pp): STOP. Restore production weights from the backup files (paths documented in Day-1 step 5). Write a NO-GO memo as this session's final artifact. Do NOT propose alternatives — a new session with fresh context debugs the retrain.
+- **Any fold regresses > 0.8pp F1:** STOP immediately even if aggregate passes. Per-fold regression is a distribution-shift red flag worth separate investigation.
 
 ### Update Phase 4 categorization on v5
 
 `uv run python scripts/phase4_categorize_fns.py` (after updating `CORPUS_PATH` in that script to point at v5). Compare category distribution to v2. Expect Cat 2 / Cat 7 to shrink if MS-TCN++ predictions sharpened.
+
+## Post-session documentation (mandatory if shipping v5)
+
+Before closing the session, write/update:
+
+1. **Append a one-line entry to `~/.claude/projects/-Users-mario-Personal-Projects-RallyCut/memory/MEMORY.md`** under the "Contact Detection" or "Action Detection" section pointing at a new memory file. Something like `[MS-TCN++ retrain 2026-04-22](mstcn_retrain_2026_04_22.md) — +X.Xpp Action Acc, +Y.Ypp F1 vs v2, new baseline`.
+2. **Write the memory file itself** (`memory/mstcn_retrain_2026_04_22.md`) with frontmatter `type: project` and content: what was retrained, with what data (X rallies / Y new contacts since Apr 5), the observed deltas, and the new canary fingerprint for v5. <100 words.
+3. **Append a short "v5 shipped" section to the Phase 6 decision memo** (`analysis/reports/contact_fn_phase6_decision_memo_2026_04_21.md`) noting the new baseline. Don't rewrite the whole memo.
+4. **Commit with a single clean message:**
+   ```
+   feat(ml): MS-TCN++ retrain on fresh GT — F1 X.X% / Action Acc Y.Y% (v5 baseline)
+
+   Retrained on 364 rallies incorporating 24 post-2026-04-05 rallies + ...
+   [Per-metric deltas, any anomalies, backup file paths for rollback]
+   ```
+
+If session NO-GO'd: document the NO-GO as `memory/mstcn_retrain_2026_04_22_nogo.md` instead. Do not commit any weights changes.
 
 ## Secondary objective — Option B meta-classifier arbitration
 
@@ -215,15 +270,33 @@ After Option B:
 
 ```
 Read docs/superpowers/briefs/2026-04-22-contact-detection-retrain-and-arbitration.md.
+Before anything else, read the 4 feedback memories listed in its Day 1 checklist
+(feedback_corpus_freshness.md, feedback_small_sample_probes.md,
+feedback_unbuffered_output.md, feedback_no_truncate_output.md).
 
-Execute in order:
-1. Day 1 checklist (verify freshness, memories, GT stability). Do not skip.
-2. Retrain script audit + fork (option 1 in the brief). Confirm safe.
-3. MS-TCN++ retrain.
-4. v5 corpus build + gate check.
-5. Based on retrain outcome, proceed to Option B arbitrator design + implementation + 68-fold LOO A/B.
-6. Report v6 result against pre-registered gates.
+Session scope: execute Phase A + B + C ONLY (MS-TCN++ retrain + v5 baseline).
+Phase D (Option B arbitrator) is a separate future session — do NOT start it.
 
-Pause for review between each step. Honor all pre-registered gates. If a gate
-fails, report and stop — do not propose alternatives in the same session.
+Hard checkpoints — pause and report between each, wait for go-ahead:
+  1. After Day 1 checklist complete. Report any anomalies + backup file paths.
+  2. After retrain script audit + fork decision. Wait before editing files.
+  3. After the 2-epoch smoke test of the retrain. Abort if loss trajectory
+     looks wrong; proceed only on explicit go-ahead.
+  4. After full retrain completes + model smoke-check. Report weights paths
+     + per-class probability sanity.
+  5. After v5 corpus build. Report F1 + Action Acc vs v2 + gate pass/fail.
+
+Hard rules:
+  - Backup existing weights before any training (Day-1 step 5). Document the
+    restore command in session output.
+  - Honor all pre-registered gates. Miss within ±0.15pp noise band = re-run
+    canary once to confirm. Miss beyond that = hard stop, restore weights,
+    write NO-GO memo, end session.
+  - If Phase C passes, update MEMORY.md + write memory file + commit as
+    specified in the brief's § Post-session documentation. Then stop.
+  - Do NOT propose alternatives when a gate fails in-session. A new session
+    with fresh context debugs.
+
+Do not skip the Day-1 checklist. Do not skip the 2-epoch smoke test. Do not
+overwrite production weights without going through the temp path first.
 ```
