@@ -106,6 +106,7 @@ class TestDetectContactsSignature:
     """Verify the enable_rescue kwarg is wired into the public API."""
 
     def test_enable_rescue_parameter_present_and_default_false(self) -> None:
+        """enable_rescue must be on the public API and default to False."""
         sig = inspect.signature(detect_contacts)
         assert "enable_rescue" in sig.parameters, (
             "detect_contacts must expose enable_rescue for the A/B harness"
