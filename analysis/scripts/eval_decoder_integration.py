@@ -72,6 +72,14 @@ BLOCK_EXEMPT_FLOOR = -0.120
 BASELINE_SANITY_F1 = 0.880
 BASELINE_SANITY_TOL = 0.003
 
+# Pre-registered kill gates for --rescue mode. Source of truth:
+# docs/superpowers/briefs/2026-04-21-contact-rescue-stepback.md.
+# Do NOT modify after measurement runs.
+RESCUE_GATE_F1_DELTA = 0.010           # Contact F1 delta >= +1.0pp
+RESCUE_GATE_ACC_DELTA = 0.0            # Action Acc delta >= 0.0pp (no degrade)
+RESCUE_GATE_PER_CLASS_REGRESSION = -0.015  # per-class F1 regression <= 1.5pp
+RESCUE_BLOCK_EXEMPT_FLOOR = -0.050     # block class exempt up to -5pp
+
 
 @dataclass
 class ArmResult:
@@ -92,6 +100,7 @@ def _eval_rally_both_arms(
     tolerance_ms: int,
     skip_penalty: float,
     emitter_factory: Callable[[RallyPrecomputed], Any] | None = None,
+    rescue_in_treatment: bool = False,
 ) -> tuple[ArmResult, ArmResult]:
     """Evaluate ONE rally under both arms.
 
@@ -107,7 +116,10 @@ def _eval_rally_both_arms(
     rally = pre.rally
     _inject_action_classifier(action_clf if action_clf.is_trained else None)
     try:
-        contact_seq = detect_contacts(
+        # Baseline arm always runs with enable_rescue=False. When rescue_in_treatment
+        # is True, the treatment arm re-runs detect_contacts with enable_rescue=True
+        # to isolate the rescue delta against the baseline candidate set.
+        contact_seq_base = detect_contacts(
             ball_positions=pre.ball_positions,
             player_positions=pre.player_positions,
             config=contact_cfg,
@@ -116,12 +128,23 @@ def _eval_rally_both_arms(
             classifier=contact_clf,
             use_classifier=True,
             sequence_probs=pre.sequence_probs,
+            enable_rescue=False,
         )
-        baseline_actions = classify_rally_actions(
-            contact_seq, rally_id=rally.rally_id,
-            use_classifier=action_clf.is_trained,
-            sequence_probs=pre.sequence_probs,
-        )
+
+        if rescue_in_treatment:
+            contact_seq_over = detect_contacts(
+                ball_positions=pre.ball_positions,
+                player_positions=pre.player_positions,
+                config=contact_cfg,
+                net_y=rally.court_split_y,
+                frame_count=rally.frame_count or None,
+                classifier=contact_clf,
+                use_classifier=True,
+                sequence_probs=pre.sequence_probs,
+                enable_rescue=True,
+            )
+        else:
+            contact_seq_over = contact_seq_base
 
         decoder_emitter = (
             emitter_factory(pre) if emitter_factory is not None else contact_clf
@@ -136,12 +159,36 @@ def _eval_rally_both_arms(
             transitions=transitions,
             skip_penalty=skip_penalty,
         )
-        overlay_actions = classify_rally_actions(
-            contact_seq, rally_id=rally.rally_id,
-            use_classifier=action_clf.is_trained,
-            sequence_probs=pre.sequence_probs,
-            decoder_contacts=decoder_contacts,
-        )
+
+        if rescue_in_treatment:
+            # Rescue A/B: BOTH arms use the shipped decoder overlay so the
+            # delta isolates the rescue branch against real production.
+            baseline_actions = classify_rally_actions(
+                contact_seq_base, rally_id=rally.rally_id,
+                use_classifier=action_clf.is_trained,
+                sequence_probs=pre.sequence_probs,
+                decoder_contacts=decoder_contacts,
+            )
+            overlay_actions = classify_rally_actions(
+                contact_seq_over, rally_id=rally.rally_id,
+                use_classifier=action_clf.is_trained,
+                sequence_probs=pre.sequence_probs,
+                decoder_contacts=decoder_contacts,
+            )
+        else:
+            # Decoder A/B (historical): baseline has no overlay, treatment
+            # gets the decoder overlay.
+            baseline_actions = classify_rally_actions(
+                contact_seq_base, rally_id=rally.rally_id,
+                use_classifier=action_clf.is_trained,
+                sequence_probs=pre.sequence_probs,
+            )
+            overlay_actions = classify_rally_actions(
+                contact_seq_over, rally_id=rally.rally_id,
+                use_classifier=action_clf.is_trained,
+                sequence_probs=pre.sequence_probs,
+                decoder_contacts=decoder_contacts,
+            )
     finally:
         _reset_action_classifier_cache()
 
@@ -249,6 +296,92 @@ def _check_gates(
         "per_class": per_class_details,
         "worst_regression_class": worst_regression_cls,
         "worst_regression_delta": worst_regression_val,
+    }
+    return verdict, reasons, details
+
+
+def _check_rescue_gates(
+    base: ArmResult,
+    over: ArmResult,
+) -> tuple[str, list[str], dict[str, Any]]:
+    """Evaluate the 4 pre-registered rescue-branch kill gates.
+
+    Source of truth: docs/superpowers/briefs/2026-04-21-contact-rescue-stepback.md
+
+    Gates (do not modify after measurement):
+      1. Contact F1 delta >= +1.0pp over 88.15% baseline
+      2. No per-class F1 regression > 1.5pp (block exempt up to -5pp)
+      3. Action Acc delta >= 0.0pp (must not degrade)
+      4. Baseline arm F1 within +-0.3pp of 88.0% (harness sanity)
+    """
+    _, _, base_f1 = _f1(base.tp, base.fp, base.fn)
+    _, _, over_f1 = _f1(over.tp, over.fp, over.fn)
+    base_acc = base.acc_correct / max(1, base.acc_total)
+    over_acc = over.acc_correct / max(1, over.acc_total)
+
+    f1_delta = over_f1 - base_f1
+    acc_delta = over_acc - base_acc
+
+    reasons: list[str] = []
+    per_class_details: dict[str, dict[str, float]] = {}
+    worst_regression_cls: str | None = None
+    worst_regression_val = 0.0
+
+    # Gate 1: Contact F1 delta >= +1.0pp
+    if f1_delta < RESCUE_GATE_F1_DELTA:
+        reasons.append(
+            f"Gate 1 FAIL: Contact F1 delta {f1_delta:+.2%} < "
+            f"{RESCUE_GATE_F1_DELTA:+.2%}"
+        )
+    # Gate 2: per-class F1 regression <= 1.5pp (block exempt -5pp)
+    for cls in ACTION_TYPES:
+        b = base.class_tally[cls]
+        o = over.class_tally[cls]
+        _, _, bf1 = _f1(b["tp"], b["fp"], b["fn"])
+        _, _, of1 = _f1(o["tp"], o["fp"], o["fn"])
+        delta = of1 - bf1
+        per_class_details[cls] = {
+            "base_f1": bf1, "over_f1": of1, "delta": delta,
+        }
+        floor = (
+            RESCUE_BLOCK_EXEMPT_FLOOR if cls == "block"
+            else RESCUE_GATE_PER_CLASS_REGRESSION
+        )
+        if delta < floor:
+            reasons.append(
+                f"Gate 2 FAIL ({cls}): per-class F1 delta {delta:+.2%} "
+                f"< floor {floor:+.2%}"
+            )
+        if delta < worst_regression_val:
+            worst_regression_val = delta
+            worst_regression_cls = cls
+    # Gate 3: Action Acc delta >= 0.0pp
+    if acc_delta < RESCUE_GATE_ACC_DELTA:
+        reasons.append(
+            f"Gate 3 FAIL: Action Acc delta {acc_delta:+.2%} < "
+            f"{RESCUE_GATE_ACC_DELTA:+.2%}"
+        )
+    # Gate 4: baseline F1 within +-0.3pp of 88.0%
+    drift = base_f1 - BASELINE_SANITY_F1
+    if abs(drift) > BASELINE_SANITY_TOL:
+        reasons.append(
+            f"Gate 4 FAIL: baseline F1 {base_f1:.2%} drifts {drift:+.2%} "
+            f"from canonical {BASELINE_SANITY_F1:.1%} "
+            f"(tolerance {BASELINE_SANITY_TOL:.1%})"
+        )
+
+    verdict = "PASS" if not reasons else "NO-GO"
+    details = {
+        "base_f1": base_f1,
+        "over_f1": over_f1,
+        "base_acc": base_acc,
+        "over_acc": over_acc,
+        "f1_delta": f1_delta,
+        "acc_delta": acc_delta,
+        "per_class": per_class_details,
+        "worst_regression_class": worst_regression_cls,
+        "worst_regression_delta": worst_regression_val,
+        "baseline_drift": drift,
     }
     return verdict, reasons, details
 
@@ -417,6 +550,16 @@ def main() -> int:
              "for CropHeadContactClassifier — the baseline arm stays on GBM.",
     )
     parser.add_argument(
+        "--rescue",
+        action="store_true",
+        help="Run the rescue-branch A/B instead of the decoder A/B. "
+             "Treatment arm sets enable_rescue=True on detect_contacts; "
+             "both arms run with the shipped decoder overlay. Gates are "
+             "the 4 pre-registered rescue gates (see "
+             "docs/superpowers/briefs/2026-04-21-contact-rescue-stepback.md). "
+             "Incompatible with --emitter=crop_head.",
+    )
+    parser.add_argument(
         "--crop-head-weights",
         type=str,
         default=None,
@@ -427,9 +570,13 @@ def main() -> int:
     if args.emitter == "crop_head" and not args.crop_head_weights:
         parser.error("--emitter=crop_head requires --crop-head-weights PATH")
 
+    if args.rescue and args.emitter != "gbm":
+        parser.error("--rescue requires --emitter=gbm (the shipped production emitter)")
+
     today = date.today().isoformat().replace("-", "_")
-    default_md = f"reports/decoder_integration_{today}.md"
-    default_json = f"reports/decoder_integration_{today}.json"
+    tag = "rescue_branch" if args.rescue else "decoder_integration"
+    default_md = f"reports/{tag}_{today}.md"
+    default_json = f"reports/{tag}_{today}.json"
     md_path = Path(args.out) if args.out else Path(default_md)
     json_path = Path(args.out_json) if args.out_json else Path(default_json)
 
@@ -538,6 +685,7 @@ def main() -> int:
                 pre, contact_clf, action_clf, contact_cfg,
                 transitions, args.tolerance_ms, args.skip_penalty,
                 emitter_factory=emitter_factory,
+                rescue_in_treatment=args.rescue,
             )
             fold_base_arms.append(base_arm)
             fold_over_arms.append(over_arm)
@@ -582,7 +730,10 @@ def main() -> int:
 
     base_agg = _aggregate(base_fold_results)
     over_agg = _aggregate(over_fold_results)
-    verdict, reasons, details = _check_gates(base_agg, over_agg)
+    if args.rescue:
+        verdict, reasons, details = _check_rescue_gates(base_agg, over_agg)
+    else:
+        verdict, reasons, details = _check_gates(base_agg, over_agg)
 
     # Console summary
     console.print(
