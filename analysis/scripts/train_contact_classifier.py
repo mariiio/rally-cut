@@ -69,6 +69,7 @@ def extract_candidate_features(
     config: ContactDetectionConfig | None = None,
     sequence_probs: np.ndarray | None = None,
     gt_frames: list[int] | None = None,
+    inject_frames: list[int] | None = None,
 ) -> tuple[list[CandidateFeatures], list[int]]:
     """Extract features for ALL candidates in a rally (before validation gate).
 
@@ -280,6 +281,15 @@ def extract_candidate_features(
             if prox is not None and prox != frame and prox not in candidate_set:
                 candidate_set.add(prox)
         candidate_frames = sorted(candidate_set)
+
+    # Investigation-only: inject caller-provided frames into the candidate
+    # list (for GT-frame feature extraction tests). Features are computed
+    # at these frames just like any natural candidate, so downstream gates
+    # still apply. Do not use in production paths.
+    if inject_frames:
+        merged = set(candidate_frames)
+        merged.update(f for f in inject_frames if f >= 0)
+        candidate_frames = sorted(merged)
 
     # Pre-compute GT-matched candidate frames for frames_since_last.
     # At inference, frames_since_last is measured from the last ACCEPTED contact.
