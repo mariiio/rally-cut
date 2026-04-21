@@ -2367,15 +2367,16 @@ def detect_contacts(
             is_validated = _apply_rescue_branch(
                 is_validated,
                 confidence,
-                _get_seq_max_nonbg(frame),
+                features.seq_max_nonbg,
                 enable_rescue=enable_rescue,
             )
-            # NOTE: Sequence model rescue gate tested (seq≥0.90/0.95/0.98 →
-            # accept). Result: adds 195-710 FPs even at 0.98 threshold because
-            # the MS-TCN++ fires broadly (trained for action classification,
-            # not precise contact timing). The seq signal is more effective as
-            # a GBM feature (seq_max_nonbg, importance 0.297) than as a binary
-            # rescue gate. Rescue gate NOT shipped.
+            # NOTE: An earlier unconditional seq-only rescue gate (accept on
+            # seq≥0.90/0.95/0.98 alone) was tested and NOT shipped — it added
+            # 195-710 FPs even at 0.98 threshold because MS-TCN++ fires broadly.
+            # The seq signal is more useful as a GBM feature (seq_max_nonbg,
+            # importance 0.297). The CONJUNCTIVE rescue above (_apply_rescue_branch)
+            # is a separate, shipped mechanism: it requires gbm<0.10 AND seq≥0.95
+            # — two-signal disagreement-plus-endorsement, not a blanket seq gate.
         else:
             # Fallback: Hand-tuned 3-tier validation gates
             # Tier 1: Strong signal — high velocity + direction change (definitive)
