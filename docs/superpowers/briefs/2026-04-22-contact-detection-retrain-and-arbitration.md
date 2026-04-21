@@ -141,6 +141,28 @@ Before closing the session, write/update:
 
 If session NO-GO'd: document the NO-GO as `memory/mstcn_retrain_2026_04_22_nogo.md` instead. Do not commit any weights changes.
 
+### Additional artifact: write the Option B brief for the next session
+
+Before closing a SUCCESSFUL (gate-passing) retrain session, also write:
+
+**New brief: `docs/superpowers/briefs/YYYY-MM-DD-contact-detection-option-b-arbitrator.md`** (same-day date).
+
+Starting point: copy the § "Secondary objective — Option B meta-classifier arbitration" section from THIS brief. Then update:
+
+- **Baseline.** Replace "v5" references with concrete v5 numbers (F1, Action Acc, canary fingerprint).
+- **Pre-registered gates.** Recalibrate against what retrain delivered:
+  - If retrain delivered > +0.7pp F1 → easy wins captured, tighten Option B's gate to F1 Δ ≥ +0.3pp.
+  - If retrain delivered +0.2-0.7pp F1 → original Option B gate (F1 Δ ≥ +0.5pp) stands.
+  - If retrain delivered < +0.2pp F1 → arbitrator has more headroom; keep gate at +0.5pp but note expected recovery could exceed +1pp.
+- **Category redistribution.** Cite the Phase 4 categorization on v5 (which you'll have already run). Note which categories are most affected by retrain (likely Cat 2 + classifier-rejection pool).
+- **Residual uncategorized count on v5.** Option B targets the classifier-rejection pool; update the size estimate.
+- **Day-1 checklist.** Replace "freshness check on v2" with "freshness check on v5."
+- **Kickoff prompt.** Update version references v2→v5 + note "this follows the 2026-04-22 retrain session memo."
+
+Do NOT commit the Option B brief in the same commit as the retrain ship. Separate commits: one for retrain deliverables, one for the handoff brief. Clean separation of concerns.
+
+If the retrain session NO-GO'd: do NOT write the Option B brief. A debug session comes first.
+
 ## Secondary objective — Option B meta-classifier arbitration
 
 ### Design
