@@ -29,6 +29,22 @@ Serves dominate: 113 / 291 FNs (39%) span all five FN categories. The shared roo
 
 Of the 108 wrong_action errors, an unknown fraction would have been structurally impossible if the pipeline knew which side of the net the ball is on and which direction it last crossed. That fraction is Probe 3 below.
 
+## Probe 0 — Coordinate with attribution workstream before any probe work (30 min, HARD PREREQUISITE)
+
+**Rationale:** Probes 1+2's deliverable (net-line + per-frame ball-side) is a shared primitive. The Day-3 attribution Phase 4 roadmap explicitly lists net-cross as a planned rule-cost input. If the attribution workstream is already building ball-side or is about to, running Probes 1+2 here duplicates effort and risks schema fork.
+
+**Actions:**
+1. Check `memory/player_attribution_day3_2026_04_22.md` for current Phase-4 status and owner.
+2. Confirm with the attribution workstream owner: (a) is ball-side detection already built / in-progress, (b) if so, what's its output schema (net-top vs net-base reference line, at-net ambiguity handling, storage format), (c) can this workstream consume that output OR should we build together.
+3. Decide:
+   - **Attribution already has it** → skip Probes 1+2, consume their output, jump to Probe 3.
+   - **Attribution is building it in parallel** → pair up. Shared Probes 1+2, both workstreams consume.
+   - **Attribution hasn't started** → this workstream builds Probes 1+2 with a schema attribution agrees to.
+
+**Kill gate:** no ball-side output schema that both workstreams can agree on. If attribution has already shipped an incompatible ball-side definition AND won't change it, this workstream's ROI collapses (can't get the attribution co-benefit). Re-evaluate whether game-semantics for contact detection alone is worth ~8 hours + 1-2 week implementation.
+
+**Output:** a one-paragraph note in `analysis/reports/game_semantics_probe_0_coordination.md` recording the decision and the schema agreement.
+
 ## Three probes, each ≤ 4 hours. Do in order; skip later probes if earlier ones kill.
 
 ### Probe 1 — Can we detect the net line reliably (2D, image space)?
@@ -50,16 +66,17 @@ Of the 108 wrong_action errors, an unknown fraction would have been structurally
 
 **Hypothesis:** once the net LINE in image space is known, a per-frame label `ball_side ∈ {far, near}` follows from the ball position's 2D pixel-Y relative to the net-top line. (Using net-top, not net-base, matters: a ball at mid-height above the net but image-Y below the net-top line is still on the "far" side by convention — we need to treat the net-top as the decisive horizontal in image space.)
 
-**Method:**
-1. On the 20 rallies from Probe 1, annotate ball-side frame-by-frame (or spot-check every 30 frames) as GT. ~1 hour of manual labeling.
-2. Run the pipeline's `ball_by_frame` positions + Probe 1's net-line; label each ball position `predicted_side`.
-3. Compute agreement %.
+**Method:** use GT contact frames as free ball-side labels. No manual labeling required.
 
-**Kill gate:** <90% agreement on this task. If the 2D net-line + ball-Y isn't enough to determine side, game-semantics can't be built on top. Need 3D or better.
+1. **GT-derived labels (zero manual work).** For every GT contact in v5 across 68 videos: the GT record includes `gt_player_track_id`. Combined with the existing `match_tracker` team-to-side mapping, this gives us the team-side each contact happened on. The ball-side AT the GT contact frame is that side. This yields ~2000 labeled ball-side frames (one per GT contact) for free — every contact is a supervised label.
+2. On the 20 rallies from Probe 1: run the pipeline's `ball_by_frame` positions + Probe 1's net-line; predict ball-side at every GT contact frame. Compute agreement vs the GT-derived side label.
+3. **Manual spot-check (30 minutes, not 4 hours).** Sample 50 non-contact frames across the 20 rallies where the predicted ball-side crossed (i.e., where ball is in transit across the net). Visually verify the pred matches truth. This covers the harder ambiguous-at-net cases the GT-derived labels can't test.
 
-**Why 90%:** at 88.87% F1 on contact detection, introducing a <90%-reliable side signal into the pipeline would muddy more than it clarifies (per `feedback_small_sample_probes.md` pattern).
+**Kill gate:** <90% agreement on GT-contact frames AND <85% on the manual non-contact spot-check. If either fails, the 2D net-line + ball-Y isn't enough to determine side; game-semantics can't be built on top. Need 3D or better.
 
-**Output:** CSV of `(rally_id, frame, gt_side, pred_side)` + aggregate agreement %.
+**Why 90% / 85%:** at 88.87% F1 on contact detection, introducing a <90%-reliable side signal into the pipeline would muddy more than it clarifies (per `feedback_small_sample_probes.md` pattern). The 85% threshold on at-net non-contact frames is looser because those ARE genuinely ambiguous — a ball directly above the net is neither fully far nor fully near.
+
+**Output:** CSV of `(rally_id, frame, gt_side, pred_side, source: gt_contact|manual_spot_check)` + aggregate agreement % broken down by source.
 
 ### Probe 3 — Are wrong_action errors actually violating net-cross direction? (The decisive probe.)
 
@@ -94,20 +111,22 @@ Of the 108 wrong_action errors, an unknown fraction would have been structurally
 
 Deep inspection of the raw ball trajectories (see `analysis/scripts/inspect_6_fn_cases.py`) showed 5 of 6 have strong physical contact signatures (direction change, speed discontinuity, or position jump). The monolithic GBM rejects them because the joint feature distribution at these values is ~50/50 contacts vs non-contacts in training. **Rally context (ball just crossed the net from opposite side, whose serve is it, what's the 3-touch count) is the missing signal that would make these acceptances decisive.**
 
-**Probe 3b method:**
-1. For each of the 6 cases, using Probes 1 + 2's net-line + per-frame ball-side output:
-   - Compute the ball-side trajectory in the ±30-frame window around GT.
-   - Compute the rally-state variables at GT: frames-since-serve, 3-touch-count-current-side, last-known-crossing-direction.
-2. Classify each: "a rally-state-aware prior would have BOOSTED acceptance here" vs "rally state does not help."
+**Probe 3b method — use a broader sample, not just the 6 user cases:**
 
-**Validation gate (tight, because n=6):**
-- **6/6 boost-eligible** → hypothesis fully validated on user-flagged evidence. Proceed with confidence.
-- **4-5/6 boost-eligible** → hypothesis mostly validated; inspect the losers to understand.
-- **≤ 3/6 boost-eligible** → hypothesis may not generalize; cross-check with Probe 3's broader 108-case result before committing.
+The 6 user-flagged cases are **qualitative sanity references**, not the statistical gate. Expected-to-pass on selection-biased "clearly easy" cases is near-100%, which tells us nothing about generalization. For a real gate we need an unflagged, random sample from the same error class.
 
-**Output:** a short memo at `analysis/reports/game_semantics_probe_3b_6_cases.md` documenting the rally state at each of the 6 cases + the prior-boost verdict.
+1. **Qualitative sanity (the 6 user cases).** Using Probes 1 + 2's net-line + per-frame ball-side output, classify each of the 6 user-flagged FN cases as "rally-state prior would have boosted acceptance" vs "rally state does not help." Document in a memo. Target: 5-6 boost-eligible. If <4, red-flag — the mechanism may not fire on even the most obvious cases; reconsider the hypothesis before continuing.
 
-**Why this matters:** Probe 3 measures whether the LEVER exists on the wrong_action pool. Probe 3b measures whether the lever exists on the FN pool specifically — and it's validated against cases the domain expert (user) has personally vetted, making the probe's result immediately credible.
+2. **Statistical gate (30 random `rejected_by_classifier` FNs).** Sample 30 unflagged FNs from v5's `rejected_by_classifier` pool with `seq_peak_nonbg_within_5f ≥ 0.90`. For each, compute rally state + check whether prior-boost would fire. Expected rate under a "pure noise" null hypothesis is ~20% (just the base rate of random-contact-near-serve-or-crossing). Expected rate under the game-semantics hypothesis is ≥ 50%.
+
+**Validation gate:**
+- **Qualitative sanity (6 cases): ≥ 4/6 boost-eligible** → mechanism fires on obvious cases.
+- **Statistical gate (30 cases): ≥ 50% boost-eligible** → mechanism generalizes beyond selection-biased cases.
+- **Both must pass.** A pass on qualitative but fail on statistical means the mechanism is over-fit to cherry-picked examples. A pass on statistical but fail on qualitative means the mechanism exists at population level but misses the specific signatures the domain expert cares about.
+
+**Output:** a memo at `analysis/reports/game_semantics_probe_3b.md` documenting (a) rally state + prior-boost verdict for each of the 6 cases and each of the 30 random cases, (b) aggregate boost-eligible rate on the random sample, (c) verdict on BOTH gates.
+
+**Why this matters:** Probe 3 measures whether the LEVER exists on the wrong_action pool. Probe 3b measures whether the lever exists on the FN pool specifically. Using both a qualitative sample (user-vetted) and a statistical sample (30 random unflagged) prevents the selection-bias failure mode where 6/6 "pass" doesn't generalize.
 
 ## Visual debugging tooling (required for every probe)
 
@@ -192,21 +211,30 @@ Each phase is a separate A/B against v5. Pre-registered:
 
 ```
 Read docs/superpowers/plans/2026-04-22-game-semantics-scoping.md.
-Run Probes 1 → 2 → 3 → 3b in order. Skip later probes if earlier ones kill.
-Probe 3b validates the hypothesis on 6 user-flagged FN cases and is the
-immediate-credibility check on top of Probe 3's broader 108-case result.
+
+Run Probe 0 FIRST — coordinate with the attribution workstream. If ball-side
+is already built or being built over there, consume their output rather
+than duplicating. If schemas disagree and they won't budge, re-evaluate.
+
+Then run Probes 1 → 2 → 3 → 3b in order. Skip later probes if earlier ones
+kill.
+
+Probe 2 uses GT contact frames as free ball-side labels (zero manual work
+for the primary sample). Only the 30-minute at-net spot-check is manual.
+
+Probe 3b has TWO gates: qualitative (≥ 4/6 on user-flagged cases) AND
+statistical (≥ 50% boost-eligible on 30 random rejected_by_classifier
+FNs). Both must pass; qualitative alone is selection-bias-confounded.
 
 Deliverable: go/no-go verdict on game-semantics lever + visual overlay tool
-+ the Probe 3b 6-case rally-state memo.
++ Probe 3b memo covering both the 6 user cases and the 30 random cases.
 
 Hard rules:
-- Build the visual overlay tool FIRST (4 hours). All probes depend on it.
+- Probe 0 is a hard prerequisite. Do not skip the coordination.
+- Build the visual overlay tool SECOND (4 hours, after Probe 0 confirms
+  ball-side definition). All remaining probes depend on it.
 - Honor each probe's kill gate. Do NOT rationalize a miss into a pass.
 - Do NOT write Phase A/B/C code in this session. Only Probes.
-- If Probe 3 passes but 3b says ≤3/6 on user cases, STOP and reconcile
-  before building. The user-vetted evidence is load-bearing; we cannot
-  ship an implementation that doesn't fix cases the domain expert
-  explicitly flagged.
 - If Probes pass overall, author a separate implementation brief; do
   not start coding.
 - If any probe kills, write a NO-GO memo naming the root cause.
