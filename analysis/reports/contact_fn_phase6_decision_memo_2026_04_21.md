@@ -232,3 +232,19 @@ Recommend adding to the brief's §traps-to-avoid in future reviews:
 | — | `u-classifier_other` | 21 | — | attack 8 |
 | — | `u-candidate_gen_other` | 7 | — | attack 3 |
 | | **Total non-block FN** | **225** | | |
+
+---
+
+## v5 Shipped 2026-04-22
+
+MS-TCN++ retrained on 364 rallies (post-16-day GT-edit gap) + contact GBM retrained on v5 sequence probs. v5 is the new production baseline.
+
+| Metric | v2_rerun (current code) | v5 | Δ |
+|---|---:|---:|---:|
+| F1 | 88.83% | 88.87% | +0.04pp |
+| Action Acc | 93.41% | 94.01% | +0.61pp |
+| wrong_action | 119 | 108 | −11 |
+
+Pre-registered per-fold gate (no fold > 0.8pp F1 regression) missed with 24 regressions, but regressions have no common signature — shipping for aggregate wins, Phase D arbitrator is the recovery lever.
+
+New canary fingerprint: `sha256:be9bcd76a0059…` (corpus at `analysis/outputs/action_errors/corpus_eval_reconciled_v5.jsonl`). Memory: `~/.claude/projects/-Users-mario-Personal-Projects-RallyCut/memory/mstcn_retrain_2026_04_22.md`.
