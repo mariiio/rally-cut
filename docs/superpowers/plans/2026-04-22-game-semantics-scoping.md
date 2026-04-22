@@ -66,17 +66,25 @@ Of the 108 wrong_action errors, an unknown fraction would have been structurally
 
 **Hypothesis:** once the net LINE in image space is known, a per-frame label `ball_side ∈ {far, near}` follows from the ball position's 2D pixel-Y relative to the net-top line. (Using net-top, not net-base, matters: a ball at mid-height above the net but image-Y below the net-top line is still on the "far" side by convention — we need to treat the net-top as the decisive horizontal in image space.)
 
-**Method:** use GT contact frames as free ball-side labels. No manual labeling required.
+**Important caveat (2026-04-22 correction):** an earlier draft of this probe proposed using GT contact + `gt_player_track_id` + `match_tracker` team-to-side mapping to derive ball-side labels for free. **This does NOT work:** `gt_player_track_id` is documented-unreliable (see `memory/action_audit_2026_04_20.md` — the 660 `wrong_player` records were dropped from audit scope exactly because attribution GT is stale). So any "free" labels derived from attribution are contaminated.
 
-1. **GT-derived labels (zero manual work).** For every GT contact in v5 across 68 videos: the GT record includes `gt_player_track_id`. Combined with the existing `match_tracker` team-to-side mapping, this gives us the team-side each contact happened on. The ball-side AT the GT contact frame is that side. This yields ~2000 labeled ball-side frames (one per GT contact) for free — every contact is a supervised label.
-2. On the 20 rallies from Probe 1: run the pipeline's `ball_by_frame` positions + Probe 1's net-line; predict ball-side at every GT contact frame. Compute agreement vs the GT-derived side label.
-3. **Manual spot-check (30 minutes, not 4 hours).** Sample 50 non-contact frames across the 20 rallies where the predicted ball-side crossed (i.e., where ball is in transit across the net). Visually verify the pred matches truth. This covers the harder ambiguous-at-net cases the GT-derived labels can't test.
+**Corrected method — two partial-GT signals + small manual sample.** No single source gives clean ball-side labels; combine three imperfect ones.
 
-**Kill gate:** <90% agreement on GT-contact frames AND <85% on the manual non-contact spot-check. If either fails, the 2D net-line + ball-Y isn't enough to determine side; game-semantics can't be built on top. Need 3D or better.
+1. **Crossing-consistency signal (no manual work).** Between two consecutive GT contacts, the ball MUST either cross the net or not, determined by the action-type pair (reliable GT): e.g., `attack → receive` implies a crossing; `receive → set` implies no crossing. Use this as a sign-change test: does Probe 1's net-line + ball-Y signal flip between those two GT frames? Doesn't tell us WHICH side the ball is on at any given frame, but tells us whether the side-change detector is consistent with the rally structure. Yields ~1500 crossing-pair tests across the corpus.
 
-**Why 90% / 85%:** at 88.87% F1 on contact detection, introducing a <90%-reliable side signal into the pipeline would muddy more than it clarifies (per `feedback_small_sample_probes.md` pattern). The 85% threshold on at-net non-contact frames is looser because those ARE genuinely ambiguous — a ball directly above the net is neither fully far nor fully near.
+2. **Trajectory-midpoint test (no manual work).** At the midpoint frame between two GT contacts of a crossing pair (e.g., midway between an attack and its resulting receive), the ball is in mid-flight somewhere over or near the net. The predicted ball-side should be CONSISTENT with the expected crossing timing — the ball shouldn't have flipped sides multiple times in 20 frames of free flight. Yields another signal orthogonal to (1).
 
-**Output:** CSV of `(rally_id, frame, gt_side, pred_side, source: gt_contact|manual_spot_check)` + aggregate agreement % broken down by source.
+3. **Small manual ball-side spot-check (2 hours, not free).** On 10 rallies (stratified across video difficulty), manually label ball-side every 30 frames. ~10-20 frames per rally, ~150 labels total. This is the ONLY source of direct per-frame ball-side GT; the other two signals are structural.
+
+**Kill gate (dual):**
+- **Crossing consistency ≥ 85%** of expected-crossing GT-action-pairs show a sign change in predicted ball-side, AND expected-no-crossing pairs don't.
+- **Manual spot-check agreement ≥ 90%** on the 150 labeled frames.
+
+Both must pass. The first tells us the crossing detector fires consistently with rally structure. The second tells us the per-frame sidedness label is accurate on human-vetted ground truth.
+
+**Output:** CSV of `(rally_id, frame, source: crossing_pair|midpoint|manual, gt_side_or_expected_change, pred_side_or_observed_change, agree)` + aggregate agreement % broken down by source.
+
+**Why this works despite the attribution-GT being stale:** the crossing-consistency signal uses **only the action-type** field of GT (reliable), not attribution. The structural relationship "attack → receive implies crossing" is a rule, not dependent on which player did which. The manual sample covers what the structural test can't.
 
 ### Probe 3 — Are wrong_action errors actually violating net-cross direction? (The decisive probe.)
 
@@ -144,12 +152,14 @@ Estimated build: 3-4 hours. Location: `analysis/scripts/render_side_overlay.py`.
 **Reliable per-frame ball-side classification (Probe 2's deliverable) feeds TWO workstreams, not just contact detection.** It is also a material lever for the player-attribution workstream (see `memory/player_attribution_day3_2026_04_22.md`):
 
 - Today's attribution geometry is image-space distance between ball and player, without rally context. This produces misattribution when the geometrically-nearest player is on the wrong team (e.g., a ball crossing to the far side attributed to a near-side player who happens to be close in pixel space).
-- With reliable ball-side + the existing team-to-side mapping from `match_tracker`, attribution can be constrained to the ball-side's team: "a contact with ball on far side must be attributed to a far-side player." This is a game-rule constraint, not a heuristic, and it should eliminate a meaningful class of wrong-player attribution errors.
+- Once we have reliable ball-side AND once the attribution workstream's Day-3 Phase 3 match_tracker seeding fix lands (which is its own prerequisite), attribution can be constrained by the game-rule: "a contact with ball on far side must be attributed to a far-side player." This is a rule-cost signal the attribution workstream's Phase 4 framework is designed to consume.
 - The Day-3 roadmap's Phase 4 (A5 motion-integral + game-semantics rule costs) explicitly lists "serve→opposite-team, 3-touch, net-cross, setter→teammate, block+dig coupling" as planned rule costs. **The ball-side signal is an input to those rule costs.** Building it once for contact detection and reusing it for attribution is the right factorization.
 
-**Implication for prioritization:** Probes 1 and 2 pay for themselves even if Probe 3 kills the game-semantics contact-detection lever. The net-line detection + per-frame ball-side primitives still feed attribution Phase 4. So the minimum investment on this plan (~4 hours for overlay + 2 hours each for Probes 1, 2 = ~8 hours) produces a durable cross-workstream asset regardless of the contact-detection outcome.
+**Note on GT chain-of-trust:** the attribution GT (`gt_player_track_id`) is documented-unreliable (per `memory/action_audit_2026_04_20.md`). Probe 2 deliberately AVOIDS using that field — its GT-like labels come from action-type-only rally structure (reliable) plus a small manual ball-side sample. This means Probe 2's output is trustworthy as an INPUT to attribution, even though the existing attribution GT itself is not.
 
-**Coordination with attribution workstream:** before building the ball-side classifier, confirm with the attribution-workstream owner that its output schema matches what Day-3 Phase 4's rule-cost framework expects. The two workstreams should agree on (a) ball-side definition (net-top line vs net-base line), (b) sidedness semantics under ambiguity (at-net ball), (c) storage format if the signal is cached per rally.
+**Implication for prioritization:** Probes 1 and 2 pay for themselves even if Probe 3 kills the game-semantics contact-detection lever. The net-line detection + per-frame ball-side primitives still feed attribution Phase 4. So the minimum investment on this plan (~4 hours for overlay + 2 hours each for Probes 1, 2 + 2 hours manual labeling = ~10 hours) produces a durable cross-workstream asset regardless of the contact-detection outcome.
+
+**Coordination with attribution workstream (see Probe 0):** before building the ball-side classifier, confirm with the attribution-workstream owner that its output schema matches what Day-3 Phase 4's rule-cost framework expects. The two workstreams should agree on (a) ball-side definition (net-top line vs net-base line), (b) sidedness semantics under ambiguity (at-net ball), (c) storage format if the signal is cached per rally.
 
 ## 3D reconstruction — should we consider it?
 
@@ -219,8 +229,10 @@ than duplicating. If schemas disagree and they won't budge, re-evaluate.
 Then run Probes 1 → 2 → 3 → 3b in order. Skip later probes if earlier ones
 kill.
 
-Probe 2 uses GT contact frames as free ball-side labels (zero manual work
-for the primary sample). Only the 30-minute at-net spot-check is manual.
+Probe 2 uses TWO structural signals from action-type GT (crossing-consistency
++ midpoint test — no attribution dependency, since attribution GT is stale
+per memory/action_audit_2026_04_20.md) PLUS a 2-hour manual ball-side
+spot-check on 10 rallies / ~150 frames.
 
 Probe 3b has TWO gates: qualitative (≥ 4/6 on user-flagged cases) AND
 statistical (≥ 50% boost-eligible on 30 random rejected_by_classifier
