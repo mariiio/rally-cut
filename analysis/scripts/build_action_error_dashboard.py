@@ -24,8 +24,13 @@ def load_corpus(path: Path) -> list[dict[str, Any]]:
     with open(path) as f:
         for line in f:
             line = line.strip()
-            if line:
-                errors.append(json.loads(line))
+            if not line:
+                continue
+            rec = json.loads(line)
+            # Skip the canary _meta header that newer corpora prepend.
+            if isinstance(rec, dict) and rec.get("_meta") is True:
+                continue
+            errors.append(rec)
     return errors
 
 
