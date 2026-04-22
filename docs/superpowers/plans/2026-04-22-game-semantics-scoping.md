@@ -79,6 +79,36 @@ Of the 108 wrong_action errors, an unknown fraction would have been structurally
 
 **Output:** a categorization dump at `analysis/outputs/game_semantics_probe/wrong_action_net_cross_violations.jsonl` + a summary table.
 
+### Probe 3b — Validate the hypothesis against user-vetted FN cases
+
+**Context:** during the 2026-04-22 session the user flagged six specific FN cases as "obviously easy" (ones the pipeline rejects at GBM confidence ≤ 0.062 despite MS-TCN++ endorsement ≥ 0.92):
+
+| rally_id | frame | gt_action | classifier_conf | seq_peak_prob | direction_change | player_dist |
+|---|---:|---|---:|---:|---:|---:|
+| fb7f9c23 | 230 | receive | 0.004 | 0.919 | 3.12° | 0.103 |
+| 8ce36875 | 72 | receive | 0.020 | 0.997 | 49.07° | 0.030 |
+| a67c04fb | 143 | receive | 0.018 | 0.997 | 3.53° | 0.092 |
+| 04ef801f | 228 | dig | 0.062 | 0.979 | 29.57° | 0.067 |
+| 1a6e05d5 | 147 | serve | 0.031 | 0.992 | 9.85° | 0.145 |
+| f978201e | 92 | receive | 0.010 | 0.997 | 7.99° | 0.113 |
+
+Deep inspection of the raw ball trajectories (see `analysis/scripts/inspect_6_fn_cases.py`) showed 5 of 6 have strong physical contact signatures (direction change, speed discontinuity, or position jump). The monolithic GBM rejects them because the joint feature distribution at these values is ~50/50 contacts vs non-contacts in training. **Rally context (ball just crossed the net from opposite side, whose serve is it, what's the 3-touch count) is the missing signal that would make these acceptances decisive.**
+
+**Probe 3b method:**
+1. For each of the 6 cases, using Probes 1 + 2's net-line + per-frame ball-side output:
+   - Compute the ball-side trajectory in the ±30-frame window around GT.
+   - Compute the rally-state variables at GT: frames-since-serve, 3-touch-count-current-side, last-known-crossing-direction.
+2. Classify each: "a rally-state-aware prior would have BOOSTED acceptance here" vs "rally state does not help."
+
+**Validation gate (tight, because n=6):**
+- **6/6 boost-eligible** → hypothesis fully validated on user-flagged evidence. Proceed with confidence.
+- **4-5/6 boost-eligible** → hypothesis mostly validated; inspect the losers to understand.
+- **≤ 3/6 boost-eligible** → hypothesis may not generalize; cross-check with Probe 3's broader 108-case result before committing.
+
+**Output:** a short memo at `analysis/reports/game_semantics_probe_3b_6_cases.md` documenting the rally state at each of the 6 cases + the prior-boost verdict.
+
+**Why this matters:** Probe 3 measures whether the LEVER exists on the wrong_action pool. Probe 3b measures whether the lever exists on the FN pool specifically — and it's validated against cases the domain expert (user) has personally vetted, making the probe's result immediately credible.
+
 ## Visual debugging tooling (required for every probe)
 
 A mandatory deliverable regardless of gate outcome: **per-rally side-of-ball visual overlay**. A tool that takes a rally video + ball positions + net-line, and emits:
@@ -89,6 +119,18 @@ A mandatory deliverable regardless of gate outcome: **per-rally side-of-ball vis
 **Why:** the user explicitly said "I never visually assisted the direction." Before trusting any automated net-cross signal we need humans in the loop to sanity-check that the signal matches perception. This tool enables Probe 2's manual GT labeling and Probe 3's spot checks.
 
 Estimated build: 3-4 hours. Location: `analysis/scripts/render_side_overlay.py`.
+
+## Cross-workstream value — ball-side is a shared primitive
+
+**Reliable per-frame ball-side classification (Probe 2's deliverable) feeds TWO workstreams, not just contact detection.** It is also a material lever for the player-attribution workstream (see `memory/player_attribution_day3_2026_04_22.md`):
+
+- Today's attribution geometry is image-space distance between ball and player, without rally context. This produces misattribution when the geometrically-nearest player is on the wrong team (e.g., a ball crossing to the far side attributed to a near-side player who happens to be close in pixel space).
+- With reliable ball-side + the existing team-to-side mapping from `match_tracker`, attribution can be constrained to the ball-side's team: "a contact with ball on far side must be attributed to a far-side player." This is a game-rule constraint, not a heuristic, and it should eliminate a meaningful class of wrong-player attribution errors.
+- The Day-3 roadmap's Phase 4 (A5 motion-integral + game-semantics rule costs) explicitly lists "serve→opposite-team, 3-touch, net-cross, setter→teammate, block+dig coupling" as planned rule costs. **The ball-side signal is an input to those rule costs.** Building it once for contact detection and reusing it for attribution is the right factorization.
+
+**Implication for prioritization:** Probes 1 and 2 pay for themselves even if Probe 3 kills the game-semantics contact-detection lever. The net-line detection + per-frame ball-side primitives still feed attribution Phase 4. So the minimum investment on this plan (~4 hours for overlay + 2 hours each for Probes 1, 2 = ~8 hours) produces a durable cross-workstream asset regardless of the contact-detection outcome.
+
+**Coordination with attribution workstream:** before building the ball-side classifier, confirm with the attribution-workstream owner that its output schema matches what Day-3 Phase 4's rule-cost framework expects. The two workstreams should agree on (a) ball-side definition (net-top line vs net-base line), (b) sidedness semantics under ambiguity (at-net ball), (c) storage format if the signal is cached per rally.
 
 ## 3D reconstruction — should we consider it?
 
@@ -150,13 +192,22 @@ Each phase is a separate A/B against v5. Pre-registered:
 
 ```
 Read docs/superpowers/plans/2026-04-22-game-semantics-scoping.md.
-Run Probes 1 → 2 → 3 in order. Skip later probes if earlier ones kill.
-Deliverable: go/no-go verdict on game-semantics lever + visual overlay tool.
+Run Probes 1 → 2 → 3 → 3b in order. Skip later probes if earlier ones kill.
+Probe 3b validates the hypothesis on 6 user-flagged FN cases and is the
+immediate-credibility check on top of Probe 3's broader 108-case result.
+
+Deliverable: go/no-go verdict on game-semantics lever + visual overlay tool
++ the Probe 3b 6-case rally-state memo.
 
 Hard rules:
 - Build the visual overlay tool FIRST (4 hours). All probes depend on it.
 - Honor each probe's kill gate. Do NOT rationalize a miss into a pass.
 - Do NOT write Phase A/B/C code in this session. Only Probes.
-- If Probe 3 passes, author a separate implementation brief; do not start coding.
+- If Probe 3 passes but 3b says ≤3/6 on user cases, STOP and reconcile
+  before building. The user-vetted evidence is load-bearing; we cannot
+  ship an implementation that doesn't fix cases the domain expert
+  explicitly flagged.
+- If Probes pass overall, author a separate implementation brief; do
+  not start coding.
 - If any probe kills, write a NO-GO memo naming the root cause.
 ```
