@@ -73,6 +73,10 @@ reports/minimal_processing/sweep/
 reports/*.sql.gz
 reports/*.sql
 
+# Attribution visual debug surface (regeneratable from
+# scripts/render_attribution_viewer.py + scripts/extract_attribution_clips.py).
+reports/attribution_audit/
+
 # Training artifacts (large, regeneratable)
 reid_training_data/
 reid_loocv_sweep.txt
