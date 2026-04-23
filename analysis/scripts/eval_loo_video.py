@@ -59,6 +59,7 @@ from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
 from rallycut.tracking.sequence_action_runtime import get_sequence_probs
 from scripts.eval_action_detection import (
     RallyData,
+    _match_synthetic_serves,
     compute_metrics,
     load_rallies_with_action_gt,
     match_contacts,
@@ -207,6 +208,7 @@ def _eval_rally(
     action_clf: ActionTypeClassifier,
     contact_cfg: ContactDetectionConfig,
     tolerance_ms: int,
+    include_synthetic: bool = False,
 ) -> dict:
     """Run detect_contacts → classify_rally_actions → match against GT.
 
@@ -236,9 +238,19 @@ def _eval_rally(
 
     pred_actions = [a.to_dict() for a in rally_actions.actions]
     real_pred = [a for a in pred_actions if not a.get("isSynthetic")]
+    synth_pred = [a for a in pred_actions if a.get("isSynthetic")]
 
     tolerance_frames = max(1, round(rally.fps * tolerance_ms / 1000))
     matches, unmatched = match_contacts(rally.gt_labels, real_pred, tolerance=tolerance_frames)
+
+    # Pass 2: match synthetic serves against unmatched GT serves with wider
+    # tolerance (~1s) — matches production-aligned eval in eval_action_detection.py.
+    # Opt-in via --include-synthetic flag; default off preserves existing LOO numbers.
+    if include_synthetic and synth_pred:
+        synth_tolerance = max(tolerance_frames, round(rally.fps * 1.0))
+        _match_synthetic_serves(
+            matches, synth_pred, rally.gt_labels, synth_tolerance,
+        )
 
     metrics = compute_metrics(matches, unmatched)
     return {
@@ -357,6 +369,8 @@ def main() -> None:
                         help="Limit to N folds for smoke-testing")
     parser.add_argument("--out", type=str,
                         default="reports/contact_baseline_loo_video_2026_04_19.md")
+    parser.add_argument("--include-synthetic", action="store_true",
+                        help="Match synthetic serves against unmatched GT serves with ±1s tolerance (production-aligned). Default off preserves historical LOO baseline numbers.")
     parser.add_argument("--out-json", type=str, default=None,
                         help="Also write raw per-fold JSON for later comparison")
     args = parser.parse_args()
@@ -420,6 +434,7 @@ def main() -> None:
         for pre in held_rallies:
             result = _eval_rally(
                 pre, contact_clf, action_clf, contact_cfg, args.tolerance_ms,
+                include_synthetic=args.include_synthetic,
             )
             m = result["metrics"]
             fold_tp += m["tp"]
@@ -508,7 +523,7 @@ def main() -> None:
         json_path = Path(args.out_json)
         json_path.parent.mkdir(parents=True, exist_ok=True)
         json_path.write_text(json.dumps({
-            "args": {"threshold": args.threshold, "tolerance_ms": args.tolerance_ms},
+            "args": {"threshold": args.threshold, "tolerance_ms": args.tolerance_ms, "include_synthetic": args.include_synthetic},
             "aggregate": {
                 "contact_f1": f1, "contact_precision": p, "contact_recall": r,
                 "tp": agg_tp, "fp": agg_fp, "fn": agg_fn,
