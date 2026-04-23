@@ -20,6 +20,7 @@ Architecture:
 from __future__ import annotations
 
 import logging
+import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -28,6 +29,7 @@ from typing import TYPE_CHECKING, Any
 import cv2
 import numpy as np
 from scipy.optimize import linear_sum_assignment
+from sklearn.cluster import KMeans
 
 from rallycut.tracking.ball_features import ServerDetectionResult, detect_server
 from rallycut.tracking.identity_anchor import (
@@ -99,6 +101,98 @@ REID_MIN_MARGIN = 0.08
 # 30-frame serve-detection window — ensures we still have enough
 # positions to compute robust averages.
 FIRST_RALLY_INIT_WINDOW_FRAMES = 120
+
+# Phase 3 — match_tracker global-seed patch.
+# When enabled, before per-rally Hungarian we pool per-(rally, tid) mean HSV
+# features across ALL rallies, run k-means k=4 globally, assign clusters to
+# player ids by (majority court side, median Y), and seed every player profile
+# by feeding ALL tracks in its cluster through update_from_features. This
+# replaces the first-rally Y-sort seed (which has zero robustness when the
+# first rally is short/noisy/occluded) with a match-global prototype.
+# Pre-registered gates on 8-fixture click-GT: see docs/superpowers/plans.
+GLOBAL_SEED_ENABLED = os.environ.get("MATCH_TRACKER_GLOBAL_SEED", "0") == "1"
+
+# Cluster centroid pairwise cosine threshold above which the seed is rejected
+# — two clusters have collapsed and seeding would produce duplicate pids.
+GLOBAL_SEED_MAX_CENTROID_COS = 0.85
+
+
+def _cluster_feature(stats: TrackAppearanceStats) -> np.ndarray | None:
+    """Build a fixed-length clustering feature from track stats.
+
+    Concatenates upper-body HS + lower-body HS histograms (both L1-normalized
+    by construction). The 256-dim vector is then L2-normalized so Euclidean
+    k-means behaves like cosine clustering — matches probe 2's approach.
+
+    Returns None when either histogram is missing (skip track from seeding).
+    """
+    if stats.avg_upper_hist is None or stats.avg_lower_hist is None:
+        return None
+    upper = stats.avg_upper_hist.astype(np.float32).flatten()
+    lower = stats.avg_lower_hist.astype(np.float32).flatten()
+    feat = np.concatenate([upper, lower])
+    norm = float(np.linalg.norm(feat))
+    if norm <= 1e-9:
+        return None
+    return feat / norm
+
+
+def _cosine(a: np.ndarray, b: np.ndarray) -> float:
+    na = float(np.linalg.norm(a))
+    nb = float(np.linalg.norm(b))
+    if na <= 1e-9 or nb <= 1e-9:
+        return 0.0
+    return float(np.dot(a, b) / (na * nb))
+
+
+def _teams_from_positions(
+    track_to_player: dict[str, Any],
+    positions: list[PlayerPosition],
+) -> dict[int, int]:
+    """Assign team 0 (near) vs team 1 (far) based on rally-start foot-y
+    positions. The 2 tids with highest median foot-y at rally start are "near";
+    the other 2 are "far".
+
+    Rally-start positions (first 15 frames) are reliable because teams are
+    strictly on their own sides by volleyball rule before the serve; later
+    frames see defenders/setters crossing the midline, making per-frame
+    grouping noisy.
+
+    Returns {track_id: team (0|1)} only when all 4 primary tids have enough
+    rally-start samples to cluster confidently. Returns {} otherwise (caller
+    falls back to legacy pairing).
+    """
+    if not track_to_player or not positions:
+        return {}
+
+    primary_tids = {int(t) for t in track_to_player.keys()}
+    per_tid_ys: dict[int, list[float]] = {tid: [] for tid in primary_tids}
+    for p in positions:
+        if p.track_id in primary_tids and p.frame_number < 15:
+            foot_y = p.y + (p.height or 0) / 2
+            per_tid_ys[p.track_id].append(foot_y)
+    if any(len(ys) < 3 for ys in per_tid_ys.values()):
+        # Fall back to all-frame median if rally-start coverage is thin
+        per_tid_ys = {tid: [] for tid in primary_tids}
+        for p in positions:
+            if p.track_id in primary_tids:
+                foot_y = p.y + (p.height or 0) / 2
+                per_tid_ys[p.track_id].append(foot_y)
+        if any(not ys for ys in per_tid_ys.values()):
+            return {}
+
+    import statistics
+    medians = {tid: statistics.median(ys) for tid, ys in per_tid_ys.items()}
+    if len(medians) < 4:
+        return {}
+    ranked = sorted(medians.keys(), key=lambda t: -medians[t])
+    # Require a minimum gap between the 2nd and 3rd median-y to trust the
+    # positional split; below this, both groups straddle the midline and
+    # grouping is noise.
+    if medians[ranked[1]] - medians[ranked[2]] < 0.03:
+        return {}
+    near_tids = set(ranked[:2])
+    return {tid: (0 if tid in near_tids else 1) for tid in primary_tids}
 
 
 def verify_team_assignments(
@@ -199,12 +293,28 @@ def build_match_team_assignments(
             if conf < min_confidence:
                 continue
 
+        # Primary: derive team from physical positions (which 2 tids are
+        # physically on near side vs far side during this rally). Falls back
+        # to the legacy pid-ordering assumption only when positions are
+        # unavailable. The legacy "pids 1,2 = team 0, 3,4 = team 1" pairing
+        # is a systemic bug when match-players doesn't cluster by team
+        # (observed on 74% of rallies in the 2026-04-24 primitive audit).
         teams: dict[int, int] = {}
-        for tid_str, player_id in track_to_player.items():
-            pid = int(player_id)
-            base_team = 0 if pid <= 2 else 1
-            team = base_team if side_switch_count % 2 == 0 else 1 - base_team
-            teams[int(tid_str)] = team
+        positions_for_rally = (
+            rally_positions.get(rid) if rally_positions else None
+        )
+        if positions_for_rally:
+            teams = _teams_from_positions(track_to_player, positions_for_rally)
+
+        if not teams:
+            # Legacy fallback: pid-ordering pairing. Broken for rallies where
+            # pids aren't assigned to physical teammates — carried only for
+            # backward compat when positions aren't available.
+            for tid_str, player_id in track_to_player.items():
+                pid = int(player_id)
+                base_team = 0 if pid <= 2 else 1
+                team = base_team if side_switch_count % 2 == 0 else 1 - base_team
+                teams[int(tid_str)] = team
 
         if teams:
             result[rid] = teams
@@ -472,6 +582,10 @@ class MatchPlayerTracker:
         self.diagnostics: list[RallyAssignmentDiagnostics] = []
         self.stored_rally_data: list[StoredRallyData] = []
         self._sides_from_calibration = False
+        # Phase 3 — set True after global_seed_from_rallies succeeds.
+        # Makes the first rally use the global Hungarian path (same as rallies
+        # 2+) rather than the Y-sort _initialize_first_rally heuristic.
+        self._global_seeded = False
 
     def process_rally(
         self,
@@ -571,6 +685,10 @@ class MatchPlayerTracker:
         side_switch_detected = False
 
         if self.rally_count <= 1 and not self.frozen_player_ids:
+            # Phase 3: seeded profiles enrich the per-match prior, but the
+            # first-rally track->pid mapping still goes through the baseline
+            # Y-sort so convention remains identical. The seed's benefit
+            # is stabilizing rallies 2+ via richer HSV/ReID profiles.
             track_to_player = self._initialize_first_rally(
                 top_tracks, track_avg_y, track_court_sides
             )
@@ -595,7 +713,10 @@ class MatchPlayerTracker:
 
         # Step 7: Update player profiles (gated on confidence)
         # Skip frozen (user-provided) profiles, update the rest normally.
-        if self.rally_count <= 1:
+        # When globally seeded, the first rally is treated like any other —
+        # use the confidence gate instead of the unconditional first-rally
+        # update so seed profiles aren't clobbered by a bad first rally.
+        if self.rally_count <= 1 and not self._global_seeded:
             self._update_profiles(track_stats, track_to_player)
         elif confidence >= MIN_PROFILE_UPDATE_CONFIDENCE:
             self._update_profiles(track_stats, track_to_player)
@@ -810,6 +931,323 @@ class MatchPlayerTracker:
             track_court_sides[t] = 0  # near (higher Y)
 
         return track_avg_y, track_court_sides
+
+    def global_seed_from_rallies(
+        self,
+        rally_inputs: list[tuple[
+            dict[int, TrackAppearanceStats],  # track_stats
+            list[PlayerPosition],             # positions
+            float | None,                     # court_split_y
+            dict[int, int] | None,            # team_assignments
+        ]],
+        k: int = 4,
+    ) -> dict[str, Any]:
+        """Phase 3 — seed player profiles from a global k-means over all rallies.
+
+        Pools per-(rally, tid) HSV features across the entire match, runs
+        k-means k=4, and seeds ``state.players[pid]`` by feeding every track
+        assigned to its cluster through ``update_from_features``. Replaces the
+        first-rally Y-sort heuristic — the historical failure mode is that a
+        noisy first rally produces duplicate / swapped seed profiles that
+        propagate for the whole match.
+
+        The cluster -> player_id mapping uses (majority court side, median Y)
+        so that player ids 1-2 land on the near-side clusters and 3-4 on the
+        far-side clusters (near = higher image Y, closer to camera).
+
+        Returns a diagnostics dict with per-cluster sizes, sides, and the
+        cluster-centroid pairwise cosine similarity matrix. Callers should
+        check ``diagnostics["max_centroid_cos"] <= GLOBAL_SEED_MAX_CENTROID_COS``
+        for the pre-registered duplicate-pid gate.
+        """
+        if self.frozen_player_ids:
+            logger.info("global_seed_from_rallies: skipped (frozen profiles)")
+            return {"seeded": False, "reason": "frozen_profiles"}
+
+        # Collect (rally_idx, tid, feature, side, avg_y) across all rallies.
+        entries: list[dict[str, Any]] = []
+        for rally_idx, (stats, positions, csy, team_assign) in enumerate(
+            rally_inputs
+        ):
+            # Compute per-track avg Y for tiebreak within a cluster's majority side.
+            track_ys: dict[int, list[float]] = defaultdict(list)
+            for p in positions:
+                if p.track_id >= 0:
+                    track_ys[p.track_id].append(p.y)
+            for tid, ts in stats.items():
+                feat = _cluster_feature(ts)
+                if feat is None:
+                    continue
+                ys = track_ys.get(tid, [])
+                if not ys:
+                    continue
+                avg_y = float(np.mean(ys))
+                # Decide side per track: calibrator > team_assign > court_split_y > Y-median.
+                side: int | None = None
+                if team_assign and tid in team_assign:
+                    side = int(team_assign[tid])
+                elif csy is not None:
+                    side = 0 if avg_y > csy else 1
+                else:
+                    side = None  # defer to per-cluster majority
+                entries.append({
+                    "rally_idx": rally_idx,
+                    "tid": tid,
+                    "feat": feat,
+                    "side": side,
+                    "avg_y": avg_y,
+                })
+
+        if len(entries) < k:
+            logger.warning(
+                "global_seed_from_rallies: only %d tracks, need ≥%d — skipping",
+                len(entries), k,
+            )
+            return {"seeded": False, "reason": "insufficient_tracks",
+                    "n_tracks": len(entries)}
+
+        feats = np.stack([e["feat"] for e in entries], axis=0)
+        km = KMeans(n_clusters=k, n_init=30, random_state=42)
+        labels = km.fit_predict(feats).astype(np.int32)
+        centers = km.cluster_centers_.astype(np.float32)
+
+        # Duplicate-pid gate: pairwise cosine similarity between cluster
+        # centroids. When two clusters are nearly identical, k-means has not
+        # separated the 4 players and seeding would propagate duplicates.
+        max_cos = 0.0
+        pair_cos: dict[tuple[int, int], float] = {}
+        for i in range(k):
+            for j in range(i + 1, k):
+                c = _cosine(centers[i], centers[j])
+                pair_cos[(i, j)] = c
+                if c > max_cos:
+                    max_cos = c
+
+        # Per-cluster aggregates for diagnostics + fallback.
+        cluster_entries: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        for i, e in enumerate(entries):
+            cluster_entries[int(labels[i])].append(e)
+        cluster_med_y: dict[int, float] = {}
+        cluster_side: dict[int, int] = {}
+        for c, es in cluster_entries.items():
+            sides = [e["side"] for e in es if e["side"] is not None]
+            if sides:
+                cluster_side[c] = 0 if sides.count(0) >= sides.count(1) else 1
+            else:
+                cluster_side[c] = -1
+            cluster_med_y[c] = float(np.median([e["avg_y"] for e in es]))
+
+        # Cluster -> pid mapping. Must match baseline first-rally Y-sort
+        # convention exactly on fixtures where the baseline already works
+        # (otherwise we regress correctly-assigned videos). Strategy:
+        #
+        #   1. Run `_initialize_first_rally`-equivalent on rally 0's TOP 4
+        #      tracks: split near/far, sort Y ascending within each side,
+        #      assign pids [1,2] near / [3,4] far.
+        #   2. Look up each of those 4 first-rally tids' cluster; that
+        #      cluster inherits the pid.
+        #   3. For clusters not touched by the first rally (≤4 players in
+        #      rally 0), fall back to majority-side + Y ordering.
+        #
+        # This guarantees Phase 3's permutation == baseline's permutation
+        # when rally 0 has all 4 primary tracks; the seed's *profile* gain
+        # comes from EMA'ing all 4 clusters across ALL rallies.
+        # Reproduce exactly what `process_rally` does for the first rally
+        # so the seed's permutation cannot drift from baseline. That means:
+        #   1. Use the serve-formation-window positions for classification
+        #      (same FIRST_RALLY_INIT_WINDOW_FRAMES guard).
+        #   2. Route through `_classify_track_sides`, which honors the
+        #      calibrator -> team_assign -> csy -> Y-median priority
+        #      cascade and therefore matches production exactly.
+        #   3. Use `_top_tracks_by_frames` for the top-4 selection.
+        r0_stats, r0_positions, r0_csy, r0_team = rally_inputs[0]
+        r0_classification_positions = r0_positions
+        windowed = [
+            p for p in r0_positions
+            if p.frame_number < FIRST_RALLY_INIT_WINDOW_FRAMES
+        ]
+        if len(windowed) >= 4 * 10:
+            r0_classification_positions = windowed
+
+        r0_avg_y, r0_sides = self._classify_track_sides(
+            r0_stats, r0_classification_positions, r0_csy, r0_team,
+        )
+        top4_r0 = self._top_tracks_by_frames(list(r0_sides.keys()), r0_stats, 4)
+
+        near_r0 = sorted(
+            [t for t in top4_r0 if r0_sides.get(t, 0) == 0],
+            key=lambda t: r0_avg_y.get(t, 0.5),
+        )
+        far_r0 = sorted(
+            [t for t in top4_r0 if r0_sides.get(t, 0) == 1],
+            key=lambda t: r0_avg_y.get(t, 0.5),
+        )
+
+        # Build cluster -> pid via rally-0 Y-sort assignment.
+        tid_to_cluster_r0: dict[int, int] = {
+            e["tid"]: int(labels[i])
+            for i, e in enumerate(entries)
+            if e["rally_idx"] == 0
+        }
+        cluster_to_pid: dict[int, int] = {}
+        used_clusters: set[int] = set()
+        r0_pid_assignments: list[tuple[int, int]] = []  # (tid, pid) log
+        for pid, tid in zip([1, 2], near_r0[:2]):
+            cid_lookup = tid_to_cluster_r0.get(tid)
+            if cid_lookup is not None and cid_lookup not in used_clusters:
+                cluster_to_pid[cid_lookup] = pid
+                used_clusters.add(cid_lookup)
+                r0_pid_assignments.append((tid, pid))
+        for pid, tid in zip([3, 4], far_r0[:2]):
+            cid_lookup = tid_to_cluster_r0.get(tid)
+            if cid_lookup is not None and cid_lookup not in used_clusters:
+                cluster_to_pid[cid_lookup] = pid
+                used_clusters.add(cid_lookup)
+                r0_pid_assignments.append((tid, pid))
+
+        # Fallback for any cluster not yet assigned (rally 0 missing a
+        # player, or cluster collision). Take the remaining clusters by
+        # majority-side + ascending median Y, filling remaining pids in
+        # side-grouped order [1,2 near, 3,4 far].
+        missing_pids = [pid for pid in (1, 2, 3, 4)
+                        if pid not in cluster_to_pid.values()]
+        unassigned_clusters = [c for c in cluster_entries.keys()
+                               if c not in used_clusters]
+        if missing_pids and unassigned_clusters:
+            near_unassigned = sorted(
+                [c for c in unassigned_clusters if cluster_side.get(c, -1) == 0],
+                key=lambda c: cluster_med_y[c],
+            )
+            far_unassigned = sorted(
+                [c for c in unassigned_clusters if cluster_side.get(c, -1) == 1],
+                key=lambda c: cluster_med_y[c],
+            )
+            ambig = [c for c in unassigned_clusters
+                     if cluster_side.get(c, -1) == -1]
+            # Ambiguous clusters → assign to whichever side is short.
+            # Sort ambiguous by Y: highest Y goes near first.
+            ambig_hi = sorted(ambig, key=lambda c: -cluster_med_y[c])
+            for pid in missing_pids:
+                if pid in (1, 2) and near_unassigned:
+                    cluster_to_pid[near_unassigned.pop(0)] = pid
+                elif pid in (3, 4) and far_unassigned:
+                    cluster_to_pid[far_unassigned.pop(0)] = pid
+                elif ambig_hi:
+                    cluster_to_pid[ambig_hi.pop(0 if pid in (1, 2) else -1)] = pid
+
+        # Check gate before mutating state.
+        gate_ok = max_cos <= GLOBAL_SEED_MAX_CENTROID_COS
+
+        diagnostics: dict[str, Any] = {
+            "seeded": False,
+            "k": k,
+            "n_tracks": len(entries),
+            "cluster_sizes": {c: len(es) for c, es in cluster_entries.items()},
+            "cluster_sides": dict(cluster_side),
+            "cluster_med_y": dict(cluster_med_y),
+            "cluster_to_pid": dict(cluster_to_pid),
+            "r0_top4": list(top4_r0),
+            "r0_near": list(near_r0),
+            "r0_far": list(far_r0),
+            "r0_avg_y": dict(r0_avg_y),
+            "r0_sides": dict(r0_sides),
+            "r0_pid_assignments": r0_pid_assignments,
+            "max_centroid_cos": max_cos,
+            "pair_centroid_cos": pair_cos,
+            "gate_passed": gate_ok,
+        }
+
+        if not gate_ok:
+            logger.warning(
+                "global_seed_from_rallies: gate FAILED — max centroid cosine "
+                "%.3f > %.2f; NOT seeding (duplicate-pid risk)",
+                max_cos, GLOBAL_SEED_MAX_CENTROID_COS,
+            )
+            return diagnostics
+
+        # Seed profiles: aggregate all (rally, tid) features per cluster and
+        # SET the profile directly (not via EMA). Feeding features through
+        # update_from_features with PROFILE_EMA_ALPHA=0.10 turns each profile
+        # into a rolling window of the last ~25 updates, so order matters and
+        # the profile ends up biased toward whichever track we fed last.
+        # Setting averages directly from a TrackAppearanceStats-computed mean
+        # gives a stable match-global prototype per cluster.
+        cluster_features: dict[int, list[Any]] = defaultdict(list)
+        cluster_reid_embs: dict[int, list[np.ndarray]] = defaultdict(list)
+        cluster_reid_shape: dict[int, tuple[int, ...]] = {}
+        for e_idx, e in enumerate(entries):
+            c = int(labels[e_idx])
+            rally_idx = e["rally_idx"]
+            tid = e["tid"]
+            stats, _positions, _csy, _team_assign = rally_inputs[rally_idx]
+            ts = stats.get(tid)
+            if ts is None:
+                continue
+            cluster_features[c].extend(ts.features)
+            if ts.reid_embedding is not None:
+                if c not in cluster_reid_shape:
+                    cluster_reid_shape[c] = ts.reid_embedding.shape
+                if ts.reid_embedding.shape == cluster_reid_shape[c]:
+                    cluster_reid_embs[c].append(ts.reid_embedding)
+
+        for c, feats_list in cluster_features.items():
+            pid_for_cluster = cluster_to_pid.get(c)
+            if pid_for_cluster is None or not feats_list:
+                continue
+            pid = pid_for_cluster
+            aggregated = TrackAppearanceStats(track_id=-1)
+            aggregated.features = list(feats_list)
+            aggregated.compute_averages()
+
+            profile = self.state.players[pid]
+            if aggregated.avg_upper_hist is not None:
+                profile.avg_upper_hist = aggregated.avg_upper_hist
+                profile.upper_hist_count = len(feats_list)
+            if aggregated.avg_lower_hist is not None:
+                profile.avg_lower_hist = aggregated.avg_lower_hist
+                profile.lower_hist_count = len(feats_list)
+            if aggregated.avg_upper_v_hist is not None:
+                profile.avg_upper_v_hist = aggregated.avg_upper_v_hist
+                profile.upper_v_hist_count = len(feats_list)
+            if aggregated.avg_lower_v_hist is not None:
+                profile.avg_lower_v_hist = aggregated.avg_lower_v_hist
+                profile.lower_v_hist_count = len(feats_list)
+            if aggregated.avg_skin_tone_hsv is not None:
+                profile.avg_skin_tone_hsv = aggregated.avg_skin_tone_hsv
+                profile.skin_sample_count = len(feats_list)
+            if aggregated.avg_dominant_color_hsv is not None:
+                profile.avg_dominant_color_hsv = aggregated.avg_dominant_color_hsv
+                profile.dominant_color_count = len(feats_list)
+            if aggregated.avg_head_hist is not None:
+                profile.avg_head_hist = aggregated.avg_head_hist
+                profile.head_hist_count = len(feats_list)
+
+            # ReID: average the per-track mean embeddings and re-normalize.
+            embs = cluster_reid_embs.get(c, [])
+            if embs:
+                stacked = np.stack(embs, axis=0)
+                mean_emb = stacked.mean(axis=0).astype(np.float32)
+                nrm = float(np.linalg.norm(mean_emb))
+                if nrm > 1e-9:
+                    profile.reid_embedding = mean_emb / nrm
+                    profile.reid_embedding_count = len(embs)
+
+        # Set side assignments to match the seed (near pids 1-2 -> 0, far 3-4 -> 1).
+        for pid in (1, 2):
+            self.state.current_side_assignment[pid] = 0
+            self.state.players[pid].team = 0
+        for pid in (3, 4):
+            self.state.current_side_assignment[pid] = 1
+            self.state.players[pid].team = 1
+
+        self._global_seeded = True
+        diagnostics["seeded"] = True
+        logger.info(
+            "global_seed_from_rallies: seeded %d profiles from %d (rally, tid) "
+            "tracks; max_centroid_cos=%.3f",
+            k, len(entries), max_cos,
+        )
+        return diagnostics
 
     def _initialize_first_rally(
         self,
@@ -2089,18 +2527,54 @@ def match_players_across_rallies(
     )
     results: list[RallyTrackingResult] = []
 
-    for rally in rallies:
-        # Extract appearance features from video
-        track_stats = extract_rally_appearances(
-            video_path=video_path,
-            positions=rally.positions,
-            primary_track_ids=rally.primary_track_ids,
-            start_ms=rally.start_ms,
-            end_ms=rally.end_ms,
-            num_samples=num_samples,
-            extract_reid=extract_reid,
-            reid_model=reid_model,
+    # Phase 3 — when MATCH_TRACKER_GLOBAL_SEED=1, pre-extract features for
+    # every rally, pool them, and seed profiles via global k-means before
+    # the per-rally Hungarian loop. Features are cached in-memory so each
+    # rally is only decoded once across seed + assignment.
+    prefetched_stats: list[dict[int, TrackAppearanceStats]] = []
+    do_global_seed = GLOBAL_SEED_ENABLED and not reference_profiles
+    if do_global_seed:
+        logger.info(
+            "Phase 3: prefetching track_stats for %d rallies to seed profiles "
+            "via global k-means (MATCH_TRACKER_GLOBAL_SEED=1)",
+            len(rallies),
         )
+        for rally in rallies:
+            ts = extract_rally_appearances(
+                video_path=video_path,
+                positions=rally.positions,
+                primary_track_ids=rally.primary_track_ids,
+                start_ms=rally.start_ms,
+                end_ms=rally.end_ms,
+                num_samples=num_samples,
+                extract_reid=extract_reid,
+                reid_model=reid_model,
+            )
+            prefetched_stats.append(ts)
+
+        seed_inputs = [
+            (prefetched_stats[i], r.positions, r.court_split_y, r.team_assignments)
+            for i, r in enumerate(rallies)
+        ]
+        seed_diag = tracker.global_seed_from_rallies(seed_inputs)
+        logger.info("global seed diagnostics: %s", seed_diag)
+
+    for rally_idx, rally in enumerate(rallies):
+        # Reuse prefetched track_stats when available (Phase 3 seed path);
+        # otherwise decode now.
+        if do_global_seed:
+            track_stats = prefetched_stats[rally_idx]
+        else:
+            track_stats = extract_rally_appearances(
+                video_path=video_path,
+                positions=rally.positions,
+                primary_track_ids=rally.primary_track_ids,
+                start_ms=rally.start_ms,
+                end_ms=rally.end_ms,
+                num_samples=num_samples,
+                extract_reid=extract_reid,
+                reid_model=reid_model,
+            )
 
         # Process rally
         result = tracker.process_rally(

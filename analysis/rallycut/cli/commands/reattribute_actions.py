@@ -453,11 +453,49 @@ def reattribute_actions_cmd(
 
     match_analysis = cast(dict[str, Any], row[0])
 
+    # Pull per-rally positions so team-assignment can be inferred from physical
+    # rally-start pairing (fix for stage-2 team-pair bug — see
+    # analysis/reports/phase1_3_team_side_2026_04_24.md).
+    from rallycut.tracking.player_tracker import PlayerPosition
+    rally_positions: dict[str, list[PlayerPosition]] = {}
+    rally_ids_for_positions: list[str] = []
+    for r in match_analysis.get("rallies") or []:
+        rid = r.get("rallyId") or r.get("rally_id")
+        if isinstance(rid, str) and rid:
+            rally_ids_for_positions.append(rid)
+    if rally_ids_for_positions:
+        with get_connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT rally_id, positions_json FROM player_tracks "
+                "WHERE rally_id = ANY(%s)",
+                (rally_ids_for_positions,),
+            )
+            for rid_obj, pos_obj in cur.fetchall():
+                rid_str = str(rid_obj)
+                pos_list = pos_obj if isinstance(pos_obj, list) else []
+                rally_positions[rid_str] = [
+                    PlayerPosition(
+                        frame_number=p.get("frameNumber", 0),
+                        track_id=p.get("trackId", 0),
+                        x=p.get("x", 0),
+                        y=p.get("y", 0),
+                        width=p.get("width", 0),
+                        height=p.get("height", 0),
+                        confidence=p.get("confidence", 0),
+                    )
+                    for p in pos_list
+                    if isinstance(p, dict)
+                ]
+
     # Build team assignments at two confidence levels:
     # - all_teams (conf >= 0): used for stamping teamAssignments on all rallies
     # - reattrib_teams (conf >= min_confidence): used for player re-attribution
-    all_teams = build_match_team_assignments(match_analysis, min_confidence=0.0)
-    reattrib_teams = build_match_team_assignments(match_analysis, min_confidence)
+    all_teams = build_match_team_assignments(
+        match_analysis, min_confidence=0.0, rally_positions=rally_positions
+    )
+    reattrib_teams = build_match_team_assignments(
+        match_analysis, min_confidence, rally_positions=rally_positions
+    )
 
     # Per-rally semantic flip for formation-based serving_team detection.
     # Required to map physical-near (team_assignments team 0) to the
