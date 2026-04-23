@@ -2889,10 +2889,23 @@ def reattribute_players(
 
         expected_team = expected_teams[i]
         if expected_team is None:
-            # No serve-seeded chain available. The court_side fallback is
-            # circular (court_side depends on the player being evaluated)
-            # and empirically 0% accurate. Skip reattribution entirely.
-            continue
+            # Fallback: use the Contact's ball-derived court_side as team
+            # anchor. Historical note: the prior in-code comment called this
+            # "circular" — that was true when court_side on actions was
+            # derived from team_assignments itself. Contact.court_side comes
+            # from `_resolve_court_side` in contact_detector (ball-trajectory
+            # based, no player identity input), so it's genuinely independent.
+            # Only safe AFTER the 2026-04-24 match_tracker team-pair fix that
+            # guarantees team 0 == near, team 1 == far in team_assignments.
+            contact_for_side = contact_by_frame.get(action.frame)
+            if contact_for_side is None:
+                continue
+            if contact_for_side.court_side == "near":
+                expected_team = 0
+            elif contact_for_side.court_side == "far":
+                expected_team = 1
+            else:
+                continue
 
         current_team = team_assignments.get(action.player_track_id)
 
