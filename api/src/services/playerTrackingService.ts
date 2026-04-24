@@ -1047,11 +1047,16 @@ export async function promoteRawTrack(
   return { promotedCount: promotedPositions.length, primaryTrackIds };
 }
 
-// Action ground truth label format
+// Action ground truth label format.
+// `trackId` anchors to the raw BoT-SORT track id (stable across match-players
+// re-runs). `playerTrackId` is the legacy canonical-pid (1-4) field, kept
+// optional during migration. New writes should populate `trackId`; readers
+// derive the display pid at render time via `appliedFullMapping[trackId]`.
 interface ActionGroundTruthLabel {
   frame: number;
   action: string;  // "serve", "receive", "set", "attack", "block", "dig"
-  playerTrackId: number;
+  trackId?: number;
+  playerTrackId?: number;
   ballX?: number;
   ballY?: number;
 }

@@ -1858,11 +1858,15 @@ export interface ContactsData {
   contacts: ContactInfo[];
 }
 
-// Action ground truth label
+// Action ground truth label. `trackId` is the stable anchor (raw BoT-SORT id,
+// pre-remap); `playerTrackId` is the legacy canonical pid (1-4) kept for
+// back-compat during migration. Render display pid via current
+// `appliedFullMapping[trackId]` with `trackToPlayer[trackId]` as fallback.
 export interface ActionGroundTruthLabel {
   frame: number;
   action: 'serve' | 'receive' | 'set' | 'attack' | 'block' | 'dig';
-  playerTrackId: number;
+  trackId?: number;
+  playerTrackId?: number;
   ballX?: number;
   ballY?: number;
 }
@@ -2554,6 +2558,11 @@ export interface MatchAnalysis {
     startMs: number;
     endMs: number;
     trackToPlayer: Record<string, number>;
+    // Raw BoT-SORT trackId → canonical pid. Unlike `trackToPlayer` (identity
+    // after remap), this preserves the Hungarian mapping and is the anchor
+    // used to resolve action-GT `trackId` to a display pid.
+    appliedFullMapping?: Record<string, number>;
+    remapApplied?: boolean;
     assignmentConfidence: number;
     sideSwitchDetected: boolean;
     serverPlayerId: number | null;

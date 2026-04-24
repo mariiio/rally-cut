@@ -24,6 +24,7 @@ import { getMatchStatsApi } from '@/services/api';
 import type { MatchStats } from '@/services/api';
 import { LabelingModeBanner } from './LabelingModeBanner';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
+import { rallyMatchEntry } from '@/utils/gtLabelDisplay';
 import { AspectRatio } from '@/constants/enums';
 
 /** Binary search: find the rally containing the given time (O(log n)).
@@ -136,6 +137,8 @@ export function VideoPlayer() {
   const updateActionLabel = usePlayerTrackingStore((state) => state.updateActionLabel);
   const removeActionLabel = usePlayerTrackingStore((state) => state.removeActionLabel);
   const showLandingZones = usePlayerTrackingStore((state) => state.showLandingZones);
+  const matchAnalysis = usePlayerTrackingStore((state) => state.matchAnalysis);
+  const loadMatchAnalysis = usePlayerTrackingStore((state) => state.loadMatchAnalysis);
 
   // Get active match for fps
   const activeMatch = getActiveMatch();
@@ -179,6 +182,22 @@ export function VideoPlayer() {
     if (!activeMatchId) return;
     getMatchStatsApi(activeMatchId).then(setMatchStats).catch(() => {});
   }, [activeMatchId]);
+
+  // Lazy-fetch match analysis so GT overlays can resolve display pid from
+  // raw trackId via appliedFullMapping.
+  useEffect(() => {
+    if (!activeMatchId) return;
+    if (matchAnalysis[activeMatchId]) return;
+    void loadMatchAnalysis(activeMatchId);
+  }, [activeMatchId, matchAnalysis, loadMatchAnalysis]);
+
+  // Memoize the per-rally mapping so ActionOverlay doesn't rebuild all DOM
+  // label nodes on every parent re-render (its effect depends on this prop).
+  const currentAppliedFullMapping = useMemo(() => {
+    const analysis = activeMatchId ? matchAnalysis[activeMatchId] : undefined;
+    return rallyMatchEntry(analysis, currentRally?._backendId ?? null)
+      ?.appliedFullMapping;
+  }, [activeMatchId, matchAnalysis, currentRally]);
 
   // Get camera edit for current rally
   const currentCameraEdit = useMemo(() => {
@@ -938,6 +957,7 @@ export function VideoPlayer() {
               onUpdateLabel={(frame, action) => updateActionLabel(currentRally._backendId!, frame, action)}
               onDeleteLabel={(frame) => removeActionLabel(currentRally._backendId!, frame)}
               playerNumberMap={labelingPlayerNumbers}
+              appliedFullMapping={currentAppliedFullMapping}
             />
           )}
           {/* Landing zones overlay */}

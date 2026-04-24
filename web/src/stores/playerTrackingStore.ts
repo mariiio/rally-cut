@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { trackPlayers, getPlayerTrack, swapPlayerTracks, promoteRawTrack, saveCourtCalibration, deleteCourtCalibration, getActionGroundTruth, saveActionGroundTruth as apiSaveActionGroundTruth, trackAllRallies as apiTrackAllRallies, getBatchTrackingStatus as apiGetBatchTrackingStatus, getPlayerReferenceCrops, uploadPlayerReferenceCrop, deletePlayerReferenceCrop, getVideoScoreGt, saveRallyScoreGt, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData, type ActionGroundTruthLabel, type QualityReport, type BatchTrackingStatus, type PlayerReferenceCrop, type ScoreGtEntry, type ScoreTeam } from '@/services/api';
+import { trackPlayers, getPlayerTrack, swapPlayerTracks, promoteRawTrack, saveCourtCalibration, deleteCourtCalibration, getActionGroundTruth, saveActionGroundTruth as apiSaveActionGroundTruth, trackAllRallies as apiTrackAllRallies, getBatchTrackingStatus as apiGetBatchTrackingStatus, getPlayerReferenceCrops, uploadPlayerReferenceCrop, deletePlayerReferenceCrop, getVideoScoreGt, saveRallyScoreGt, getMatchAnalysis, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData, type ActionGroundTruthLabel, type QualityReport, type BatchTrackingStatus, type PlayerReferenceCrop, type ScoreGtEntry, type ScoreTeam, type MatchAnalysis } from '@/services/api';
 
 // Types for player tracking data (store format)
 export interface PlayerPosition {
@@ -88,6 +88,14 @@ interface PlayerTrackingState {
   actionGtDirty: Record<string, boolean>; // keyed by rallyId
   actionGtSaving: Record<string, boolean>; // keyed by rallyId
 
+  // Per-video match analysis (cached so the editor can resolve display pid
+  // from raw trackId via rallies[].appliedFullMapping).
+  matchAnalysis: Record<string, MatchAnalysis>; // keyed by videoId
+  matchAnalysisLoading: Record<string, boolean>; // keyed by videoId
+  /** In-flight promise per videoId so concurrent callers await the same
+   *  fetch instead of racing. Not persisted; lives only in memory. */
+  _matchAnalysisPending?: Record<string, Promise<MatchAnalysis | null>>;
+
   // Reference crops state
   referenceCrops: PlayerReferenceCrop[];
   referenceCropsLoading: boolean;
@@ -151,9 +159,14 @@ interface PlayerTrackingState {
   addActionLabel: (rallyId: string, label: ActionGroundTruthLabel) => void;
   removeActionLabel: (rallyId: string, frame: number) => void;
   updateActionLabel: (rallyId: string, frame: number, action: ActionGroundTruthLabel['action']) => void;
-  updateActionLabelPlayer: (rallyId: string, frame: number, playerTrackId: number) => void;
+  /** Update the player anchor for an existing GT label. `trackId` is the raw
+   *  BoT-SORT id (stable anchor); storing as canonical pid is deprecated. */
+  updateActionLabelPlayer: (rallyId: string, frame: number, trackId: number) => void;
   loadActionGroundTruth: (rallyId: string) => Promise<void>;
   saveActionGroundTruth: (rallyId: string) => Promise<void>;
+
+  // Match analysis loader (backs appliedFullMapping / trackToPlayer lookups).
+  loadMatchAnalysis: (videoId: string, forceRefresh?: boolean) => Promise<MatchAnalysis | null>;
 }
 
 /**
@@ -266,6 +279,8 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
       actionGroundTruth: {},
       actionGtDirty: {},
       actionGtSaving: {},
+      matchAnalysis: {},
+      matchAnalysisLoading: {},
       referenceCrops: [],
       referenceCropsLoading: false,
       scoreGt: {},
@@ -787,10 +802,17 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
         });
       },
 
-      updateActionLabelPlayer: (rallyId: string, frame: number, playerTrackId: number) => {
+      updateActionLabelPlayer: (rallyId: string, frame: number, trackId: number) => {
         set((state) => {
           const existing = state.actionGroundTruth[rallyId] ?? [];
-          const updated = existing.map(l => l.frame === frame ? { ...l, playerTrackId } : l);
+          const updated = existing.map(l => {
+            if (l.frame !== frame) return l;
+            // Write the new stable anchor and drop the legacy field so older
+            // canonical-pid values (from pre-migration rows) don't shadow it.
+            const rest = { ...l };
+            delete rest.playerTrackId;
+            return { ...rest, trackId };
+          });
           return {
             actionGroundTruth: { ...state.actionGroundTruth, [rallyId]: updated },
             actionGtDirty: { ...state.actionGtDirty, [rallyId]: true },
@@ -826,6 +848,53 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
           set((s) => ({ actionGtSaving: { ...s.actionGtSaving, [rallyId]: false } }));
           throw error;
         }
+      },
+
+      loadMatchAnalysis: async (videoId: string, forceRefresh: boolean = false) => {
+        const state = get();
+        if (!forceRefresh && state.matchAnalysis[videoId]) {
+          return state.matchAnalysis[videoId];
+        }
+        // Dedupe concurrent callers: they all await the same in-flight promise,
+        // so the second effect in the same tick doesn't re-issue the request
+        // or fall into the sort-index fallback on first render.
+        const pending = state._matchAnalysisPending?.[videoId];
+        if (pending && !forceRefresh) return pending;
+
+        const fetchP = (async () => {
+          set((s) => ({
+            matchAnalysisLoading: { ...s.matchAnalysisLoading, [videoId]: true },
+          }));
+          try {
+            const analysis = await getMatchAnalysis(videoId);
+            set((s) => ({
+              matchAnalysis: analysis
+                ? { ...s.matchAnalysis, [videoId]: analysis }
+                : s.matchAnalysis,
+              matchAnalysisLoading: { ...s.matchAnalysisLoading, [videoId]: false },
+            }));
+            return analysis;
+          } catch (error) {
+            console.error('[PlayerTrackingStore] Failed to load match analysis:', error);
+            set((s) => ({
+              matchAnalysisLoading: { ...s.matchAnalysisLoading, [videoId]: false },
+            }));
+            return null;
+          } finally {
+            set((s) => {
+              const next = { ...(s._matchAnalysisPending ?? {}) };
+              delete next[videoId];
+              return { _matchAnalysisPending: next };
+            });
+          }
+        })();
+        set((s) => ({
+          _matchAnalysisPending: {
+            ...(s._matchAnalysisPending ?? {}),
+            [videoId]: fetchP,
+          },
+        }));
+        return fetchP;
       },
 
       loadReferenceCrops: async (videoId: string) => {

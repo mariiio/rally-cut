@@ -42,6 +42,12 @@ interface MatchAnalysisResult {
     startMs: number;
     endMs: number;
     trackToPlayer: Record<string, number>;
+    // Raw BoT-SORT trackId → canonical pid, written by remap-track-ids
+    // (stage 4). Unlike `trackToPlayer` — which is collapsed to identity
+    // post-remap — this preserves the original Hungarian mapping and is the
+    // anchor the editor uses to resolve action-GT `trackId` to a display pid.
+    appliedFullMapping?: Record<string, number>;
+    remapApplied?: boolean;
     assignmentConfidence: number;
     sideSwitchDetected: boolean;
     serverPlayerId: number | null;

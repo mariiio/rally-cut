@@ -4,6 +4,7 @@ import { useEffect, useRef, RefObject, useMemo, useState, useCallback } from 're
 import { Box, Popover, IconButton, Select, MenuItem, type SelectChangeEvent } from '@mui/material';
 import DeleteIcon from '@mui/icons-material/Delete';
 import type { ActionsData, ActionGroundTruthLabel } from '@/services/api';
+import { resolveGtDisplayPid, gtAnchorId } from '@/utils/gtLabelDisplay';
 
 // Action colors matching volleyball semantics
 const ACTION_COLORS: Record<string, string> = {
@@ -28,6 +29,10 @@ interface ActionOverlayProps {
   onUpdateLabel?: (frame: number, action: ActionGroundTruthLabel['action']) => void;
   onDeleteLabel?: (frame: number) => void;
   playerNumberMap?: Map<number, number>; // trackId → display number 1-4
+  /** Raw trackId → canonical pid (1-4), per-rally. Source for resolving
+   *  GT label `trackId` to a display number when positions have been
+   *  remapped by the pipeline. */
+  appliedFullMapping?: Record<string, number>;
 }
 
 // How long (seconds) to show the action label after its contact frame
@@ -45,6 +50,7 @@ export function ActionOverlay({
   onUpdateLabel,
   onDeleteLabel,
   playerNumberMap,
+  appliedFullMapping,
 }: ActionOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const labelsRef = useRef<HTMLDivElement[]>([]);
@@ -176,15 +182,16 @@ export function ActionOverlay({
       label.textContent = gt.action;
       label.appendChild(gtBadge);
 
-      if (gt.playerTrackId >= 0) {
+      const anchor = gtAnchorId(gt);
+      if (anchor !== null && anchor >= 0) {
         const badge = document.createElement('span');
         badge.style.cssText = `
           margin-left: 4px;
           font-size: 10px;
           opacity: 0.8;
         `;
-        const pNum = playerNumberMap?.get(gt.playerTrackId);
-        badge.textContent = pNum != null ? `P${pNum}` : `#${gt.playerTrackId}`;
+        const pNum = resolveGtDisplayPid(gt, appliedFullMapping, playerNumberMap);
+        badge.textContent = pNum != null ? `P${pNum}` : `#${anchor}`;
         label.appendChild(badge);
       }
 
@@ -207,7 +214,7 @@ export function ActionOverlay({
         label.removeEventListener('click', clickHandler);
       }
     };
-  }, [actionsWithTime, gtWithTime, isLabelingMode, handleGtLabelClick, playerNumberMap]);
+  }, [actionsWithTime, gtWithTime, isLabelingMode, handleGtLabelClick, playerNumberMap, appliedFullMapping]);
 
   // Animation loop — uses requestVideoFrameCallback for frame-accurate sync
   useEffect(() => {

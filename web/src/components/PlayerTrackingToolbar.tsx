@@ -15,6 +15,7 @@ import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import type { ActionsData } from '@/services/api';
+import { resolveGtDisplayPid, gtAnchorId, rallyMatchEntry } from '@/utils/gtLabelDisplay';
 
 // Action colors for classified contacts
 const ACTION_COLORS: Record<string, string> = {
@@ -74,6 +75,7 @@ export function PlayerTrackingToolbar() {
     loadActionGroundTruth,
     removeActionLabel,
     batchTracking,
+    matchAnalysis,
   } = usePlayerTrackingStore();
 
   const currentTime = usePlayerStore((state) => state.currentTime);
@@ -569,7 +571,14 @@ export function PlayerTrackingToolbar() {
             GT ({gtLabels.length}):
           </Typography>
           {gtLabels.map((label) => {
-            const pNum = label.playerTrackId >= 0 ? playerNumberMap.get(label.playerTrackId) : undefined;
+            const rallyEntry = rallyMatchEntry(
+              activeMatchId ? matchAnalysis[activeMatchId] : undefined,
+              backendRallyId,
+            );
+            const anchor = gtAnchorId(label);
+            const pNum = anchor !== null && anchor >= 0
+              ? resolveGtDisplayPid(label, rallyEntry?.appliedFullMapping, playerNumberMap)
+              : null;
             const chipLabel = pNum != null
               ? `${formatPhase(label.action)} f${label.frame} P${pNum}`
               : `${formatPhase(label.action)} f${label.frame}`;

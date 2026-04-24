@@ -239,10 +239,17 @@ router.post(
 );
 
 // Action Ground Truth
+// `trackId` is the stable anchor: a raw BoT-SORT track id (pre-remap) that
+// doesn't drift when match-players / remap-track-ids re-run. `playerTrackId`
+// is the legacy canonical-pid (1-4) field — kept optional during migration so
+// older clients and backfilled rows still round-trip. Both are optional so
+// unattributed labels (action marked at a frame with no detected player) can
+// still persist and be attributed later in the editor via the `1-4` keys.
 const actionLabelSchema = z.object({
   frame: z.number().int().min(0),
   action: z.enum(["serve", "receive", "set", "attack", "block", "dig"]),
-  playerTrackId: z.number().int(),
+  trackId: z.number().int().min(0).optional(),
+  playerTrackId: z.number().int().optional(),
   ballX: z.number().min(0).max(1).optional(),
   ballY: z.number().min(0).max(1).optional(),
 });
