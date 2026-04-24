@@ -209,79 +209,34 @@ def _eval_rally(
     contact_cfg: ContactDetectionConfig,
     tolerance_ms: int,
     include_synthetic: bool = False,
-    use_decoder: bool = False,
-    decoder_skip_penalty: float = 1.0,
 ) -> dict:
     """Run detect_contacts → classify_rally_actions → match against GT.
 
     Returns the compute_metrics() dict plus matched/unmatched lists so the
     caller can aggregate per-class stats.
-
-    When `use_decoder=True`, runs `detect_contacts_via_decoder` and skips
-    `classify_rally_actions` (the decoder emits action labels directly via
-    its Viterbi grammar). Phase 3 of the parallel-decoder ship plan
-    (`docs/superpowers/plans/2026-04-24-parallel-decoder-ship.md`).
     """
     rally = pre.rally
     _inject_action_classifier(action_clf if action_clf.is_trained else None)
     try:
-        if use_decoder:
-            from rallycut.tracking.contact_detector import (
-                detect_contacts_via_decoder,
-            )
-            contact_seq = detect_contacts_via_decoder(
-                ball_positions=pre.ball_positions,
-                player_positions=pre.player_positions,
-                config=contact_cfg,
-                frame_count=rally.frame_count or None,
-                classifier=contact_clf,
-                use_classifier=True,
-                sequence_probs=pre.sequence_probs,
-                skip_penalty=decoder_skip_penalty,
-                # Production-realistic: don't pass _eval_gt_frames so the
-                # function uses its built-in two-pass scheme (Pass 1 with
-                # GBM-threshold acceptance → Pass 2 with that acceptance
-                # set as `frames_since_last` proxy). Validated by the
-                # 10-rally smoke test: action counts within ~1 of legacy
-                # baseline; dig remains the single weak spot.
-            )
-            # Decoder emits action labels via the `decoder_action` field;
-            # build pred_actions directly without running the legacy
-            # `classify_rally_actions` pipeline. Phase-4 synth-serve
-            # emission propagates `is_synthetic` so `--include-synthetic`
-            # matching finds these at ±1s tolerance against unmatched GT
-            # serves.
-            pred_actions = [
-                {
-                    "frame": c.frame,
-                    "action": c.decoder_action or "unknown",
-                    "playerTrackId": c.player_track_id,
-                    "courtSide": c.court_side,
-                    "isSynthetic": c.is_synthetic,
-                }
-                for c in contact_seq.contacts
-                if c.decoder_action is not None
-            ]
-        else:
-            contact_seq = detect_contacts(
-                ball_positions=pre.ball_positions,
-                player_positions=pre.player_positions,
-                config=contact_cfg,
-                net_y=rally.court_split_y,
-                frame_count=rally.frame_count or None,
-                classifier=contact_clf,
-                use_classifier=True,
-                sequence_probs=pre.sequence_probs,
-            )
-            rally_actions = classify_rally_actions(
-                contact_seq, rally_id=rally.rally_id,
-                use_classifier=action_clf.is_trained,
-                sequence_probs=pre.sequence_probs,
-            )
-            pred_actions = [a.to_dict() for a in rally_actions.actions]
+        contact_seq = detect_contacts(
+            ball_positions=pre.ball_positions,
+            player_positions=pre.player_positions,
+            config=contact_cfg,
+            net_y=rally.court_split_y,
+            frame_count=rally.frame_count or None,
+            classifier=contact_clf,
+            use_classifier=True,
+            sequence_probs=pre.sequence_probs,
+        )
+        rally_actions = classify_rally_actions(
+            contact_seq, rally_id=rally.rally_id,
+            use_classifier=action_clf.is_trained,
+            sequence_probs=pre.sequence_probs,
+        )
     finally:
         _reset_action_classifier_cache()
 
+    pred_actions = [a.to_dict() for a in rally_actions.actions]
     real_pred = [a for a in pred_actions if not a.get("isSynthetic")]
     synth_pred = [a for a in pred_actions if a.get("isSynthetic")]
 
@@ -418,13 +373,6 @@ def main() -> None:
                         help="Match synthetic serves against unmatched GT serves with ±1s tolerance (production-aligned). Default off preserves historical LOO baseline numbers.")
     parser.add_argument("--out-json", type=str, default=None,
                         help="Also write raw per-fold JSON for later comparison")
-    parser.add_argument("--use-decoder", action="store_true",
-                        help="Route contact detection through the parallel Viterbi decoder "
-                             "(`detect_contacts_via_decoder`). Skips classify_rally_actions; "
-                             "the decoder emits action labels directly. Phase 3 of the "
-                             "parallel-decoder ship plan.")
-    parser.add_argument("--decoder-skip-penalty", type=float, default=1.0,
-                        help="Skip-penalty for the decoder (default 1.0 = production-validated).")
     args = parser.parse_args()
 
     t_start = time.time()
@@ -487,8 +435,6 @@ def main() -> None:
             result = _eval_rally(
                 pre, contact_clf, action_clf, contact_cfg, args.tolerance_ms,
                 include_synthetic=args.include_synthetic,
-                use_decoder=args.use_decoder,
-                decoder_skip_penalty=args.decoder_skip_penalty,
             )
             m = result["metrics"]
             fold_tp += m["tp"]
