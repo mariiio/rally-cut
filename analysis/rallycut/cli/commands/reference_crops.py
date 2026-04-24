@@ -133,12 +133,42 @@ def validate_reference_crops(
     anchors = build_anchors_from_crops(crops_by_player, source="validate-cli")
     result = validate_prototypes(anchors, expected_player_ids=expected_ids)
 
+    # Phase 1.2: intra-player anomaly check. For any pid with ≥3 crops,
+    # surface indices that look visually distant from the rest of the
+    # cohort. The API can render these as "this crop looks different —
+    # confirm or replace?" warnings.
+    import numpy as np
+
+    from rallycut.tracking.relabel import detect_anomalous_crops
+
+    embeddings_per_pid: dict[int, np.ndarray] = {}
+    for pid, bgr_crops in crops_by_player.items():
+        if len(bgr_crops) < 3:
+            continue
+        try:
+            from rallycut.tracking.reid_embeddings import extract_backbone_features
+
+            embs = extract_backbone_features(bgr_crops)
+            if embs.size > 0:
+                embeddings_per_pid[int(pid)] = embs
+        except Exception:
+            logger.warning(
+                "anomaly-check: DINOv2 extraction failed for pid %s", pid,
+                exc_info=True,
+            )
+    anomalies = detect_anomalous_crops(embeddings_per_pid)
+
     payload = {
         "videoId": video_id,
         **result.to_dict(),
         "cropCounts": {
             str(pid): len(crops_by_player.get(pid, []))
             for pid in expected_ids
+        },
+        "anomalousCrops": {
+            str(pid): flagged
+            for pid, flagged in anomalies.items()
+            if flagged  # only include pids with at least one flag
         },
     }
     serialized = json.dumps(payload, indent=2)

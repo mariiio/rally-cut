@@ -200,3 +200,108 @@ class TestApplyRelabelToRallyEntries:
             assert "length" in str(e).lower() or "mismatch" in str(e).lower()
         else:
             raise AssertionError("expected ValueError on length mismatch")
+
+
+class TestDetectAnomalousCrops:
+    """Intra-player crop anomaly check (Phase 1.2 / plan §5 Q1 refinement).
+
+    When the user provides ≥2 crops for the same pid, we want to surface a
+    warning if one crop is visually distant from the others — it might be a
+    miss-click on a different player. Threshold: a crop's median pairwise
+    cosine distance to its cohort exceeds (cohort_median + 1.5σ).
+
+    With <3 crops there's no cohort to compare against, so we return no
+    flags rather than guessing.
+    """
+
+    def _make_normed(self, vec: list[float]) -> np.ndarray:
+        arr = np.array(vec, dtype=np.float32)
+        n = float(np.linalg.norm(arr))
+        return arr / n if n > 0 else arr
+
+    def test_uniform_cohort_flags_nothing(self) -> None:
+        from rallycut.tracking.relabel import detect_anomalous_crops
+
+        # 4 nearly identical embeddings.
+        rng = np.random.default_rng(seed=42)
+        base = self._make_normed([1.0, 0.0, 0.0, 0.0])
+        embeddings = np.stack([
+            base + 0.01 * rng.standard_normal(4).astype(np.float32)
+            for _ in range(4)
+        ])
+        embeddings = embeddings / np.linalg.norm(embeddings, axis=1, keepdims=True)
+
+        flags = detect_anomalous_crops({1: embeddings})
+
+        assert flags[1] == []
+
+    def test_single_outlier_flagged(self) -> None:
+        from rallycut.tracking.relabel import detect_anomalous_crops
+
+        # Three similar embeddings + one wildly different.
+        good = self._make_normed([1.0, 0.0, 0.0, 0.0])
+        outlier = self._make_normed([0.0, 0.0, 0.0, 1.0])  # cos ≈ 0 with `good`
+        embeddings = np.stack([good, good, good, outlier])
+
+        flags = detect_anomalous_crops({1: embeddings})
+
+        assert flags[1] == [3]
+
+    def test_two_crops_returns_empty(self) -> None:
+        """With only 2 crops there's only 1 pairwise distance — no cohort."""
+        from rallycut.tracking.relabel import detect_anomalous_crops
+
+        a = self._make_normed([1.0, 0.0, 0.0, 0.0])
+        b = self._make_normed([0.0, 1.0, 0.0, 0.0])
+
+        flags = detect_anomalous_crops({1: np.stack([a, b])})
+
+        assert flags[1] == []
+
+    def test_one_crop_returns_empty(self) -> None:
+        from rallycut.tracking.relabel import detect_anomalous_crops
+
+        a = self._make_normed([1.0, 0.0, 0.0, 0.0])
+
+        flags = detect_anomalous_crops({1: a.reshape(1, 4)})
+
+        assert flags[1] == []
+
+    def test_empty_input_returns_empty(self) -> None:
+        from rallycut.tracking.relabel import detect_anomalous_crops
+
+        assert detect_anomalous_crops({}) == {}
+
+    def test_threshold_is_tunable(self) -> None:
+        """Setting a stricter threshold should flag more crops."""
+        from rallycut.tracking.relabel import detect_anomalous_crops
+
+        # Mild outlier — flagged at strict threshold, not at lenient.
+        good = self._make_normed([1.0, 0.0, 0.0, 0.0])
+        mild = self._make_normed([0.7, 0.7, 0.0, 0.0])  # ~45° away
+        embeddings = np.stack([good, good, good, mild])
+
+        strict_flags = detect_anomalous_crops(
+            {1: embeddings}, threshold_sigma=0.5
+        )
+        lenient_flags = detect_anomalous_crops(
+            {1: embeddings}, threshold_sigma=10.0
+        )
+
+        assert 3 in strict_flags[1]
+        assert lenient_flags[1] == []
+
+    def test_handles_multiple_pids_independently(self) -> None:
+        from rallycut.tracking.relabel import detect_anomalous_crops
+
+        good = self._make_normed([1.0, 0.0, 0.0, 0.0])
+        outlier = self._make_normed([0.0, 0.0, 0.0, 1.0])
+
+        # pid 1 has an outlier; pid 2 is uniform.
+        flags = detect_anomalous_crops({
+            1: np.stack([good, good, good, outlier]),
+            2: np.stack([good, good, good, good]),
+        })
+
+        assert flags[1] == [3]
+        assert flags[2] == []
