@@ -2746,6 +2746,24 @@ def detect_contacts(
     )
 
 
+def _features_to_classifier_matrix(
+    feats_list: list,
+    classifier: ContactClassifier,
+) -> np.ndarray:
+    """Pad/truncate the trainer's feature matrix to the classifier's
+    expected input dim. Mirrors the legacy backward-compat shim in
+    `ContactClassifier.predict`.
+    """
+    x_mat = np.array([f.to_array() for f in feats_list], dtype=np.float64)
+    expected = classifier.model.n_features_in_
+    if x_mat.shape[1] > expected:
+        x_mat = x_mat[:, :expected]
+    elif x_mat.shape[1] < expected:
+        pad = np.zeros((x_mat.shape[0], expected - x_mat.shape[1]))
+        x_mat = np.hstack([x_mat, pad])
+    return x_mat
+
+
 def detect_contacts_via_decoder(
     ball_positions: list[BallPosition],
     player_positions: list[PlayerPosition] | None = None,
@@ -2870,30 +2888,66 @@ def detect_contacts_via_decoder(
         frame_count=frame_count or 0,
         gt_labels=[],
     )
-    # `_eval_gt_frames` is an EVAL-ONLY backdoor used by Phase 3
-    # `eval_loo_video.py --use-decoder`. The trainer's `frames_since_last`
-    # feature uses GT frames as a proxy for "previously accepted contacts"
-    # — production should use a two-pass scheme (or refactor out the
-    # per-candidate feature builder). Phase 5 cleanup item; tracked in the
-    # plan §5.
     # `_RallyDataShim` matches the duck-typed attribute subset that
     # `extract_candidate_features` reads — see the shim docstring.
-    feats_list, decoder_cand_frames = _trainer_extract(
-        rally_shim,  # type: ignore[arg-type]
-        config=cfg, gt_frames=_eval_gt_frames,
-        sequence_probs=sequence_probs,
-    )
-    if not feats_list:
-        return ContactSequence(net_y=prep.estimated_net_y)
+    #
+    # Two-pass `frames_since_last` semantics (production-correct):
+    # The trainer's `extract_candidate_features` uses `gt_frames` as a
+    # proxy for "previously accepted contacts" when computing
+    # `frames_since_last`. With `gt_frames=None`, it treats EVERY
+    # candidate as accepted, which makes `frames_since_last` always
+    # small and the GBM penalizes candidates accordingly. In production
+    # we don't have GT, so:
+    #   Pass 1: extract features with `gt_frames=None`, run GBM,
+    #     identify provisionally-accepted candidates (prob >= threshold).
+    #   Pass 2: re-extract features with those accepted frames as
+    #     `gt_frames` proxy, re-run GBM. Resulting probs match the
+    #     production semantics where `frames_since_last` reflects only
+    #     accepted contacts.
+    # Validated necessity: smoke test on 10 rallies showed pass-1-only
+    # output produced -37% actions vs legacy. Two-pass restores parity.
+    # `_eval_gt_frames` is a test-only override that skips Pass 1.
+    if _eval_gt_frames is not None:
+        # Eval mode: caller knows the right `gt_frames` (typically GT).
+        feats_list, decoder_cand_frames = _trainer_extract(
+            rally_shim,  # type: ignore[arg-type]
+            config=cfg, gt_frames=_eval_gt_frames,
+            sequence_probs=sequence_probs,
+        )
+        if not feats_list:
+            return ContactSequence(net_y=prep.estimated_net_y)
+        x_mat = _features_to_classifier_matrix(feats_list, classifier)
+        gbm_probs = classifier.model.predict_proba(x_mat)[:, 1]
+    else:
+        # Pass 1: identify GBM-threshold-accepted candidates with
+        # `frames_since_last` set to "everything is accepted" (the
+        # trainer's behavior when gt_frames is None).
+        feats_p1, cand_frames_p1 = _trainer_extract(
+            rally_shim,  # type: ignore[arg-type]
+            config=cfg, gt_frames=None,
+            sequence_probs=sequence_probs,
+        )
+        if not feats_p1:
+            return ContactSequence(net_y=prep.estimated_net_y)
+        x_p1 = _features_to_classifier_matrix(feats_p1, classifier)
+        probs_p1 = classifier.model.predict_proba(x_p1)[:, 1]
+        accepted_p1 = [
+            cand_frames_p1[i] for i in range(len(cand_frames_p1))
+            if probs_p1[i] >= classifier.threshold
+        ]
 
-    x_mat = np.array([f.to_array() for f in feats_list], dtype=np.float64)
-    expected = classifier.model.n_features_in_
-    if x_mat.shape[1] > expected:
-        x_mat = x_mat[:, :expected]
-    elif x_mat.shape[1] < expected:
-        pad = np.zeros((x_mat.shape[0], expected - x_mat.shape[1]))
-        x_mat = np.hstack([x_mat, pad])
-    gbm_probs = classifier.model.predict_proba(x_mat)[:, 1]
+        # Pass 2: re-extract with accepted_p1 as the "previously accepted"
+        # set, mirroring the legacy `detect_contacts` per-iteration
+        # update of `prev_accepted_frame`.
+        feats_list, decoder_cand_frames = _trainer_extract(
+            rally_shim,  # type: ignore[arg-type]
+            config=cfg, gt_frames=accepted_p1,
+            sequence_probs=sequence_probs,
+        )
+        if not feats_list:
+            return ContactSequence(net_y=prep.estimated_net_y)
+        x_mat = _features_to_classifier_matrix(feats_list, classifier)
+        gbm_probs = classifier.model.predict_proba(x_mat)[:, 1]
 
     # Build decoder CandidateFeatures (team + action_probs per candidate)
     from rallycut.tracking.candidate_decoder import (

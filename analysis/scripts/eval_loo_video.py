@@ -238,11 +238,12 @@ def _eval_rally(
                 use_classifier=True,
                 sequence_probs=pre.sequence_probs,
                 skip_penalty=decoder_skip_penalty,
-                # Eval-only: use GT frames for `frames_since_last` semantics
-                # so this measurement matches the validated
-                # `eval_candidate_decoder.py` methodology. Production wiring
-                # in Phase 4 will need a two-pass scheme — see the plan §5.
-                _eval_gt_frames=[gt.frame for gt in rally.gt_labels],
+                # Production-realistic: don't pass _eval_gt_frames so the
+                # function uses its built-in two-pass scheme (Pass 1 with
+                # GBM-threshold acceptance → Pass 2 with that acceptance
+                # set as `frames_since_last` proxy). Validated by the
+                # 10-rally smoke test: action counts within ~1 of legacy
+                # baseline; dig remains the single weak spot.
             )
             # Decoder emits action labels via the `decoder_action` field;
             # build pred_actions directly without running the legacy

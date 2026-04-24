@@ -1,4 +1,37 @@
-# Decoder A/B decision memo — Phase 3 (consolidated harness)
+# Decoder A/B decision memo — Phase 3 + 4 (consolidated harness)
+
+## **Revised verdict 2026-04-24 (two-pass production-real): NO-GO as detect_contacts replacement, GO as label-only overlay (already shipping +2.64pp), or opt-in flag ship for richer relabel (+5.2pp Action Acc / −3.4pp F1 trade).**
+
+A production smoke test on 10 stratified rallies (see
+`analysis/reports/decoder_smoke_verdict_2026_04_24.md`) revealed that
+the Phase 3 measurement used a `_eval_gt_frames` backdoor that
+overstated production behavior — specifically the trainer's
+`frames_since_last` feature was computed against GT contacts, a proxy
+unavailable in production. With the two-pass production-correct scheme
+(`detect_contacts_via_decoder` internal: Pass 1 identify GBM-threshold
+accepted candidates → Pass 2 re-extract features with that acceptance
+set as `frames_since_last` proxy), the 68-fold LOO lands at:
+
+| Metric | Baseline | Decoder (GT-backdoor, Phase 3/4) | Decoder (two-pass, production-real) |
+|---|---:|---:|---:|
+| Contact F1 | 90.1% | 89.4% | **86.7%** (−3.4pp, gate ≥−1.0pp FAIL) |
+| Action Acc | 90.6% | 95.8% | **95.8%** (+5.2pp, gate ≥+2.5pp PASS) |
+| serve F1 | 78.6% | 87.3% | 82.7% (+4.1pp) |
+| receive F1 | 81.9% | 91.9% | 86.3% (+4.4pp) |
+| set F1 | 86.0% | 89.3% | 86.2% (0.0pp) |
+| attack F1 | 87.8% | 88.9% | 87.9% (0.1pp) |
+| dig F1 | 73.0% | 70.6% | 71.7% (−1.3pp, within floor) |
+| block F1 | 9.3% | 5.9% | **14.3%** (+5.0pp) |
+| FP count | 165 | 118 | 215 (+50, gate ≤165 FAIL) |
+
+**3 of 5 pre-registered gates fail on production-realistic measurement.**
+Contact F1 regression and FP budget overshoot.
+
+Source: `analysis/reports/decoder_phase4_2pass.{md,json}`.
+
+---
+
+
 
 **Date:** 2026-04-24
 **Plan:** `docs/superpowers/plans/2026-04-24-parallel-decoder-ship.md`
@@ -162,30 +195,39 @@ Investigate flagged folds in Phase 4 smoke tests (visual editor inspection).
 
 ---
 
-## 6. Verdict — GO
+## 6. Verdict — REVISED
 
-**Decoder ships behind feature flag in Phase 4.** All pre-registered gates
-pass on the validated apples-to-apples no-synth comparison. The Phase 3
-consolidated harness with `--include-synthetic` flagged a Contact F1
-regression and a dig per-class regression that are both attributable to
-the decoder's lack of synth-serve emission — a Phase-4 design decision,
-not a decoder-quality issue.
+**Original Phase 3 verdict (GT-backdoor eval):** GO.
+**Revised Phase 4 verdict (two-pass production-real eval):** **NO-GO as
+`detect_contacts` replacement.** 3/5 ship gates fail. The Contact F1
+regression is real in production mode; the GT-backdoor measurement was
+an eval artifact.
 
-**Recommended Phase 4 path:**
+**Four options — pick by product priority:**
 
-1. Add synth-serve emission to decoder path (~half day).
-2. Re-measure on `--include-synthetic` to confirm parity (~20 min eval).
-3. Wire `USE_PARALLEL_DECODER` env-var flag into production (~2-3 hours).
-4. Smoke test on 3-5 production rallies with the flag on (~1 hour).
-5. 1-week soak before flipping default (per plan §5).
+1. **Do nothing.** Keep the already-shipping label-only overlay
+   (`run_decoder_for_production` feeding
+   `classify_rally_actions.decoder_contacts` → +2.64pp Action Acc,
+   F1-unchanged). Perfectly valid; this is the status quo that already
+   works in production.
+2. **Enhance the label-only overlay** with the parallel decoder's
+   grammar + transitions. Upper bound: the +5.2pp Action Acc lift
+   becomes ~+2-3pp on top of the current +2.64pp overlay, F1-safe.
+   Couple days of work. **Recommended if you want more Action Acc
+   lift without F1 cost.**
+3. **Ship the parallel decoder as an OPT-IN flag for match-stats /
+   editor-UI only.** Flag already wired. Users who want
+   "correct action labels at any cost" get the flag; default path
+   keeps detect_contacts. Documented trade: −3.4pp Contact F1 /
+   +5.2pp Action Acc.
+4. **Close the workstream.** Status quo is fine. Move engineering
+   effort to the next-highest-EV lever (ball-tracker recall,
+   reference-crop coverage, stage-2 identity).
 
-**Expected production impact:**
-
-- Action labels in editor UI / match stats are correct ~3.5pp more often.
-- Serve and receive class F1 each lift ~+8.5pp (highest user-visible win).
-- Contact count parity preserved (decoder 1900 TP vs baseline 1809 TP — actually MORE contacts).
-- FP budget reduced (−6 FPs on 1900 contacts).
-- Attribution unchanged (both paths use the same nearest-player + court-side resolution).
+**Recommended:** option 2. The parallel decoder's grammar is the real
+win; the contact-emission part is what regresses. Using the decoder's
+labels to relabel legacy-accepted contacts captures most of the
+Action Acc lift without the F1 cost.
 
 ---
 
