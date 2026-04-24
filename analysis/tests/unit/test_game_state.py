@@ -158,12 +158,22 @@ class TestSegmentMerging:
         # min_gap_seconds=1.5 means gaps shorter than 45 frames (at 30fps) are merged
         cutter = VideoCutter(min_play_duration=0.1, min_gap_seconds=1.5, rally_continuation_seconds=0)
 
-        results = [
-            GameStateResult(start_frame=0, end_frame=59, state=GameState.PLAY, confidence=0.9),
-            # Short gap (30 frames = 1 second < 1.5 second threshold)
+        # PLAY spans split into stride-12 windows so active_density passes
+        # the SPARSE_DENSITY filter (>=0.25). The test still exercises
+        # short-NO_PLAY-gap bridging, which is its actual purpose.
+        results = []
+        for s in range(0, 60, 12):
+            results.append(
+                GameStateResult(start_frame=s, end_frame=s + 11, state=GameState.PLAY, confidence=0.9),
+            )
+        # Short gap (30 frames = 1 second < 1.5 second threshold)
+        results.append(
             GameStateResult(start_frame=60, end_frame=89, state=GameState.NO_PLAY, confidence=0.8),
-            GameStateResult(start_frame=90, end_frame=149, state=GameState.PLAY, confidence=0.85),
-        ]
+        )
+        for s in range(90, 150, 12):
+            results.append(
+                GameStateResult(start_frame=s, end_frame=s + 11, state=GameState.PLAY, confidence=0.85),
+            )
 
         segments, _ = cutter._get_segments_from_results(results, fps=30.0)
 

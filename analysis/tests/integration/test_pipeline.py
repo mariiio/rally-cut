@@ -189,13 +189,26 @@ class TestCutterIntegration:
         from rallycut.core.models import GameStateResult
         from rallycut.processing.cutter import VideoCutter
 
-        # Two play segments close together (would overlap with padding)
+        # Two play segments close together (would overlap with padding).
+        # Each PLAY span is split into multiple stride-12 windows so
+        # active_density passes the SPARSE_DENSITY filter (>=0.25).
+        # The test still exercises gap-merging across the short NO_PLAY.
         fps = 30.0
-        results = [
-            GameStateResult(GameState.PLAY, 0.95, start_frame=0, end_frame=100),
-            GameStateResult(GameState.NO_PLAY, 0.88, start_frame=100, end_frame=120),  # Short gap
-            GameStateResult(GameState.PLAY, 0.92, start_frame=120, end_frame=250),
-        ]
+        results = []
+        # First PLAY segment: 0-100 split into stride-12 windows
+        for s in range(0, 100, 12):
+            results.append(
+                GameStateResult(GameState.PLAY, 0.95, start_frame=s, end_frame=s + 11),
+            )
+        # Short NO_PLAY gap (eligible for bridging)
+        results.append(
+            GameStateResult(GameState.NO_PLAY, 0.88, start_frame=100, end_frame=120),
+        )
+        # Second PLAY segment: 120-250 split into stride-12 windows
+        for s in range(120, 250, 12):
+            results.append(
+                GameStateResult(GameState.PLAY, 0.92, start_frame=s, end_frame=s + 11),
+            )
 
         cutter = VideoCutter(
             padding_seconds=1.0,
