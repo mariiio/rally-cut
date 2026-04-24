@@ -532,67 +532,24 @@ def match_players(
         if profile.rally_count > 0
     }
 
-    # Load existing match_analysis_json so we can honor per-rally
-    # canonical-lock flags. Locked rallies preserve their existing
-    # trackToPlayer across retracks — this is the architectural
-    # stability fix that propagates to the whole pipeline (web editor,
-    # scoreboard, downstream stats), not just the eval metrics.
-    # See `memory/diagnosis_2026-04-10.md` §Oracle diagnostic for
-    # rationale. Flagged via `canonicalLocked: true` on the rally entry;
-    # the one-time backfill script is `scripts/lock_gt_rally_identities.py`.
-    existing_locked_entries: dict[str, dict[str, Any]] = {}
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT match_analysis_json FROM videos WHERE id = %s",
-                [video_id],
-            )
-            row = cur.fetchone()
-    if row and row[0] and isinstance(row[0], dict):
-        for prev_entry in row[0].get("rallies", []):
-            if prev_entry.get("canonicalLocked") is True:
-                rid = prev_entry.get("rallyId") or prev_entry.get("rally_id", "")
-                if rid:
-                    existing_locked_entries[rid] = prev_entry
-
     # Build per-rally entries. Don't carry forward old remap state —
     # match-players already reversed any previous remap, so positions
     # are back to original tracker IDs. remap-track-ids will apply fresh.
     rally_entries = []
-    n_locked_preserved = 0
     for rally, result in zip(rallies, results):
-        locked_prev = existing_locked_entries.get(rally.rally_id)
-        if locked_prev is not None:
-            # Preserve the frozen canonical trackToPlayer + metadata.
-            # Only refresh rally timing + sideSwitch (which can legitimately
-            # re-derive from positions), and keep `canonicalLocked: true`.
-            rally_entry = dict(locked_prev)
-            rally_entry["startMs"] = rally.start_ms
-            rally_entry["endMs"] = rally.end_ms
-            rally_entry["rallyIndex"] = result.rally_index
-            # Do NOT touch trackToPlayer, assignmentConfidence, serverPlayerId —
-            # those are frozen by the lock.
-            n_locked_preserved += 1
-        else:
-            rally_entry = {
-                "rallyId": rally.rally_id,
-                "rallyIndex": result.rally_index,
-                "startMs": rally.start_ms,
-                "endMs": rally.end_ms,
-                "trackToPlayer": {
-                    str(k): v for k, v in result.track_to_player.items()
-                },
-                "assignmentConfidence": result.assignment_confidence,
-                "sideSwitchDetected": result.side_switch_detected,
-                "serverPlayerId": result.server_player_id,
-            }
+        rally_entry = {
+            "rallyId": rally.rally_id,
+            "rallyIndex": result.rally_index,
+            "startMs": rally.start_ms,
+            "endMs": rally.end_ms,
+            "trackToPlayer": {
+                str(k): v for k, v in result.track_to_player.items()
+            },
+            "assignmentConfidence": result.assignment_confidence,
+            "sideSwitchDetected": result.side_switch_detected,
+            "serverPlayerId": result.server_player_id,
+        }
         rally_entries.append(rally_entry)
-
-    if not quiet and n_locked_preserved > 0:
-        console.print(
-            f"  [cyan]Preserved {n_locked_preserved} canonical-locked "
-            f"rally assignment(s) (GT-anchored)[/cyan]"
-        )
 
     # Serialize team templates
     team_templates_data = None
@@ -612,6 +569,11 @@ def match_players(
     }
     if team_templates_data is not None:
         result_json["teamTemplates"] = team_templates_data
+    # Phase 0: persist the per-rally scratchpad so the relabel-with-crops
+    # worker can replay Pass 2 stages 1+2 with new frozen profiles without
+    # re-extracting appearance from video.
+    if match_result.scratchpad:
+        result_json["rallyScratchpad"] = match_result.scratchpad
 
     with get_connection() as conn:
         with conn.cursor() as cur:
