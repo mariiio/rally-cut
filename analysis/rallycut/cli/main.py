@@ -22,6 +22,7 @@ from rallycut.cli.commands.reference_crops import (
 from rallycut.cli.commands.reference_crops import (
     validate_reference_crops as validate_reference_crops_cmd,
 )
+from rallycut.cli.commands.relabel_with_crops import relabel_with_crops_cmd
 from rallycut.cli.commands.reinterpolate_primary import reinterpolate_primary_cmd
 from rallycut.cli.commands.remap_track_ids import remap_track_ids_cmd
 from rallycut.cli.commands.repair_identities import repair_identities_cmd
@@ -54,6 +55,7 @@ app.command(name="remap-track-ids")(remap_track_ids_cmd)
 app.command(name="repair-identities")(repair_identities_cmd)
 app.command(name="validate-reference-crops")(validate_reference_crops_cmd)
 app.command(name="suggest-reference-crops")(suggest_reference_crops_cmd)
+app.command(name="relabel-with-crops")(relabel_with_crops_cmd)
 app.add_typer(evaluate_tracking_app, name="evaluate-tracking")
 app.add_typer(label_app, name="label")
 app.add_typer(evaluate_app, name="evaluate")
