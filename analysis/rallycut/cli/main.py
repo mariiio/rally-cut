@@ -22,8 +22,8 @@ from rallycut.cli.commands.reference_crops import (
 from rallycut.cli.commands.reference_crops import (
     validate_reference_crops as validate_reference_crops_cmd,
 )
-from rallycut.cli.commands.relabel_with_crops import relabel_with_crops_cmd
 from rallycut.cli.commands.reinterpolate_primary import reinterpolate_primary_cmd
+from rallycut.cli.commands.relabel_with_crops import relabel_with_crops_cmd
 from rallycut.cli.commands.remap_track_ids import remap_track_ids_cmd
 from rallycut.cli.commands.repair_identities import repair_identities_cmd
 from rallycut.cli.commands.tilt_detect import tilt_detect as tilt_detect_command

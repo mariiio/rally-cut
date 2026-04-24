@@ -38,6 +38,8 @@ htmlcov/
 !reports/occlusion_resolver/event_scores.json
 # Candidate decoder — runtime-loaded transition matrix (committed for reproducibility).
 !rallycut/data/contact_transitions.json
+# Phase 2a snapshot test fixtures — committed for reproducibility.
+!tests/fixtures/detect_contacts_snapshot/*.json
 
 # Pseudo-labels and training frames (generated from database)
 experiments/pseudo_labels*/

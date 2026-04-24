@@ -281,8 +281,15 @@ class Contact:
     confidence: float = 0.0  # Classifier confidence (0-1), set by Phase 3 classifier
     arc_fit_residual: float = 0.0  # Parabolic arc fit residual at this frame
 
+    # Optional action label set by the parallel Viterbi decoder
+    # (`detect_contacts_via_decoder`, Phase 2c of the parallel-decoder ship plan).
+    # The legacy GBM path leaves this as None — action labels there are still
+    # produced downstream by `classify_rally_actions`. Both consumers can read
+    # this field; existing consumers that ignore it are unaffected by default.
+    decoder_action: str | None = None
+
     def to_dict(self) -> dict:
-        return {
+        d: dict = {
             "frame": self.frame,
             "ballX": self.ball_x,
             "ballY": self.ball_y,
@@ -304,6 +311,12 @@ class Contact:
                 for tid, (dy, dh) in self.candidate_bbox_motion.items()
             } if self.candidate_bbox_motion else None,
         }
+        # Only emit `decoderAction` when set so legacy GBM-path output is
+        # byte-identical to pre-Phase-2c behavior. The decoder-path consumer
+        # checks for the key explicitly.
+        if self.decoder_action is not None:
+            d["decoderAction"] = self.decoder_action
+        return d
 
 
 @dataclass
@@ -517,11 +530,16 @@ def _find_nearest_player(
     ball_y: float,
     player_positions: list[PlayerPosition],
     search_frames: int = 5,
+    primary_track_ids: list[int] | None = None,
 ) -> tuple[int, float, float]:
     """Find nearest player to ball at given frame.
 
     Uses wrist keypoint distance when pose data is available, falling
     back to bbox upper-quarter distance. See _player_to_ball_dist().
+
+    When ``primary_track_ids`` is provided, the search is restricted to
+    those tracks — matches the filter applied in `_find_nearest_players`
+    (plural) so the initial pick aligns with the candidate list.
 
     Returns:
         (track_id, distance, player_center_y). track_id=-1 if no player found.
@@ -530,9 +548,12 @@ def _find_nearest_player(
     best_track_id = -1
     best_dist = float("inf")
     best_player_y = 0.5
+    primary_set = set(primary_track_ids) if primary_track_ids else None
 
     for p in player_positions:
         if abs(p.frame_number - frame) > search_frames:
+            continue
+        if primary_set is not None and p.track_id not in primary_set:
             continue
 
         dist = _player_to_ball_dist(p, ball_x, ball_y)
@@ -586,6 +607,7 @@ def _find_nearest_players(
     search_frames: int = 15,
     max_candidates: int = 4,
     court_calibrator: CourtCalibrator | None = None,
+    primary_track_ids: list[int] | None = None,
 ) -> list[tuple[int, float, float]]:
     """Find nearest players to ball, ranked by perspective-corrected distance.
 
@@ -597,6 +619,14 @@ def _find_nearest_players(
     corners. Far-court distances are scaled up (they appear artificially
     small due to perspective compression).
 
+    When ``primary_track_ids`` is provided, candidates are restricted to
+    those track IDs (filter-then-rank). This is the canonical production
+    behavior: match-players ships a ref-crop-anchored primary_track_ids per
+    rally, and attribution is always to one of those 4 players. Without
+    the filter, a transient bystander track can crowd out the actual
+    primary at contact time, excluding the real actor from candidates
+    entirely — measured at 19.6% of click-GT actions on the 8-fixture set.
+
     Returns:
         List of (track_id, distance, player_center_y), sorted by
         depth-corrected distance. Up to max_candidates entries.
@@ -605,8 +635,12 @@ def _find_nearest_players(
     # track_id → (rank_dist, img_dist, center_y)
     best_per_track: dict[int, tuple[float, float, float]] = {}
 
+    primary_set = set(primary_track_ids) if primary_track_ids else None
+
     for p in player_positions:
         if abs(p.frame_number - frame) > search_frames:
+            continue
+        if primary_set is not None and p.track_id not in primary_set:
             continue
 
         img_dist = _player_to_ball_dist(p, ball_x, ball_y)
@@ -1842,91 +1876,62 @@ def _resolve_court_side(
     return "far" if ball_y < estimated_net_y else "near"
 
 
-def detect_contacts(
-    ball_positions: list[BallPosition],
-    player_positions: list[PlayerPosition] | None = None,
-    config: ContactDetectionConfig | None = None,
-    net_y: float | None = None,  # deprecated: ignored, kept for caller compat
-    frame_count: int | None = None,
-    classifier: ContactClassifier | None = None,
-    use_classifier: bool = True,
-    team_assignments: dict[int, int] | None = None,
-    court_calibrator: CourtCalibrator | None = None,
-    sequence_probs: np.ndarray | None = None,
-    enable_rescue: bool = False,
-) -> ContactSequence:
-    """Detect ball contacts from trajectory inflection points and velocity peaks.
+@dataclass
+class _CandidatePrep:
+    """All state produced by candidate generation; consumed by the per-candidate
+    accept/attribute loop in `detect_contacts` AND by the parallel decoder
+    entry point `detect_contacts_via_decoder` (Phase 2c).
 
-    Algorithm:
-    1. Pre-filter noise spikes (single-frame false positives)
-    2. Estimate net position from ball trajectory
-    3. Compute smoothed ball velocity signal
-    4. Find velocity peak candidates (local maxima)
-    5. Find inflection candidates (direction changes)
-    5c. Find parabolic arc breakpoint candidates
-    6. Merge candidates (velocity peaks preferred)
-    7. Validate each candidate (classifier or hand-tuned gates), attribute player
+    Refactored out of `detect_contacts` in 2026-04-24 (Phase 2b of the
+    parallel-decoder ship plan, see
+    `docs/superpowers/plans/2026-04-24-parallel-decoder-ship.md`). Snapshot
+    test `tests/integration/test_detect_contacts_snapshot.py` guards
+    byte-identical output across the refactor.
 
-    Args:
-        ball_positions: Ball tracking positions.
-        player_positions: Player tracking positions (optional but recommended).
-        config: Detection configuration.
-        net_y: Deprecated — ignored. Net position is always estimated from ball
-            trajectory (court_split_y from player tracking is not an accurate
-            proxy for the net's image-space position).
-        frame_count: Total rally frames. If provided, candidates beyond this frame
-            are suppressed (post-rally ball pickup/warmdown).
-        classifier: Optional trained ContactClassifier. When provided, replaces the
-            hand-tuned 3-tier validation gates with learned predictions.
-        use_classifier: When True (default) and no explicit classifier is provided,
-            auto-loads the default classifier from disk if available. Set to False
-            to force hand-tuned validation gates.
-        team_assignments: Map from track_id → team (0=near, 1=far). Per-rally teams
-            from median Y position.
-        court_calibrator: Calibrated court projector. When provided, ball side uses
-            perspective-correct projection via homography.
-        sequence_probs: MS-TCN++ per-frame action probabilities, shape
-            (NUM_CLASSES, T). When provided and `cfg.enable_sequence_recovery`
-            is True, the main classifier loop rescues trajectory candidates
-            the GBM rejected if `max(sequence_probs[1:, f+-5]) >=
-            SEQ_RECOVERY_TAU` AND the GBM score >= SEQ_RECOVERY_CLF_FLOOR
-            (both constants in `sequence_action_runtime.py`, read at call
-            time). This is a two-signal agreement gate — no new candidates
-            are injected; only pre-existing trajectory candidates are
-            rescued. The old 7 `seq_p_*` features on `CandidateFeatures`
-            were dropped pre-2026-04-07.
-        enable_rescue: When True, accept candidates the GBM rejected (p < 0.30)
-            when p < _RESCUE_GBM_CEILING (0.10) AND max(sequence_probs[1:,
-            f±5]) >= _RESCUE_SEQ_FLOOR (0.95). Default False (production
-            baseline). Source of truth:
-            docs/superpowers/briefs/2026-04-21-contact-rescue-stepback.md
-
-    Returns:
-        ContactSequence with all detected contacts.
+    `candidate_frames` is empty when no contacts can be produced (no
+    velocities, fewer than 3 frames, or all generators returned nothing) —
+    callers short-circuit on `not prep.candidate_frames` and return
+    `ContactSequence(net_y=prep.estimated_net_y)`.
     """
-    # Auto-load classifier if not explicitly provided
-    if classifier is None and use_classifier:
-        classifier = _get_default_classifier()
+
+    ball_positions: list[BallPosition]  # noise-filtered version
+    candidate_frames: list[int]
+    ball_by_frame: dict[int, BallPosition]
+    velocities: dict[int, tuple[float, float, float]]
+    frames: list[int]
+    velocity_lookup: dict[int, float]
+    estimated_net_y: float
+    residual_by_frame: dict[int, float]
+    first_frame: int
+    # Per-generator candidate lists, kept for the end-of-detect_contacts
+    # logging line. Order matches the original log message.
+    velocity_peak_frames: list[int]
+    inflection_frames: list[int]
+    deceleration_frames: list[int]
+    parabolic_frames: list[int]
+    direction_change_frames: list[int]
+    net_crossing_frames: list[int]
+    n_post_serve: int
+    n_player_motion: int
+    n_proximity: int
+
+
+def _prepare_candidates(
+    ball_positions: list[BallPosition],
+    player_positions: list[PlayerPosition] | None,
+    cfg: ContactDetectionConfig,
+) -> _CandidatePrep:
+    """Run candidate generation + supporting state computation.
+
+    Pure stage: same inputs always produce the same output. No side effects
+    on external state (input lists are not mutated; the noise-filtered
+    `ball_positions` is returned as a NEW list inside `_CandidatePrep`).
+
+    Returns a `_CandidatePrep` with `candidate_frames=[]` for any short-
+    circuit case (no velocities, <3 frames, no candidates after generators).
+    Callers short-circuit on `not prep.candidate_frames`.
+    """
     from scipy.signal import find_peaks
-
-    from rallycut.tracking.temporal_attribution.features import (
-        extract_attribution_features,
-    )
-
-    cfg = config or ContactDetectionConfig()
-
-    # Auto-load attribution models
-    pose_attributor = (
-        _get_pose_attributor() if cfg.use_pose_attribution else None
-    )
-    temporal_attributor = (
-        _get_temporal_attributor()
-        if cfg.use_temporal_attribution and pose_attributor is None
-        else None
-    )
-
-    if not ball_positions:
-        return ContactSequence()
 
     # Step 1: Pre-filter noise spikes
     if cfg.enable_noise_filter:
@@ -1940,15 +1945,38 @@ def detect_contacts(
     # in image space. Ball trajectory extrema bracket the net more accurately.
     estimated_net_y = estimate_net_position(ball_positions)
 
+    # Helper to short-circuit with empty candidate list but valid net_y.
+    def _empty_prep() -> _CandidatePrep:
+        return _CandidatePrep(
+            ball_positions=ball_positions,
+            candidate_frames=[],
+            ball_by_frame={},
+            velocities={},
+            frames=[],
+            velocity_lookup={},
+            estimated_net_y=estimated_net_y,
+            residual_by_frame={},
+            first_frame=0,
+            velocity_peak_frames=[],
+            inflection_frames=[],
+            deceleration_frames=[],
+            parabolic_frames=[],
+            direction_change_frames=[],
+            net_crossing_frames=[],
+            n_post_serve=0,
+            n_player_motion=0,
+            n_proximity=0,
+        )
+
     # Step 3: Compute velocities from filtered positions
     velocities = _compute_velocities(ball_positions)
     if not velocities:
-        return ContactSequence(net_y=estimated_net_y)
+        return _empty_prep()
 
     # Sort frames and smooth velocity
     frames = sorted(velocities.keys())
     if len(frames) < 3:
-        return ContactSequence(net_y=estimated_net_y)
+        return _empty_prep()
 
     speeds = [velocities[f][0] for f in frames]
     smoothed = _smooth_signal(speeds, cfg.smoothing_window)
@@ -2084,7 +2112,28 @@ def detect_contacts(
             )
 
     if not candidate_frames:
-        return ContactSequence(net_y=estimated_net_y)
+        # Empty after generators: return prep with empty candidate list but
+        # valid generator counts so the caller's log line still works.
+        return _CandidatePrep(
+            ball_positions=ball_positions,
+            candidate_frames=[],
+            ball_by_frame=ball_by_frame,
+            velocities=velocities,
+            frames=frames,
+            velocity_lookup=dict(zip(frames, smoothed)),
+            estimated_net_y=estimated_net_y,
+            residual_by_frame=residual_by_frame,
+            first_frame=first_frame,
+            velocity_peak_frames=velocity_peak_frames,
+            inflection_frames=inflection_frames,
+            deceleration_frames=deceleration_frames,
+            parabolic_frames=parabolic_frames,
+            direction_change_frames=direction_change_frames,
+            net_crossing_frames=net_crossing_frames,
+            n_post_serve=0,
+            n_player_motion=n_player_motion,
+            n_proximity=0,
+        )
 
     # Step 6a2: Post-serve receive candidate search.
     # After the serve, the ball crosses the net. Search around the crossing
@@ -2149,8 +2198,143 @@ def detect_contacts(
             n_proximity = len(proximity_frames)
             candidate_frames = sorted(candidate_set)
 
-    # Build velocity lookup for any frame
-    velocity_lookup = dict(zip(frames, smoothed))
+    return _CandidatePrep(
+        ball_positions=ball_positions,
+        candidate_frames=candidate_frames,
+        ball_by_frame=ball_by_frame,
+        velocities=velocities,
+        frames=frames,
+        velocity_lookup=dict(zip(frames, smoothed)),
+        estimated_net_y=estimated_net_y,
+        residual_by_frame=residual_by_frame,
+        first_frame=first_frame,
+        velocity_peak_frames=velocity_peak_frames,
+        inflection_frames=inflection_frames,
+        deceleration_frames=deceleration_frames,
+        parabolic_frames=parabolic_frames,
+        direction_change_frames=direction_change_frames,
+        net_crossing_frames=net_crossing_frames,
+        n_post_serve=n_post_serve,
+        n_player_motion=n_player_motion,
+        n_proximity=n_proximity,
+    )
+
+
+def detect_contacts(
+    ball_positions: list[BallPosition],
+    player_positions: list[PlayerPosition] | None = None,
+    config: ContactDetectionConfig | None = None,
+    net_y: float | None = None,  # deprecated: ignored, kept for caller compat
+    frame_count: int | None = None,
+    classifier: ContactClassifier | None = None,
+    use_classifier: bool = True,
+    team_assignments: dict[int, int] | None = None,
+    court_calibrator: CourtCalibrator | None = None,
+    sequence_probs: np.ndarray | None = None,
+    enable_rescue: bool = False,
+    primary_track_ids: list[int] | None = None,
+) -> ContactSequence:
+    """Detect ball contacts from trajectory inflection points and velocity peaks.
+
+    Algorithm:
+    1. Pre-filter noise spikes (single-frame false positives)
+    2. Estimate net position from ball trajectory
+    3. Compute smoothed ball velocity signal
+    4. Find velocity peak candidates (local maxima)
+    5. Find inflection candidates (direction changes)
+    5c. Find parabolic arc breakpoint candidates
+    6. Merge candidates (velocity peaks preferred)
+    7. Validate each candidate (classifier or hand-tuned gates), attribute player
+
+    Args:
+        ball_positions: Ball tracking positions.
+        player_positions: Player tracking positions (optional but recommended).
+        config: Detection configuration.
+        net_y: Deprecated — ignored. Net position is always estimated from ball
+            trajectory (court_split_y from player tracking is not an accurate
+            proxy for the net's image-space position).
+        frame_count: Total rally frames. If provided, candidates beyond this frame
+            are suppressed (post-rally ball pickup/warmdown).
+        classifier: Optional trained ContactClassifier. When provided, replaces the
+            hand-tuned 3-tier validation gates with learned predictions.
+        use_classifier: When True (default) and no explicit classifier is provided,
+            auto-loads the default classifier from disk if available. Set to False
+            to force hand-tuned validation gates.
+        team_assignments: Map from track_id → team (0=near, 1=far). Per-rally teams
+            from median Y position.
+        court_calibrator: Calibrated court projector. When provided, ball side uses
+            perspective-correct projection via homography.
+        sequence_probs: MS-TCN++ per-frame action probabilities, shape
+            (NUM_CLASSES, T). When provided and `cfg.enable_sequence_recovery`
+            is True, the main classifier loop rescues trajectory candidates
+            the GBM rejected if `max(sequence_probs[1:, f+-5]) >=
+            SEQ_RECOVERY_TAU` AND the GBM score >= SEQ_RECOVERY_CLF_FLOOR
+            (both constants in `sequence_action_runtime.py`, read at call
+            time). This is a two-signal agreement gate — no new candidates
+            are injected; only pre-existing trajectory candidates are
+            rescued. The old 7 `seq_p_*` features on `CandidateFeatures`
+            were dropped pre-2026-04-07.
+        enable_rescue: When True, accept candidates the GBM rejected (p < 0.30)
+            when p < _RESCUE_GBM_CEILING (0.10) AND max(sequence_probs[1:,
+            f±5]) >= _RESCUE_SEQ_FLOOR (0.95). Default False (production
+            baseline). Source of truth:
+            docs/superpowers/briefs/2026-04-21-contact-rescue-stepback.md
+
+    Returns:
+        ContactSequence with all detected contacts.
+    """
+    # Auto-load classifier if not explicitly provided
+    if classifier is None and use_classifier:
+        classifier = _get_default_classifier()
+
+    from rallycut.tracking.temporal_attribution.features import (
+        extract_attribution_features,
+    )
+
+    cfg = config or ContactDetectionConfig()
+
+    # Auto-load attribution models
+    pose_attributor = (
+        _get_pose_attributor() if cfg.use_pose_attribution else None
+    )
+    temporal_attributor = (
+        _get_temporal_attributor()
+        if cfg.use_temporal_attribution and pose_attributor is None
+        else None
+    )
+
+    if not ball_positions:
+        return ContactSequence()
+
+    # Refactored 2026-04-24 (Phase 2b of parallel-decoder ship plan):
+    # candidate generation extracted to `_prepare_candidates` so the parallel
+    # `detect_contacts_via_decoder` entry point (Phase 2c) can share the
+    # exact same prep. Behavior is byte-identical to the pre-refactor version
+    # — guarded by `tests/integration/test_detect_contacts_snapshot.py`.
+    prep = _prepare_candidates(ball_positions, player_positions, cfg)
+    if not prep.candidate_frames:
+        return ContactSequence(net_y=prep.estimated_net_y)
+
+    # Re-bind locals so the per-candidate loop below is unchanged from the
+    # original implementation. Keeping these names verbatim preserves byte-
+    # identical loop behavior and minimizes the diff for snapshot review.
+    ball_positions = prep.ball_positions
+    candidate_frames = prep.candidate_frames
+    ball_by_frame = prep.ball_by_frame
+    velocities = prep.velocities
+    velocity_lookup = prep.velocity_lookup
+    estimated_net_y = prep.estimated_net_y
+    residual_by_frame = prep.residual_by_frame
+    first_frame = prep.first_frame
+    velocity_peak_frames = prep.velocity_peak_frames
+    inflection_frames = prep.inflection_frames
+    deceleration_frames = prep.deceleration_frames
+    parabolic_frames = prep.parabolic_frames
+    direction_change_frames = prep.direction_change_frames
+    net_crossing_frames = prep.net_crossing_frames
+    n_post_serve = prep.n_post_serve
+    n_player_motion = prep.n_player_motion
+    n_proximity = prep.n_proximity
 
     # Sequence-model support helper. Returns True iff any frame in [f-W, f+W]
     # has `max(sequence_probs[1:, :]) >= SEQ_RECOVERY_TAU`. Used below to
@@ -2224,6 +2408,7 @@ def detect_contacts(
             track_id, player_dist, nearest_player_y = _find_nearest_player(
                 frame, ball.x, ball.y, player_positions,
                 search_frames=cfg.player_search_frames,
+                primary_track_ids=primary_track_ids,
             )
         else:
             track_id = -1
@@ -2239,6 +2424,7 @@ def detect_contacts(
                 frame, ball.x, ball.y, player_positions,
                 search_frames=cfg.player_candidate_search_frames,
                 court_calibrator=court_calibrator,
+                primary_track_ids=primary_track_ids,
             )
             if candidates:
                 bbox_motion = _compute_candidate_bbox_motion(
@@ -2546,6 +2732,313 @@ def detect_contacts(
         contacts=contacts,
         net_y=estimated_net_y,
         rally_start_frame=first_frame,
+        ball_positions=confident_positions,
+        player_positions=player_positions or [],
+    )
+
+
+def detect_contacts_via_decoder(
+    ball_positions: list[BallPosition],
+    player_positions: list[PlayerPosition] | None = None,
+    config: ContactDetectionConfig | None = None,
+    classifier: ContactClassifier | None = None,
+    use_classifier: bool = True,
+    sequence_probs: np.ndarray | None = None,
+    team_assignments: dict[int, int] | None = None,
+    court_calibrator: CourtCalibrator | None = None,
+    frame_count: int | None = None,
+    primary_track_ids: list[int] | None = None,
+    skip_penalty: float = 1.0,
+    min_accept_prob: float = 0.0,
+    _eval_gt_frames: list[int] | None = None,
+) -> ContactSequence:
+    """Parallel candidate-detection entry point using the Viterbi candidate decoder.
+
+    Phase 2c of the parallel-decoder ship plan
+    (`docs/superpowers/plans/2026-04-24-parallel-decoder-ship.md`). Uses
+    Viterbi MAP decode over the GBM emission lattice with a learned action-
+    grammar transition prior, instead of the GBM threshold gate used by
+    `detect_contacts`. Validated lift on v5 weights (68-fold LOO):
+    +0.4pp Contact F1, +3.5pp Action Acc, all per-class gates pass
+    (`analysis/reports/decoder_v5_full_2026_04_24.md`).
+
+    Output `ContactSequence`:
+      - `contacts` is the decoder-accepted set, with each `Contact` carrying
+        the decoder's action label in the `decoder_action` field.
+      - Attribution (`player_track_id`, `court_side`, `player_distance`)
+        is populated by the same nearest-player + court-side resolution as
+        `detect_contacts` so downstream attribution consumers see no diff.
+
+    Args:
+        ball_positions / player_positions: same as `detect_contacts`.
+        classifier: trained `ContactClassifier`. When None and
+            `use_classifier=True`, auto-loads from default path. The decoder
+            REQUIRES a trained classifier for emission probabilities; if no
+            classifier is available the function falls back to
+            `detect_contacts` and returns its output.
+        sequence_probs: MS-TCN++ per-frame action probabilities, shape
+            (NUM_CLASSES=7, T) where channel 0 = background and channels 1-6
+            map to ACTIONS = [serve, receive, set, attack, dig, block].
+            REQUIRED for non-uniform action priors. When None, the decoder
+            uses uniform action probs and the action-label lift collapses.
+        team_assignments / court_calibrator / primary_track_ids: same as
+            `detect_contacts`, used by the per-decoded-contact attribution.
+        skip_penalty: extra log-cost added to `log(1 - p_contact)` in the
+            decoder skip emission. Production-validated value is 1.0 (per
+            `analysis/reports/candidate_decoder_sweep_2026_04_20.md`).
+        min_accept_prob: filter out candidates with GBM prob below this floor
+            before decoding. Bounds worst-case false positives.
+
+    Phase-5 cleanup follow-up: this function currently uses
+    `scripts.train_contact_classifier.extract_candidate_features` for per-
+    candidate GBM feature building, which re-runs candidate generation
+    (duplicating the work already done by `_prepare_candidates`). The fix
+    is to extract the per-candidate feature builder out of `detect_contacts`
+    into a shared helper. See the plan §5 Phase 5.
+    """
+    # Auto-load classifier if not provided
+    if classifier is None and use_classifier:
+        classifier = _get_default_classifier()
+
+    cfg = config or ContactDetectionConfig()
+
+    # Decoder requires trained GBM for emission probs. Fall back to legacy
+    # path if classifier is unavailable.
+    if classifier is None or not classifier.is_trained:
+        logger.warning(
+            "detect_contacts_via_decoder: no trained classifier available; "
+            "falling back to detect_contacts."
+        )
+        return detect_contacts(
+            ball_positions=ball_positions,
+            player_positions=player_positions,
+            config=config,
+            classifier=classifier,
+            use_classifier=use_classifier,
+            sequence_probs=sequence_probs,
+            team_assignments=team_assignments,
+            court_calibrator=court_calibrator,
+            frame_count=frame_count,
+            primary_track_ids=primary_track_ids,
+        )
+
+    if not ball_positions:
+        return ContactSequence()
+
+    # Shared candidate-generation prep with `detect_contacts`. Same byte-
+    # identical output (guarded by snapshot test). Phase 2b refactor lifted
+    # this out so both paths use the same prep without behavior drift.
+    prep = _prepare_candidates(ball_positions, player_positions, cfg)
+    if not prep.candidate_frames:
+        return ContactSequence(net_y=prep.estimated_net_y)
+
+    # Build per-candidate GBM features. Layering note: this currently uses
+    # the trainer's extract_candidate_features, which re-runs candidate gen
+    # internally — wasteful but correct, mirrors `eval_candidate_decoder.py`
+    # precedent. Phase-5 cleanup will dedupe.
+    from scripts.train_contact_classifier import (
+        extract_candidate_features as _trainer_extract,
+    )
+    rally_shim = _RallyDataShim(
+        ball_positions_json=[
+            {
+                "frameNumber": bp.frame_number, "x": bp.x, "y": bp.y,
+                "confidence": bp.confidence,
+            }
+            for bp in ball_positions
+        ],
+        positions_json=[
+            {
+                "frameNumber": pp.frame_number, "trackId": pp.track_id,
+                "x": pp.x, "y": pp.y,
+                "width": pp.width, "height": pp.height,
+                "confidence": pp.confidence,
+                "keypoints": pp.keypoints,
+            }
+            for pp in (player_positions or [])
+        ],
+        court_split_y=None,
+        frame_count=frame_count or 0,
+        gt_labels=[],
+    )
+    # `_eval_gt_frames` is an EVAL-ONLY backdoor used by Phase 3
+    # `eval_loo_video.py --use-decoder`. The trainer's `frames_since_last`
+    # feature uses GT frames as a proxy for "previously accepted contacts"
+    # — production should use a two-pass scheme (or refactor out the
+    # per-candidate feature builder). Phase 5 cleanup item; tracked in the
+    # plan §5.
+    # `_RallyDataShim` matches the duck-typed attribute subset that
+    # `extract_candidate_features` reads — see the shim docstring.
+    feats_list, decoder_cand_frames = _trainer_extract(
+        rally_shim,  # type: ignore[arg-type]
+        config=cfg, gt_frames=_eval_gt_frames,
+        sequence_probs=sequence_probs,
+    )
+    if not feats_list:
+        return ContactSequence(net_y=prep.estimated_net_y)
+
+    x_mat = np.array([f.to_array() for f in feats_list], dtype=np.float64)
+    expected = classifier.model.n_features_in_
+    if x_mat.shape[1] > expected:
+        x_mat = x_mat[:, :expected]
+    elif x_mat.shape[1] < expected:
+        pad = np.zeros((x_mat.shape[0], expected - x_mat.shape[1]))
+        x_mat = np.hstack([x_mat, pad])
+    gbm_probs = classifier.model.predict_proba(x_mat)[:, 1]
+
+    # Build decoder CandidateFeatures (team + action_probs per candidate)
+    from rallycut.tracking.candidate_decoder import (
+        ACTIONS as DECODER_ACTIONS,
+    )
+    from rallycut.tracking.candidate_decoder import (
+        CandidateFeatures as DecoderCandidateFeatures,
+    )
+    from rallycut.tracking.candidate_decoder import (
+        TransitionMatrix,
+        decode_rally,
+        infer_team_from_player_track,
+    )
+
+    # Player position lookup for nearest-team inference at each candidate.
+    pos_by_frame: dict[int, list[PlayerPosition]] = {}
+    for pp in (player_positions or []):
+        pos_by_frame.setdefault(pp.frame_number, []).append(pp)
+
+    decoder_cands: list[DecoderCandidateFeatures] = []
+    for i, frame in enumerate(decoder_cand_frames):
+        # Team inference from nearest player at the frame
+        team = -1
+        ball_at = prep.ball_by_frame.get(frame)
+        if ball_at is not None:
+            best_pp = None
+            best_d = float("inf")
+            for pp in pos_by_frame.get(frame, []):
+                d = (pp.x - ball_at.x) ** 2 + (pp.y - ball_at.y) ** 2
+                if d < best_d:
+                    best_d = d
+                    best_pp = pp
+            if best_pp is not None and 1 <= best_pp.track_id <= 4:
+                team = infer_team_from_player_track(best_pp.track_id)
+
+        # Per-frame action probs from MS-TCN++ (drop bg, renormalize over 6)
+        if sequence_probs is not None and sequence_probs.size > 0:
+            f_clamped = max(0, min(sequence_probs.shape[1] - 1, frame))
+            row = sequence_probs[:, f_clamped]
+            non_bg = row[1:]
+            s = float(non_bg.sum())
+            if s > 1e-6:
+                action_probs = non_bg / s
+            else:
+                action_probs = np.ones(len(DECODER_ACTIONS)) / len(DECODER_ACTIONS)
+        else:
+            action_probs = np.ones(len(DECODER_ACTIONS)) / len(DECODER_ACTIONS)
+
+        decoder_cands.append(DecoderCandidateFeatures(
+            frame=frame,
+            gbm_contact_prob=float(gbm_probs[i]),
+            action_probs=action_probs,
+            team=team,
+        ))
+
+    # Run Viterbi decode with the production transition matrix
+    transitions = TransitionMatrix.default()
+    accepted = decode_rally(
+        decoder_cands, transitions,
+        skip_penalty=skip_penalty, min_accept_prob=min_accept_prob,
+    )
+
+    # Convert each accepted DecodedContact → Contact with attribution.
+    # Attribution mirrors the legacy `detect_contacts` per-candidate path:
+    # nearest-player + court-side resolution, identical helper functions.
+    contacts: list[Contact] = []
+    for dec in accepted:
+        ball = prep.ball_by_frame.get(dec.frame)
+        if ball is None:
+            for offset in (-1, 1, -2, 2, -3, 3):
+                ball = prep.ball_by_frame.get(dec.frame + offset)
+                if ball is not None:
+                    break
+        if ball is None:
+            continue
+
+        nearest_player_y: float | None = None
+        ranked: list[tuple[int, float, float]]
+        bbox_motion: dict[int, tuple[float, float]]
+        if player_positions:
+            track_id, player_dist, nearest_player_y = _find_nearest_player(
+                dec.frame, ball.x, ball.y, player_positions,
+                search_frames=cfg.player_search_frames,
+                primary_track_ids=primary_track_ids,
+            )
+            ranked = _find_nearest_players(
+                dec.frame, ball.x, ball.y, player_positions,
+                search_frames=cfg.player_candidate_search_frames,
+                court_calibrator=court_calibrator,
+                primary_track_ids=primary_track_ids,
+            )
+            bbox_motion = _compute_candidate_bbox_motion(
+                player_positions, dec.frame,
+                [tid for tid, _, _ in ranked],
+            ) if ranked else {}
+        else:
+            track_id = -1
+            player_dist = float("inf")
+            ranked = []
+            bbox_motion = {}
+
+        court_side = _resolve_court_side(
+            ball.x, ball.y, track_id, team_assignments,
+            court_calibrator, prep.estimated_net_y,
+            player_y=nearest_player_y,
+        )
+        is_at_net = abs(ball.y - prep.estimated_net_y) < 0.08
+
+        # Trajectory-frame fields (best-effort lookup; the decoder doesn't
+        # consume these but downstream consumers may).
+        velocity = prep.velocity_lookup.get(dec.frame, 0.0)
+        direction_change = compute_direction_change(
+            prep.ball_by_frame, dec.frame, cfg.direction_check_frames,
+        )
+        arc_residual = prep.residual_by_frame.get(dec.frame, 0.0)
+
+        contacts.append(Contact(
+            frame=dec.frame,
+            ball_x=ball.x,
+            ball_y=ball.y,
+            velocity=velocity,
+            direction_change_deg=direction_change,
+            player_track_id=track_id,
+            player_distance=player_dist,
+            player_candidates=[(tid, dist) for tid, dist, _y in ranked],
+            candidate_bbox_motion=bbox_motion,
+            court_side=court_side,
+            is_at_net=is_at_net,
+            is_validated=True,
+            confidence=float(np.exp(dec.score)) if dec.score < 0 else 1.0,
+            arc_fit_residual=arc_residual,
+            decoder_action=dec.action,
+        ))
+
+    # NOTE: legacy `detect_contacts` runs `_deduplicate_contacts` here. The
+    # decoder's Viterbi grammar already enforces minimum-gap structure via
+    # the transition matrix's gap buckets (see `candidate_decoder._bucket`),
+    # so applying the legacy dedup on top would over-prune accepted
+    # contacts. Validated A/B (`eval_candidate_decoder.py` ship memo +
+    # `decoder_v5_full_2026_04_24.md`) uses the decoder's output directly,
+    # without legacy dedup. We match that here for apples-to-apples parity.
+    logger.info(
+        f"detect_contacts_via_decoder: {len(contacts)} accepted "
+        f"({len(decoder_cands)} candidates, no legacy dedup, "
+        f"net_y={prep.estimated_net_y:.3f}, skip_penalty={skip_penalty})"
+    )
+
+    confident_positions = [
+        bp for bp in prep.ball_positions if bp.confidence >= _CONFIDENCE_THRESHOLD
+    ]
+    return ContactSequence(
+        contacts=contacts,
+        net_y=prep.estimated_net_y,
+        rally_start_frame=prep.first_frame,
         ball_positions=confident_positions,
         player_positions=player_positions or [],
     )
