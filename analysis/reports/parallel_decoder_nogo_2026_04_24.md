@@ -36,7 +36,20 @@ The two-pass scheme closes this gap by first running the GBM with the broken fea
 
 ## Durable findings from this workstream
 
-1. **The `extract_candidate_features(gt_frames=None)` semantics are wrong for production** — `frames_since_last` treats every candidate as accepted. This affects the existing label-only overlay (`decoder_runtime.run_decoder_over_rally` → `run_decoder_for_production` → currently shipping at +2.64pp Action Acc via Task 5 overlay). **The +2.64pp overlay may be under-performing because of this.** Revisiting the existing overlay with correct `frames_since_last` semantics is a potential +0.5 to +1.5pp follow-up, but it is a separate investigation.
+1. **The `extract_candidate_features(gt_frames=None)` semantics are wrong for production** — `frames_since_last` treats every candidate as accepted. This also affects the existing label-only overlay (`decoder_runtime.run_decoder_over_rally` → `run_decoder_for_production` → currently shipping at +2.64pp Action Acc via Task 5 overlay). **Follow-up attempt:** a two-pass fix was tested in `decoder_runtime` (Pass 1 identifies GBM-threshold-accepted candidates → Pass 2 re-extracts features with that set as the `frames_since_last` proxy). 68-fold LOO with `--include-synthetic` showed:
+
+   | Metric | Baseline (broken semantics) | Two-pass fix | Δ |
+   |---|---:|---:|---:|
+   | Contact F1 | 89.8% | 89.8% | 0.0pp (overlay doesn't touch contacts) |
+   | Action Acc | 91.3% | 90.8% | **−0.5pp** |
+
+   The fix was reverted. **Root diagnosis:** training/inference mismatch, not a production-only bug. The GBM was trained with `gt_frames=[GT contacts]` (see `scripts/train_contact_classifier.main()` line 538). Production inference with `gt_frames=None` produces DIFFERENT `frames_since_last` distributions than training, and "fixing" to correct semantics moves inference into a region the model isn't calibrated for. The observed +2.64pp Action Acc from Task 4's overlay ship is real — the model has co-adapted to the production distribution despite the training mismatch.
+
+   **Proper fix requires GBM retraining, not production-only changes.** Two viable paths:
+   - **(a) Retrain GBM with `gt_frames=None`** (cheapest, ~1 day training + LOO A/B). Training now matches production directly. Expected to recover the +0.5pp that the two-pass couldn't get without retraining.
+   - **(b) Retrain GBM with GBM-threshold-accepted proxy** at training time (requires a pre-pass in the training harness). More faithful to production semantics; same order of effort.
+
+   Do not attempt production-only semantic "fixes" to this issue without retraining. The measurement result showed the cleanest possible semantic fix regresses; any subsequent production-only change (including a full Option B refactor of the feature builder) would reproduce the same regression architecturally.
 2. **Eval-methodology rigor.** The `_eval_gt_frames` backdoor was intended as an eval shortcut but silently overstated production behavior. Future decoder-integration experiments need production-realistic semantics BEFORE ship decisions, not after.
 3. **The decoder's Viterbi grammar + transition matrix are genuinely useful for action labeling.** The +5.2pp Action Acc lift is real; the regression is on the contact-emission side. The existing label-only overlay already captures +2.64pp of this lift safely. Enhancing it (option 2 in the decision memo) is a potential follow-up.
 
@@ -71,7 +84,16 @@ Code that survives the closure (all byte-identical-guarded or net-positive indep
 
 ## What's actually worth doing next (from this workstream's evidence)
 
-1. **Audit the existing label-only overlay** (`decoder_runtime.run_decoder_over_rally`). If it has the same `frames_since_last` issue in production, re-measuring with correct semantics could move its +2.64pp lift.
-2. **If more Action Acc lift is wanted,** enhance the existing label-only overlay with the Viterbi grammar + transitions used by the parallel decoder. F1-safe by construction (the overlay only relabels accepted contacts, doesn't add/remove). ~2 days.
+1. ~~Audit the existing label-only overlay~~ **DONE 2026-04-24.** See finding §1 above — the two-pass fix was tested and reverted (−0.5pp Action Acc regression). The proper fix requires GBM retraining. Do NOT retry production-only fixes.
+2. **GBM retraining with production-matching `frames_since_last` semantics** (~1 day) — cheapest path to a real overlay Action Acc lift. Train with `gt_frames=None` so training matches production inference directly. Expected recovery: some fraction of the missing +0.5-1.5pp that the two-pass couldn't capture without retraining.
+3. **If more Action Acc lift is wanted without retraining,** enhance the existing label-only overlay with richer Viterbi grammar + transitions (separate from the `frames_since_last` issue). F1-safe by construction (the overlay only relabels accepted contacts). ~2 days. Lift ceiling bounded by the training/inference mismatch above — worth measuring but won't fully unlock the decoder's theoretical upper bound.
 
-Both paths are documented separately; neither is blocking.
+None of these paths are blocking. Production baseline with the shipped +2.64pp overlay is already a meaningful win.
+
+## Known acceptable tech debt
+
+- `decoder_runtime.run_decoder_over_rally` imports `extract_candidate_features` from `scripts/train_contact_classifier.py`. This is a layering violation (production code importing from scripts). **Accepted as debt** because:
+  - Modal images now bundle `scripts/` (fixes any deployment-time crash).
+  - Removing the import requires extracting the feature builder into `rallycut/`, which is ~150 lines of careful refactor.
+  - Per finding §1, the refactor alone won't improve overlay Action Acc — requires GBM retraining.
+  - Fix naturally follows from path (2) above if that work happens.

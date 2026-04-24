@@ -143,6 +143,20 @@ def run_decoder_over_rally(
         ball_positions=ball_positions,
         player_positions=player_positions,
     )
+    # NOTE on production `frames_since_last` semantics (2026-04-24):
+    # `extract_candidate_features(gt_frames=None)` treats every candidate
+    # as previously-accepted when computing `frames_since_last`. The
+    # legacy `detect_contacts` loop updates `prev_accepted_frame` only
+    # on GBM-accepted contacts — a different semantic. A two-pass fix
+    # to match legacy semantics was tested (scored probs under Pass 1,
+    # fed `accepted_p1` frames into Pass 2's `gt_frames`) and produced
+    # a −0.5pp Action Acc regression. The GBM was trained with
+    # `gt_frames=[GT contacts]` (see train_contact_classifier main), so
+    # production's gt_frames=None path is a known training/inference
+    # mismatch — but the mismatch is calibrated-with, not against. Do
+    # not "fix" this without retraining the GBM. See
+    # `analysis/reports/parallel_decoder_nogo_2026_04_24.md` §durable-
+    # findings and `analysis/reports/overlay_2pass_fix.md`.
     feats_list, cand_frames = extract_candidate_features(
         cast("RallyData", rally_shim),
         config=contact_config,
