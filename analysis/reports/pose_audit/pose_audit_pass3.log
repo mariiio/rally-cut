@@ -1,0 +1,103 @@
+[pass3] FN bucket: 128 non-block cases across 101 rallies
+[pass3] Loading rallies with action GT...
+[pass3] Loaded 377 rallies in 6.1s
+[pass3] Restricting to 101 rallies that contain an FN-bucket case
+[pass3] Computing sequence probs per rally (this is the slow step)...
+[pass3] [10/101] seq probs in 1s
+[pass3] [20/101] seq probs in 1s
+[pass3] [30/101] seq probs in 1s
+[pass3] [40/101] seq probs in 1s
+[pass3] [50/101] seq probs in 1s
+[pass3] [60/101] seq probs in 1s
+[pass3] [70/101] seq probs in 1s
+[pass3] [80/101] seq probs in 1s
+[pass3] [90/101] seq probs in 1s
+[pass3] [100/101] seq probs in 2s
+[pass3] [101/101] seq probs in 2s
+[pass3] Seq probs ready for 101/101 rallies
+[pass3] Extracting candidate features per rally...
+[pass3] [10/101] features in 0s, 260 candidates accumulated
+[pass3] [20/101] features in 1s, 548 candidates accumulated
+[pass3] [30/101] features in 1s, 779 candidates accumulated
+[pass3] [40/101] features in 1s, 1037 candidates accumulated
+[pass3] [50/101] features in 2s, 1317 candidates accumulated
+[pass3] [60/101] features in 2s, 1582 candidates accumulated
+[pass3] [70/101] features in 2s, 1812 candidates accumulated
+[pass3] [80/101] features in 3s, 2052 candidates accumulated
+[pass3] [90/101] features in 3s, 2257 candidates accumulated
+[pass3] [100/101] features in 3s, 2494 candidates accumulated
+[pass3] [101/101] features in 3s, 2509 candidates accumulated
+
+[pass3] Total candidates: 2509
+[pass3] Standard pos: 707, neg: 1802
+[pass3] Focused: pos 185, neg 1718, skipped (other-GT) 606
+
+=== STANDARD (all GT contacts as positives, same rallies) (n=2509, +707/-1802) ===
+  F1=0.954  P=0.922  R=0.989
+  Top features by importance:
+    seq_max_nonbg                            0.3455
+    frames_since_last                        0.3431
+    player_distance                          0.0807
+    direction_change_deg                     0.0253
+    arc_fit_residual                         0.0214
+    ball_y_relative_net                      0.0179
+    velocity_y                               0.0178
+    nearest_player_max_d_y                   0.0165
+    ball_detection_density                   0.0164
+    acceleration                             0.0129
+    best_player_max_d_y                      0.0126
+    velocity_ratio                           0.0125
+    nearest_player_max_d_height              0.0119
+    velocity                                 0.0101
+    consecutive_detections                   0.0074
+  POSE total importance: 0.0145
+
+=== FOCUSED (FN-bucket positives + same-rally noise negatives) (n=1903, +185/-1718) ===
+  F1=0.981  P=1.000  R=0.962
+  Top features by importance:
+    seq_max_nonbg                            0.2256
+    player_distance                          0.1122
+    frames_since_last                        0.0794
+    ball_y                                   0.0610
+    acceleration                             0.0443
+    best_player_max_d_y                      0.0416
+    ball_y_relative_net                      0.0390
+    arc_fit_residual                         0.0373
+    velocity_y                               0.0342
+    direction_change_deg                     0.0329
+    consecutive_detections                   0.0326
+    nearest_player_max_d_y                   0.0302
+    best_player_max_d_height                 0.0284
+    trajectory_curvature                     0.0248
+    velocity_ratio                           0.0247
+  POSE total importance: 0.0634
+
+======================================================================
+FEATURE IMPORTANCE COMPARISON: STANDARD vs FOCUSED
+======================================================================
+Feature                                         STD      FOC        Δ
+seq_max_nonbg                                0.3455   0.2256  -0.1198
+player_distance                              0.0807   0.1122  +0.0316
+frames_since_last                            0.3431   0.0794  -0.2637
+ball_y                                       0.0073   0.0610  +0.0537
+acceleration                                 0.0129   0.0443  +0.0314
+best_player_max_d_y                          0.0126   0.0416  +0.0289
+ball_y_relative_net                          0.0179   0.0390  +0.0211
+arc_fit_residual                             0.0214   0.0373  +0.0160
+velocity_y                                   0.0178   0.0342  +0.0164
+direction_change_deg                         0.0253   0.0329  +0.0076
+consecutive_detections                       0.0074   0.0326  +0.0251
+nearest_player_max_d_y                       0.0165   0.0302  +0.0136
+best_player_max_d_height                     0.0063   0.0284  +0.0220
+trajectory_curvature                         0.0053   0.0248  +0.0195
+velocity_ratio                               0.0125   0.0247  +0.0122
+frames_since_rally_start                     0.0068   0.0235  +0.0167
+nearest_player_max_d_height                  0.0119   0.0232  +0.0113
+velocity                                     0.0101   0.0181  +0.0079
+
+  POSE total: standard=0.0145  focused=0.0634  Δ=+0.0489
+
+>5% rise in pose importance under focused training would indicate pose features ARE useful and production GBM dilutes them.
+[VERDICT] Pose importance stays low (6.3%) even on FN bucket — pose is not the lever.
+
+[pass3] Wrote /Users/mario/Personal/Projects/RallyCut/analysis/reports/pose_audit/pose_audit_pass3.json
