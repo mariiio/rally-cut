@@ -329,6 +329,66 @@ class TrackAppearanceStats:
     # DINOv2 ReID embedding (384-dim, L2-normalized) — set externally
     reid_embedding: np.ndarray | None = None
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize to a JSON-compatible dict.
+
+        Drops the raw `features` list — it is intermediate Pass-1 state and
+        downstream replay (Pass 2 stages 1+2, relabel-with-crops) only needs
+        the avg_* aggregates.
+        """
+        d: dict[str, Any] = {"track_id": int(self.track_id)}
+        if self.avg_skin_tone_hsv is not None:
+            d["avg_skin_tone_hsv"] = list(self.avg_skin_tone_hsv)
+        if self.avg_dominant_color_hsv is not None:
+            d["avg_dominant_color_hsv"] = list(self.avg_dominant_color_hsv)
+        if self.avg_upper_hist is not None:
+            d["avg_upper_hist"] = self.avg_upper_hist.flatten().tolist()
+        if self.avg_lower_hist is not None:
+            d["avg_lower_hist"] = self.avg_lower_hist.flatten().tolist()
+        if self.avg_upper_v_hist is not None:
+            d["avg_upper_v_hist"] = self.avg_upper_v_hist.flatten().tolist()
+        if self.avg_lower_v_hist is not None:
+            d["avg_lower_v_hist"] = self.avg_lower_v_hist.flatten().tolist()
+        if self.avg_head_hist is not None:
+            d["avg_head_hist"] = self.avg_head_hist.flatten().tolist()
+        if self.reid_embedding is not None:
+            d["reid_embedding"] = self.reid_embedding.flatten().tolist()
+        return d
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> TrackAppearanceStats:
+        """Deserialize from a dict produced by `to_dict`."""
+        stats = cls(track_id=int(d["track_id"]))
+        if d.get("avg_skin_tone_hsv") is not None:
+            hsv = d["avg_skin_tone_hsv"]
+            stats.avg_skin_tone_hsv = (float(hsv[0]), float(hsv[1]), float(hsv[2]))
+        if d.get("avg_dominant_color_hsv") is not None:
+            dc = d["avg_dominant_color_hsv"]
+            stats.avg_dominant_color_hsv = (float(dc[0]), float(dc[1]), float(dc[2]))
+        if d.get("avg_upper_hist") is not None:
+            stats.avg_upper_hist = np.array(
+                d["avg_upper_hist"], dtype=np.float32
+            ).reshape(HS_BINS)
+        if d.get("avg_lower_hist") is not None:
+            stats.avg_lower_hist = np.array(
+                d["avg_lower_hist"], dtype=np.float32
+            ).reshape(HS_BINS)
+        if d.get("avg_upper_v_hist") is not None:
+            stats.avg_upper_v_hist = np.array(
+                d["avg_upper_v_hist"], dtype=np.float32
+            ).reshape((V_BINS,))
+        if d.get("avg_lower_v_hist") is not None:
+            stats.avg_lower_v_hist = np.array(
+                d["avg_lower_v_hist"], dtype=np.float32
+            ).reshape((V_BINS,))
+        if d.get("avg_head_hist") is not None:
+            stats.avg_head_hist = np.array(
+                d["avg_head_hist"], dtype=np.float32
+            ).reshape(HS_BINS)
+        if d.get("reid_embedding") is not None:
+            stats.reid_embedding = np.array(d["reid_embedding"], dtype=np.float32)
+        return stats
+
     def compute_averages(self) -> None:
         """Compute average features from all samples."""
         if not self.features:

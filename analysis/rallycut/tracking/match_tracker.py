@@ -454,6 +454,49 @@ class StoredRallyData:
     # Whether side classification used court calibration (authoritative)
     sides_from_calibration: bool = False
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the replay-relevant subset to a JSON-compatible dict.
+
+        Excludes early_positions (unused in Pass 2 — refine_assignments hard-
+        codes early_positions=None) and side-switch inputs (serve_direction,
+        start_ms, end_ms) since the side-switch partition is captured at the
+        match level, not re-detected on replay.
+        """
+        return {
+            "track_stats": {
+                str(tid): stats.to_dict() for tid, stats in self.track_stats.items()
+            },
+            "track_court_sides": {
+                str(tid): int(side) for tid, side in self.track_court_sides.items()
+            },
+            "top_tracks": [int(t) for t in self.top_tracks],
+            "player_side_assignment": {
+                str(pid): int(team) for pid, team in self.player_side_assignment.items()
+            },
+            "sides_from_calibration": bool(self.sides_from_calibration),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> StoredRallyData:
+        """Deserialize from a dict produced by `to_dict`."""
+        return cls(
+            track_stats={
+                int(tid): TrackAppearanceStats.from_dict(stats_d)
+                for tid, stats_d in d.get("track_stats", {}).items()
+            },
+            track_court_sides={
+                int(tid): int(side)
+                for tid, side in d.get("track_court_sides", {}).items()
+            },
+            early_positions={},
+            top_tracks=[int(t) for t in d.get("top_tracks", [])],
+            player_side_assignment={
+                int(pid): int(team)
+                for pid, team in d.get("player_side_assignment", {}).items()
+            },
+            sides_from_calibration=bool(d.get("sides_from_calibration", False)),
+        )
+
 
 def _team_match_cost(
     tids_a: list[int],
@@ -582,6 +625,10 @@ class MatchPlayerTracker:
         self.diagnostics: list[RallyAssignmentDiagnostics] = []
         self.stored_rally_data: list[StoredRallyData] = []
         self._sides_from_calibration = False
+        # Side-switch partition from the most recent refine_assignments() call.
+        # Populated by refine_assignments stage 0 so callers (and the relabel
+        # scratchpad) can replay Pass-2 without re-running detection.
+        self.last_side_switches: list[int] = []
         # Phase 3 — set True after global_seed_from_rallies succeeds.
         # Makes the first rally use the global Hungarian path (same as rallies
         # 2+) rather than the Y-sort _initialize_first_rally heuristic.
@@ -1997,6 +2044,8 @@ class MatchPlayerTracker:
         # Stage 0: Detect side switches and update stored side assignments
         switches = self._detect_side_switches_combinatorial()
         switch_set = set(switches)
+        # Expose the partition so the relabel scratchpad can carry it forward.
+        self.last_side_switches = sorted(switch_set)
         if switches:
             flipped = False
             for i, data in enumerate(self.stored_rally_data):
@@ -2464,6 +2513,114 @@ class MatchPlayersResult:
     player_profiles: dict[int, PlayerAppearanceProfile]  # player_id -> profile
     team_templates: tuple[TeamTemplate, TeamTemplate] | None = None
     diagnostics: list[RallyAssignmentDiagnostics] = field(default_factory=list)
+    # Per-rally + match-level state needed to replay Pass 2 stages 1+2
+    # under new frozen profiles. Populated by match_players_across_rallies
+    # after refine_assignments. See scratchpad_to_dict() for the shape.
+    scratchpad: dict[str, Any] = field(default_factory=dict)
+
+
+def replay_refine_from_scratchpad(
+    scratchpad: dict[str, Any],
+    player_profiles: dict[int, PlayerAppearanceProfile],
+    initial_results: list[RallyTrackingResult],
+) -> list[RallyTrackingResult]:
+    """Re-run refine_assignments stages 1+2 from a captured scratchpad.
+
+    Engine of the Phase 1 relabel-with-crops worker. Builds a fresh tracker,
+    restores the per-rally appearance state and final profiles, then mirrors
+    refine_assignments stages 1 and 2 line-for-line — stage 0 (side-switch
+    detection) is intentionally skipped because the scratchpad already holds
+    the partition AND the post-flip player_side_assignment per rally
+    (scratchpad_to_dict is called AFTER refine_assignments in
+    match_players_across_rallies).
+
+    Args:
+        scratchpad: Output of `scratchpad_to_dict`.
+        player_profiles: pid → profile to inject. Use the existing match-time
+            profiles to reproduce the live result; supply NEW frozen profiles
+            (built from user-provided reference crops) to relabel.
+        initial_results: Pass-1 RallyTrackingResult per rally. Used only to
+            propagate rally_index and server_player_id; the trackToPlayer is
+            recomputed from scratch.
+
+    Returns:
+        Refined results, one per rally. trackToPlayer reflects stages 1+2
+        under the supplied profiles.
+    """
+    if not scratchpad.get("rallies"):
+        return []
+
+    tracker = MatchPlayerTracker()
+    tracker.stored_rally_data = [
+        StoredRallyData.from_dict(entry) for entry in scratchpad["rallies"]
+    ]
+    tracker.state.players.update(player_profiles)
+    tracker.frozen_player_ids = set(
+        int(pid) for pid in scratchpad.get("frozenPlayerIds", [])
+    )
+
+    # Mark side_switch_detected on the initial results for any captured switch.
+    switch_set = {int(i) for i in scratchpad.get("sideSwitches", [])}
+    initial = list(initial_results)
+    for i in switch_set:
+        if 0 <= i < len(initial):
+            r = initial[i]
+            initial[i] = RallyTrackingResult(
+                rally_index=r.rally_index,
+                track_to_player=r.track_to_player,
+                server_player_id=r.server_player_id,
+                side_switch_detected=True,
+                assignment_confidence=r.assignment_confidence,
+            )
+
+    # Stage 1: re-score every rally with the supplied profiles.
+    refined: list[RallyTrackingResult] = []
+    for data, init in zip(tracker.stored_rally_data, initial):
+        saved_side = tracker.state.current_side_assignment
+        tracker.state.current_side_assignment = data.player_side_assignment
+        tracker._sides_from_calibration = data.sides_from_calibration
+        track_to_player = tracker._assign_tracks_to_players_global(
+            data.top_tracks,
+            data.track_stats,
+            data.track_court_sides,
+            use_side_penalty=not tracker.frozen_player_ids,
+        )
+        tracker.state.current_side_assignment = saved_side
+        confidence = tracker._compute_assignment_confidence(
+            data.track_stats, track_to_player
+        )
+        refined.append(RallyTrackingResult(
+            rally_index=init.rally_index,
+            track_to_player=track_to_player,
+            server_player_id=init.server_player_id,
+            side_switch_detected=init.side_switch_detected,
+            assignment_confidence=confidence,
+        ))
+
+    # Stage 2: global within-team voting.
+    return tracker._global_within_team_voting(refined)
+
+
+def scratchpad_to_dict(tracker: MatchPlayerTracker) -> dict[str, Any]:
+    """Serialize the per-rally + match-level state needed to replay Pass 2.
+
+    The relabel-with-crops worker (Phase 1) loads this bundle from
+    match_analysis_json.rallyScratchpad to re-run refine_assignments
+    stages 1+2 against new frozen profiles, without re-extracting appearance
+    from video. Final player profiles are NOT included here — they live at
+    match_analysis_json.playerProfiles and are loaded by the caller.
+
+    Bundle shape (matches tests in TestMatchScratchpadSerialization):
+      - rallies: list of StoredRallyData.to_dict() per rally, in order
+      - sideSwitches: sorted rally indices where Pass 2 stage 0 flipped sides
+      - frozenPlayerIds: pids that were anchored by reference profiles at
+        match-time (so the replay can choose to re-freeze them or not)
+    """
+    return {
+        "rallies": [data.to_dict() for data in tracker.stored_rally_data],
+        "sideSwitches": sorted(tracker.last_side_switches),
+        "frozenPlayerIds": sorted(int(pid) for pid in tracker.frozen_player_ids),
+    }
 
 
 def match_players_across_rallies(
@@ -2606,4 +2763,5 @@ def match_players_across_rallies(
         player_profiles=dict(tracker.state.players),
         team_templates=team_templates,
         diagnostics=tracker.diagnostics,
+        scratchpad=scratchpad_to_dict(tracker),
     )
