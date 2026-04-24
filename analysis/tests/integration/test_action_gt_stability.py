@@ -112,3 +112,51 @@ def test_render_trackid_unknown_falls_back_to_legacy() -> None:
     the raw id no longer exists), the display falls back to the legacy pid."""
     gt = {"frame": 1, "action": "serve", "trackId": 999, "playerTrackId": 2}
     assert _render_display_pid(gt, {"47": 1}) == 2
+
+
+# Ports the TS-side `buildPidToTrackId` / `resolveGtDisplayPid` contract so
+# Python-side regressions are caught too. Keep in sync with
+# web/src/components/ActionLabelingMode.tsx and web/src/utils/gtLabelDisplay.ts.
+def _build_pid_to_track_id(
+    applied_full_mapping: dict[str, int] | None,
+) -> dict[int, int]:
+    out: dict[int, int] = {}
+    if not applied_full_mapping:
+        return out
+    for raw_str, pid in applied_full_mapping.items():
+        try:
+            raw = int(raw_str)
+        except (TypeError, ValueError):
+            continue
+        if pid not in out:
+            out[pid] = raw
+    return out
+
+
+def test_write_and_read_agree_post_remap() -> None:
+    """After remap-track-ids runs, positions carry canonical pids and
+    `appliedFullMapping` inverts to the same anchor the display shows.
+    Pressing "Player N" must round-trip to P{N}."""
+    # Post-remap: positions are {1,2,3,4}; appliedFullMapping records the
+    # original raw → canonical mapping.
+    afm = {"47": 1, "62": 2, "71": 3, "95": 4}
+    pid_to_raw = _build_pid_to_track_id(afm)
+
+    # User presses "2" → write stores raw 62. Read via appliedFullMapping
+    # resolves 62 → P2. Round-trip is consistent.
+    raw_for_press2 = pid_to_raw[2]
+    gt = {"frame": 0, "action": "attack", "trackId": raw_for_press2}
+    assert _render_display_pid(gt, afm) == 2
+
+
+def test_write_without_applied_full_mapping_uses_sort_order() -> None:
+    """When `appliedFullMapping` is missing (Case C: retracked + match-players
+    ran, remap-track-ids did NOT), the editor must NOT invert `trackToPlayer`
+    — that would disagree with the sort-order-based display. Pressing
+    "Player N" falls back to sort-order, matching what the user sees on screen.
+    This is the bug that caused rally 12 to land pressed-2 labels as P4."""
+    pid_to_raw = _build_pid_to_track_id(None)  # afm missing
+    assert pid_to_raw == {}, (
+        "When appliedFullMapping is missing, pidToTrackId must be empty so "
+        "the caller falls back to sort-order inversion (matching the display)."
+    )

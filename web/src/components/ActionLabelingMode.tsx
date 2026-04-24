@@ -8,24 +8,37 @@ import type { ActionGroundTruthLabel, MatchAnalysis } from '@/services/api';
 import { rallyMatchEntry } from '@/utils/gtLabelDisplay';
 
 /**
- * Invert a rally's trackId→pid mapping into pid→trackId. Prefers
- * `appliedFullMapping` (raw BoT-SORT id → canonical pid) when present;
- * falls back to `trackToPlayer` (pre-remap raw→canonical form). After
- * `remap-track-ids`, `trackToPlayer` collapses to identity and `appliedFullMapping`
- * carries the real mapping — that's why we check it first.
+ * Invert a rally's raw-trackId→canonical-pid mapping into pid→trackId using
+ * `appliedFullMapping` only.
+ *
+ * We deliberately do NOT fall back to `trackToPlayer` here. `trackToPlayer`
+ * carries Hungarian's canonical-pid output, which doesn't match what the
+ * editor displays before `remap-track-ids` has run: pre-remap the editor
+ * shows sort-order-based player numbers (see `labelingPlayerNumbers` in
+ * VideoPlayer.tsx / `playerNumberMap` in PlayerTrackingToolbar.tsx), and
+ * `trackToPlayer`'s canonical pids can disagree with that sort order. If we
+ * inverted `trackToPlayer` here, pressing "Player 2" would store the raw id
+ * of Hungarian's pid-2, which might render as P4 on the sort-order-based
+ * badge — the exact symptom we hit on a retracked rally after match-players
+ * ran but remap-track-ids had not.
+ *
+ * When `appliedFullMapping` is absent, the caller falls back to sort-order
+ * inversion — the same source the display uses. Read path
+ * (`resolveGtDisplayPid`) mirrors this: appliedFullMapping → playerNumberMap
+ * (sort-order), never trackToPlayer.
  */
 function buildPidToTrackId(
   rallyEntry: MatchAnalysis['rallies'][number] | undefined,
 ): Record<number, number> {
   const out: Record<number, number> = {};
   if (!rallyEntry) return out;
-  const source = rallyEntry.appliedFullMapping ?? rallyEntry.trackToPlayer;
+  const source = rallyEntry.appliedFullMapping;
   if (!source) return out;
   for (const [rawTidStr, pid] of Object.entries(source)) {
     const rawTid = Number(rawTidStr);
     if (!Number.isFinite(rawTid) || !Number.isFinite(pid)) continue;
-    // If multiple raws map to the same pid (shouldn't happen post-remap), the
-    // first wins — consistent with measure_relabel_lift.py's ttp usage.
+    // First-wins on collisions — consistent with how `measure_relabel_lift.py`
+    // canonicalizes via ttp.
     if (!(pid in out)) out[pid as number] = rawTid;
   }
   return out;
