@@ -123,7 +123,7 @@ class ClassifiedAction:
         return d
 
 
-def _team_label(
+def team_label(
     player_track_id: int,
     team_assignments: dict[int, int] | None,
 ) -> str:
@@ -137,6 +137,13 @@ def _team_label(
         if team_int is not None:
             return "A" if team_int == 0 else "B"
     return "unknown"
+
+
+# Backward-compatible alias — internal callers used `_team_label` before
+# `decoder_actions.py` (Phase 4) needed to import it from outside this
+# module. Phase 5 cleanup migrates all internal call sites and removes
+# this alias.
+_team_label = team_label
 
 
 @dataclass

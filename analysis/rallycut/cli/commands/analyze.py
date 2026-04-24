@@ -16,10 +16,18 @@ from rallycut.cli.utils import handle_errors
 # Feature flag for the parallel Viterbi decoder (Phase 4 of the parallel-
 # decoder ship plan, `docs/superpowers/plans/2026-04-24-parallel-decoder-ship.md`).
 # Default OFF for the first ship — flip to ON after 1-week production soak.
+#
 # Validated lift on v5 weights (68-fold LOO, --include-synthetic):
-# Contact F1 +1.2pp post synth-emission patch, Action Acc +5.2pp, serve F1
-# +8.5pp, receive F1 +8.7pp. See `analysis/reports/decoder_ab_2026_04_24.md`
-# and `analysis/reports/decoder_phase4_synth.md`.
+#   - Contact F1 89.4% (-0.7pp vs canonical 90.1%, within -1.0pp gate)
+#   - Action Acc 95.8% (+5.2pp vs canonical 90.6%)
+#   - serve F1 +8.7pp, receive F1 +10.0pp, set/attack each +small lift
+#
+# KNOWN BORDERLINE: dig F1 -2.4pp on --include-synthetic (decoder produces
+# 30 fewer dig TPs than baseline). On the no-synth comparison (validated
+# methodology) dig is -0.7pp, within the -1.5pp pre-registered floor.
+# Soak monitor must watch dig metrics; revert via flag if regression
+# confirms in production. See `analysis/reports/decoder_ab_2026_04_24.md`
+# §3 + §4 for full gate evaluation.
 USE_PARALLEL_DECODER = os.environ.get("USE_PARALLEL_DECODER", "").lower() in (
     "1", "true", "yes", "on",
 )

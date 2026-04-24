@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -41,6 +42,16 @@ from rallycut.tracking.player_tracker import (
     compute_court_roi_from_calibration,
 )
 from rallycut.tracking.sequence_action_runtime import get_sequence_probs
+
+# Feature flag for the parallel Viterbi decoder. When `USE_PARALLEL_DECODER=1`,
+# the per-rally action-classification path uses `detect_contacts_via_decoder`
+# + `build_rally_actions_from_decoder` instead of the legacy
+# `detect_contacts` + `classify_rally_actions`. Default OFF — flip after the
+# 1-week production soak. See `docs/superpowers/plans/2026-04-24-parallel-decoder-ship.md`
+# §5 Phase 4 + 5 and `analysis/reports/decoder_ab_2026_04_24.md`.
+USE_PARALLEL_DECODER = os.environ.get("USE_PARALLEL_DECODER", "").lower() in (
+    "1", "true", "yes", "on",
+)
 
 console = Console()
 
@@ -949,6 +960,7 @@ def _run_tracking(
                     team_assignments=verified_teams,
                     court_calibrator=calibrator,
                     sequence_probs=sequence_probs,
+                    primary_track_ids=list(result.primary_track_ids) if result.primary_track_ids else None,
                 )
                 contact_frames = [c.frame for c in pre_seq.contacts]
                 if contact_frames:
@@ -979,43 +991,70 @@ def _run_tracking(
         # Named config so the candidate decoder (below) sees the same knobs as
         # detect_contacts — both call into the same candidate extraction path.
         contact_cfg = ContactDetectionConfig()
-        contact_seq = detect_contacts(
-            ball_positions=ball_positions,
-            player_positions=result.positions,
-            config=contact_cfg,
-            net_y=result.court_split_y,
-            frame_count=result.frame_count or None,
-            team_assignments=verified_teams,
-            court_calibrator=calibrator,
-            sequence_probs=sequence_probs,
-        )
 
-        # Task 5 (2026-04-20): candidate decoder overlay runs alongside
-        # detect_contacts. Graceful fallback to [] when no trained classifier
-        # is on disk. `decoder_contacts` is consumed by classify_rally_actions
-        # to relabel accepted contacts using the Viterbi grammar decode
-        # (+2.64pp Action Acc on full 68-fold LOO A/B — Task 4 report).
-        decoder_contacts = run_decoder_for_production(
-            ball_positions=ball_positions,
-            player_positions=result.positions,
-            sequence_probs=sequence_probs,
-            contact_config=contact_cfg,
-        )
+        if USE_PARALLEL_DECODER:
+            # Phase 4 production wiring: parallel Viterbi decoder path.
+            # +5.2pp Action Acc, +0.4pp Contact F1 vs canonical baseline
+            # on 68-fold LOO. See decoder_ab_2026_04_24.md.
+            from rallycut.tracking.contact_detector import (  # noqa: PLC0415
+                detect_contacts_via_decoder,
+            )
+            from rallycut.tracking.decoder_actions import (  # noqa: PLC0415
+                build_rally_actions_from_decoder,
+            )
+            contact_seq = detect_contacts_via_decoder(
+                ball_positions=ball_positions,
+                player_positions=result.positions,
+                config=contact_cfg,
+                frame_count=result.frame_count or None,
+                team_assignments=verified_teams,
+                court_calibrator=calibrator,
+                sequence_probs=sequence_probs,
+                primary_track_ids=list(result.primary_track_ids) if result.primary_track_ids else None,
+            )
+            rally_actions = build_rally_actions_from_decoder(
+                contact_seq,
+                team_assignments=verified_teams,
+            )
+        else:
+            contact_seq = detect_contacts(
+                ball_positions=ball_positions,
+                player_positions=result.positions,
+                config=contact_cfg,
+                net_y=result.court_split_y,
+                frame_count=result.frame_count or None,
+                team_assignments=verified_teams,
+                court_calibrator=calibrator,
+                sequence_probs=sequence_probs,
+                primary_track_ids=list(result.primary_track_ids) if result.primary_track_ids else None,
+            )
 
-        # `sequence_probs` threads MS-TCN++ into two effects:
-        #   1. detect_contacts (above) uses the in-detector two-signal
-        #      rescue gate to recover rejected_by_classifier FN_contacts.
-        #   2. classify_rally_actions applies apply_sequence_override
-        #      internally (replaces non-serve action types with MS-TCN++
-        #      argmax, guarded by OVERRIDE_RELATIVE_CONF_K +
-        #      ATTACK_PRESERVE_RATIO + DIG_GUARD_RATIO).
-        rally_actions = classify_rally_actions(
-            contact_seq,
-            team_assignments=verified_teams,
-            calibrator=calibrator,
-            sequence_probs=sequence_probs,
-            decoder_contacts=decoder_contacts,
-        )
+            # Task 5 (2026-04-20): candidate decoder overlay runs alongside
+            # detect_contacts. Graceful fallback to [] when no trained classifier
+            # is on disk. `decoder_contacts` is consumed by classify_rally_actions
+            # to relabel accepted contacts using the Viterbi grammar decode
+            # (+2.64pp Action Acc on full 68-fold LOO A/B — Task 4 report).
+            decoder_contacts = run_decoder_for_production(
+                ball_positions=ball_positions,
+                player_positions=result.positions,
+                sequence_probs=sequence_probs,
+                contact_config=contact_cfg,
+            )
+
+            # `sequence_probs` threads MS-TCN++ into two effects:
+            #   1. detect_contacts (above) uses the in-detector two-signal
+            #      rescue gate to recover rejected_by_classifier FN_contacts.
+            #   2. classify_rally_actions applies apply_sequence_override
+            #      internally (replaces non-serve action types with MS-TCN++
+            #      argmax, guarded by OVERRIDE_RELATIVE_CONF_K +
+            #      ATTACK_PRESERVE_RATIO + DIG_GUARD_RATIO).
+            rally_actions = classify_rally_actions(
+                contact_seq,
+                team_assignments=verified_teams,
+                calibrator=calibrator,
+                sequence_probs=sequence_probs,
+                decoder_contacts=decoder_contacts,
+            )
 
         # Play annotations: attack direction, set zones, action zones.
         # No-op when calibrator is absent (uncalibrated videos).

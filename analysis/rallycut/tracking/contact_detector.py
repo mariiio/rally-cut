@@ -3041,10 +3041,8 @@ def detect_contacts_via_decoder(
     # injects a synth serve when the first detected contact is a receive
     # (real serve missed). Without parity, the decoder Contact F1 reads
     # ~1.6pp lower under `--include-synthetic` matching since baseline
-    # gains +41 serve TPs from synth emission. Mirror the legacy logic in
-    # a simplified form: if no decoder-emitted contact is a serve within
-    # the rally's serve window, prepend a synthetic serve at the rally
-    # start frame. Side inferred from the first detected contact.
+    # gains +41 serve TPs from synth emission. Mirror the legacy logic
+    # closely (same frame-placement rule, same dynamic baseline scaling).
     n_synth_serve = 0
     if cfg.enable_post_serve_receive and contacts:
         first_contact = contacts[0]
@@ -3056,10 +3054,21 @@ def detect_contacts_via_decoder(
             # Legacy convention: server is on the OPPOSITE side from the
             # first detected contact (the receive).
             serve_side = "far" if first_contact.court_side == "near" else "near"
+            # Frame placement mirrors `_make_synthetic_serve`: use the
+            # rally start frame when within ~3s (90 frames) of the first
+            # contact, else fall back to first_contact - 30 frames. This
+            # avoids placing the synth serve seconds late when the ball
+            # is off-screen at rally start.
+            from rallycut.tracking.action_classifier import _serve_baselines
+            if (first_contact.frame - prep.first_frame) <= 90:
+                synth_frame = prep.first_frame
+            else:
+                synth_frame = max(0, first_contact.frame - 30)
+            baseline_near, baseline_far = _serve_baselines(prep.estimated_net_y)
             synth_serve = Contact(
-                frame=prep.first_frame,
+                frame=synth_frame,
                 ball_x=0.5,
-                ball_y=0.92 if serve_side == "near" else 0.08,
+                ball_y=baseline_near if serve_side == "near" else baseline_far,
                 velocity=0.0,
                 direction_change_deg=0.0,
                 player_track_id=-1,

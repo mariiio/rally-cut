@@ -26,7 +26,7 @@ from rallycut.tracking.action_classifier import (
     ActionType,
     ClassifiedAction,
     RallyActions,
-    _team_label,
+    team_label,
 )
 from rallycut.tracking.contact_detector import ContactSequence
 
@@ -72,7 +72,7 @@ def build_rally_actions_from_decoder(
             court_side=contact.court_side,
             confidence=contact.confidence,
             is_synthetic=contact.is_synthetic,
-            team=_team_label(contact.player_track_id, team_assignments),
+            team=team_label(contact.player_track_id, team_assignments),
         ))
 
     return RallyActions(

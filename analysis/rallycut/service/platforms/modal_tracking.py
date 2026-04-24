@@ -69,6 +69,12 @@ image = (
     .add_local_dir("rallycut", "/app/rallycut")
     .add_local_dir("lib", "/app/lib")
     .add_local_dir("weights", "/app/weights")
+    # `scripts/` is needed because `decoder_runtime.run_decoder_over_rally`
+    # and `contact_detector.detect_contacts_via_decoder` lazily import
+    # `extract_candidate_features` from `scripts.train_contact_classifier`.
+    # Phase 5 cleanup will move that helper into `rallycut/`, at which
+    # point this bundling can be dropped.
+    .add_local_dir("scripts", "/app/scripts")
 )
 
 
