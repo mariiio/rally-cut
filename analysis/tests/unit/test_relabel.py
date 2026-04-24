@@ -305,3 +305,124 @@ class TestDetectAnomalousCrops:
 
         assert flags[1] == [3]
         assert flags[2] == []
+
+
+class TestEdgeDistanceScore:
+    """`compute_edge_distance_score` — proxy for "player not clipped at frame edge".
+
+    Bbox coords are in normalized [0, 1] frame space (matching PlayerPosition).
+    Score in [0, 1]: 1.0 = bbox safely inside frame, 0.0 = bbox edge touches
+    a frame edge.
+    """
+
+    def test_centered_bbox_scores_one(self) -> None:
+        from rallycut.tracking.relabel import compute_edge_distance_score
+
+        # Bbox at center, well inside frame.
+        score = compute_edge_distance_score(x=0.5, y=0.5, w=0.1, h=0.2)
+
+        assert score == 1.0
+
+    def test_bbox_touching_left_edge_scores_zero(self) -> None:
+        from rallycut.tracking.relabel import compute_edge_distance_score
+
+        # Bbox left edge at x=0.
+        score = compute_edge_distance_score(x=0.05, y=0.5, w=0.1, h=0.2)
+
+        assert score == 0.0
+
+    def test_bbox_touching_top_edge_scores_zero(self) -> None:
+        from rallycut.tracking.relabel import compute_edge_distance_score
+
+        # Bbox top edge at y=0 (y is bbox center; top = y - h/2).
+        score = compute_edge_distance_score(x=0.5, y=0.1, w=0.1, h=0.2)
+
+        assert score == 0.0
+
+    def test_partial_clip_scores_between_zero_and_one(self) -> None:
+        from rallycut.tracking.relabel import compute_edge_distance_score
+
+        # Bbox very close to (but not touching) edge: left edge at 0.02
+        # — within the EDGE_MARGIN=0.05 zone so score is partial.
+        score = compute_edge_distance_score(x=0.07, y=0.5, w=0.1, h=0.2)
+
+        assert 0.0 < score < 1.0
+
+
+class TestBboxAreaScore:
+    """`compute_bbox_area_score` — bigger bbox = closer to camera = clearer crop.
+
+    Score in [0, 1] saturating at a "big enough" area. Below a min threshold
+    (tiny crops are unusable), score is 0.
+    """
+
+    def test_large_bbox_scores_one(self) -> None:
+        from rallycut.tracking.relabel import compute_bbox_area_score
+
+        # Big bbox: 0.1 wide × 0.4 tall = 4% of frame.
+        score = compute_bbox_area_score(w=0.1, h=0.4)
+
+        assert score == 1.0
+
+    def test_tiny_bbox_scores_zero(self) -> None:
+        from rallycut.tracking.relabel import compute_bbox_area_score
+
+        # 0.01 × 0.02 = 0.02% of frame.
+        score = compute_bbox_area_score(w=0.01, h=0.02)
+
+        assert score == 0.0
+
+    def test_medium_bbox_scores_between(self) -> None:
+        from rallycut.tracking.relabel import compute_bbox_area_score
+
+        score = compute_bbox_area_score(w=0.05, h=0.1)
+
+        assert 0.0 < score < 1.0
+
+
+class TestComputeClarityScore:
+    """`compute_clarity_score` combines detection confidence × edge distance ×
+    bbox area into a single rankable score in [0, 1]."""
+
+    def test_perfect_inputs_yield_one(self) -> None:
+        from rallycut.tracking.relabel import compute_clarity_score
+
+        score = compute_clarity_score(
+            detection_confidence=1.0,
+            x=0.5, y=0.5, w=0.1, h=0.4,
+        )
+
+        assert score == 1.0
+
+    def test_low_detection_drags_score_down(self) -> None:
+        from rallycut.tracking.relabel import compute_clarity_score
+
+        score = compute_clarity_score(
+            detection_confidence=0.4,
+            x=0.5, y=0.5, w=0.1, h=0.4,
+        )
+
+        assert 0.0 < score < 1.0
+        # Score is the product, so should equal det_conf when others are 1.
+        assert score == 0.4
+
+    def test_edge_clipping_zeros_score(self) -> None:
+        from rallycut.tracking.relabel import compute_clarity_score
+
+        # Edge distance = 0 → product = 0 regardless of other factors.
+        score = compute_clarity_score(
+            detection_confidence=0.9,
+            x=0.05, y=0.5, w=0.1, h=0.2,
+        )
+
+        assert score == 0.0
+
+    def test_tiny_bbox_zeros_score(self) -> None:
+        from rallycut.tracking.relabel import compute_clarity_score
+
+        score = compute_clarity_score(
+            detection_confidence=0.95,
+            x=0.5, y=0.5, w=0.01, h=0.02,
+        )
+
+        assert score == 0.0

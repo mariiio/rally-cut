@@ -51,6 +51,76 @@ def reconstruct_profiles(
     }
 
 
+# Bbox area saturation thresholds (Phase 1.3 clarity ranking).
+# A bbox below MIN_BBOX_AREA is judged unusable (too small to identify);
+# at or above MAX_BBOX_AREA the score saturates at 1.0. Both are in
+# normalized frame coordinates (fraction of total frame area).
+_MIN_BBOX_AREA = 0.005   # ~0.5% of frame
+_MAX_BBOX_AREA = 0.04    # ~4% of frame — typical full-body bbox at decent scale
+# Edge-distance margin: bbox center must sit at least this far from any
+# frame edge (in normalized coords beyond bbox half-extent) for full score.
+_EDGE_MARGIN = 0.05
+
+
+def compute_edge_distance_score(x: float, y: float, w: float, h: float) -> float:
+    """Score in [0, 1]: 1.0 if bbox is safely inside frame, 0.0 if it
+    touches an edge.
+
+    Args:
+        x, y: bbox center in normalized [0, 1] frame coords.
+        w, h: bbox width/height in normalized coords.
+
+    Returns:
+        min(left, right, top, bottom) margin from edge, normalized by
+        _EDGE_MARGIN, clamped to [0, 1].
+    """
+    half_w = w / 2.0
+    half_h = h / 2.0
+    margins = [
+        x - half_w,           # left
+        1.0 - (x + half_w),   # right
+        y - half_h,           # top
+        1.0 - (y + half_h),   # bottom
+    ]
+    smallest = min(margins)
+    if smallest <= 0.0:
+        return 0.0
+    return float(min(1.0, smallest / _EDGE_MARGIN))
+
+
+def compute_bbox_area_score(w: float, h: float) -> float:
+    """Score in [0, 1]: penalize tiny crops, saturate at full-body scale.
+
+    Args:
+        w, h: bbox width/height in normalized [0, 1] frame coords.
+
+    Returns:
+        0.0 if area < _MIN_BBOX_AREA; 1.0 if area >= _MAX_BBOX_AREA;
+        linearly interpolated between.
+    """
+    area = w * h
+    if area <= _MIN_BBOX_AREA:
+        return 0.0
+    if area >= _MAX_BBOX_AREA:
+        return 1.0
+    return float((area - _MIN_BBOX_AREA) / (_MAX_BBOX_AREA - _MIN_BBOX_AREA))
+
+
+def compute_clarity_score(
+    detection_confidence: float,
+    x: float, y: float, w: float, h: float,
+) -> float:
+    """Combine detection confidence × edge distance × bbox area into a
+    single rankable score in [0, 1] for crop-suggester ranking.
+
+    Multiplicative so any single zero zeroes the result — a clipped or
+    tiny bbox is unusable regardless of how confident the detector was.
+    """
+    edge = compute_edge_distance_score(x, y, w, h)
+    area = compute_bbox_area_score(w, h)
+    return float(detection_confidence) * edge * area
+
+
 def detect_anomalous_crops(
     embeddings_per_pid: dict[int, np.ndarray],
     threshold_sigma: float = 1.5,

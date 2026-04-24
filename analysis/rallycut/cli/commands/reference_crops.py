@@ -295,6 +295,42 @@ def _sample_candidates_for_player(
     if not crops:
         return []
 
+    # Phase 1.3: pre-rank by clarity (detection × edge-distance × bbox-area).
+    # FPS afterwards picks the most diverse subset from the cleanest pool;
+    # this prevents a tiny edge-clipped crop from "winning" diversity by
+    # being visually unlike the rest.
+    from rallycut.tracking.relabel import compute_clarity_score
+
+    clarity_scores: list[float] = []
+    for cand in candidates:
+        bbox = cand["bbox"]
+        clarity_scores.append(
+            compute_clarity_score(
+                detection_confidence=cand["detectionConfidence"],
+                x=bbox["x"], y=bbox["y"], w=bbox["w"], h=bbox["h"],
+            )
+        )
+    # Drop candidates with clarity == 0 (clipped or tiny — unusable).
+    keep_idx = [i for i, s in enumerate(clarity_scores) if s > 0.0]
+    if not keep_idx:
+        return []
+    candidates = [candidates[i] for i in keep_idx]
+    crops = [crops[i] for i in keep_idx]
+    clarity_scores = [clarity_scores[i] for i in keep_idx]
+    # Surface clarity in the candidate payload so the API/UI can show it.
+    for cand, score in zip(candidates, clarity_scores):
+        cand["clarityScore"] = round(float(score), 3)
+    # Cap the pool at 3× requested before FPS — keeps diversification
+    # focused on the cleaner half of the available frames.
+    if len(candidates) > 3 * num_candidates:
+        order = sorted(
+            range(len(candidates)),
+            key=lambda i: clarity_scores[i],
+            reverse=True,
+        )[: 3 * num_candidates]
+        candidates = [candidates[i] for i in order]
+        crops = [crops[i] for i in order]
+
     # Farthest-point sampling on DINOv2 features.
     features = extract_backbone_features(crops, device=device)
     if features.shape[0] == 0:
