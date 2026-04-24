@@ -156,7 +156,7 @@ def run_decoder_over_rally(
     # mismatch — but the mismatch is calibrated-with, not against. Do
     # not "fix" this without retraining the GBM. See
     # `analysis/reports/parallel_decoder_nogo_2026_04_24.md` §durable-
-    # findings and `analysis/reports/overlay_2pass_fix.md`.
+    # findings for the full measurement + proper fix path.
     feats_list, cand_frames = extract_candidate_features(
         cast("RallyData", rally_shim),
         config=contact_config,
