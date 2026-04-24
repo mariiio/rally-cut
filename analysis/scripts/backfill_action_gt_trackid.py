@@ -241,9 +241,11 @@ def load_fixture_registry() -> dict[str, str]:
         raw = json.loads(path.read_text())
     except (OSError, json.JSONDecodeError):
         return {}
-    # Registry shape: {fixture: {video_id, ...}} or {fixture: video_id}.
+    # Registry shape: {fixtures: {name: {video_id, ...}}} or
+    # {name: {video_id, ...}} or {name: video_id}.
+    entries = raw.get("fixtures") if isinstance(raw.get("fixtures"), dict) else raw
     out: dict[str, str] = {}
-    for fixture, val in raw.items():
+    for fixture, val in entries.items():
         if isinstance(val, dict) and "video_id" in val:
             out[fixture] = val["video_id"]
         elif isinstance(val, str):
