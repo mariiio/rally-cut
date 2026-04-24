@@ -246,15 +246,17 @@ def _eval_rally(
             )
             # Decoder emits action labels via the `decoder_action` field;
             # build pred_actions directly without running the legacy
-            # `classify_rally_actions` pipeline.
+            # `classify_rally_actions` pipeline. Phase-4 synth-serve
+            # emission propagates `is_synthetic` so `--include-synthetic`
+            # matching finds these at ±1s tolerance against unmatched GT
+            # serves.
             pred_actions = [
                 {
                     "frame": c.frame,
                     "action": c.decoder_action or "unknown",
                     "playerTrackId": c.player_track_id,
                     "courtSide": c.court_side,
-                    # No synthetic serves emitted on this path
-                    "isSynthetic": False,
+                    "isSynthetic": c.is_synthetic,
                 }
                 for c in contact_seq.contacts
                 if c.decoder_action is not None

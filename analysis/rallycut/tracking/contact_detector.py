@@ -287,6 +287,12 @@ class Contact:
     # produced downstream by `classify_rally_actions`. Both consumers can read
     # this field; existing consumers that ignore it are unaffected by default.
     decoder_action: str | None = None
+    # True when this Contact was injected as a synthetic serve by the
+    # decoder path (Phase 4 of the parallel-decoder ship plan). Mirrors
+    # the legacy `ClassifiedAction.is_synthetic` flag from the action
+    # classifier so `--include-synthetic` matching in eval_loo_video.py
+    # finds these contacts at ±1s tolerance against unmatched GT serves.
+    is_synthetic: bool = False
 
     def to_dict(self) -> dict:
         d: dict = {
@@ -316,6 +322,9 @@ class Contact:
         # checks for the key explicitly.
         if self.decoder_action is not None:
             d["decoderAction"] = self.decoder_action
+        # Synth-serve flag — only emitted when set, same byte-identity reason.
+        if self.is_synthetic:
+            d["isSynthetic"] = True
         return d
 
 
@@ -3026,9 +3035,52 @@ def detect_contacts_via_decoder(
     # contacts. Validated A/B (`eval_candidate_decoder.py` ship memo +
     # `decoder_v5_full_2026_04_24.md`) uses the decoder's output directly,
     # without legacy dedup. We match that here for apples-to-apples parity.
+
+    # Phase 4: synthetic-serve emission. The legacy path
+    # (`action_classifier.classify_rally_actions._make_synthetic_serve`)
+    # injects a synth serve when the first detected contact is a receive
+    # (real serve missed). Without parity, the decoder Contact F1 reads
+    # ~1.6pp lower under `--include-synthetic` matching since baseline
+    # gains +41 serve TPs from synth emission. Mirror the legacy logic in
+    # a simplified form: if no decoder-emitted contact is a serve within
+    # the rally's serve window, prepend a synthetic serve at the rally
+    # start frame. Side inferred from the first detected contact.
+    n_synth_serve = 0
+    if cfg.enable_post_serve_receive and contacts:
+        first_contact = contacts[0]
+        first_in_serve_window = (
+            first_contact.frame - prep.first_frame
+        ) <= cfg.serve_window_frames
+        first_is_serve = first_contact.decoder_action == "serve"
+        if first_in_serve_window and not first_is_serve:
+            # Legacy convention: server is on the OPPOSITE side from the
+            # first detected contact (the receive).
+            serve_side = "far" if first_contact.court_side == "near" else "near"
+            synth_serve = Contact(
+                frame=prep.first_frame,
+                ball_x=0.5,
+                ball_y=0.92 if serve_side == "near" else 0.08,
+                velocity=0.0,
+                direction_change_deg=0.0,
+                player_track_id=-1,
+                player_distance=float("inf"),
+                player_candidates=[],
+                candidate_bbox_motion={},
+                court_side=serve_side,
+                is_at_net=False,
+                is_validated=True,
+                confidence=0.4,  # matches legacy synth confidence floor
+                arc_fit_residual=0.0,
+                decoder_action="serve",
+                is_synthetic=True,
+            )
+            contacts.insert(0, synth_serve)
+            n_synth_serve = 1
+
     logger.info(
         f"detect_contacts_via_decoder: {len(contacts)} accepted "
         f"({len(decoder_cands)} candidates, no legacy dedup, "
+        f"+{n_synth_serve} synth_serve, "
         f"net_y={prep.estimated_net_y:.3f}, skip_penalty={skip_penalty})"
     )
 

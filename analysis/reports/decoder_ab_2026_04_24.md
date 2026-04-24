@@ -42,16 +42,24 @@ Phase 4 cleanup item.
 Source: `analysis/reports/loo_baseline_radius015.md` (baseline) and
 `analysis/reports/decoder_v5_full_2026_04_24.md` (decoder).
 
-### B. Synthetic on both (Phase 3 consolidated harness)
+### B. Synthetic on both (Phase 3 consolidated harness, **post Phase-4 patch**)
 
-| Metric | Baseline | Decoder | Δ | Note |
-|---|---:|---:|---:|---|
-| Contact F1 | 90.1% | 88.2% | −1.9pp | synth gap (see §4) |
-| Action Acc | 90.6% | 95.7% | +5.1pp | bigger lift here because baseline Action Acc is lower with synth |
-| TP / FP / FN | 1938 / 165 / 259 | 1828 / 118 / 369 | −110 / −47 / +110 | decoder uses 47 fewer FPs |
+| Metric | Baseline | Decoder (P3, no synth emit) | Decoder (P4, synth emit) |
+|---|---:|---:|---:|
+| Contact F1 | 90.1% | 88.2% | **89.4%** (+1.2pp from P3) |
+| Action Acc | 90.6% | 95.7% | **95.8%** |
+| serve F1 | 78.6% | 79.9% | **87.3%** (+7.4pp) |
+| dig F1 | 73.0% | 70.6% | 70.6% (unchanged) |
+| TP / FP / FN | 1938/165/259 | 1828/118/369 | 1872/118/325 |
+
+Phase-4 synth-serve emission patch (commit landed) closes the synth-on
+Contact F1 gap from −1.9pp to −0.7pp. Action Acc now within 0.1pp of
+the no-synth measurement. Dig regression of −2.4pp persists (decoder
+genuinely produces 30 fewer dig TPs vs baseline) and is the only
+remaining per-class concern.
 
 Source: `analysis/reports/decoder_phase3_baseline.md` and
-`analysis/reports/decoder_phase3_decoder.md`.
+`analysis/reports/decoder_phase4_synth.md`.
 
 ---
 

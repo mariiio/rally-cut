@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,17 @@ from rich.console import Console
 from rich.table import Table
 
 from rallycut.cli.utils import handle_errors
+
+# Feature flag for the parallel Viterbi decoder (Phase 4 of the parallel-
+# decoder ship plan, `docs/superpowers/plans/2026-04-24-parallel-decoder-ship.md`).
+# Default OFF for the first ship — flip to ON after 1-week production soak.
+# Validated lift on v5 weights (68-fold LOO, --include-synthetic):
+# Contact F1 +1.2pp post synth-emission patch, Action Acc +5.2pp, serve F1
+# +8.5pp, receive F1 +8.7pp. See `analysis/reports/decoder_ab_2026_04_24.md`
+# and `analysis/reports/decoder_phase4_synth.md`.
+USE_PARALLEL_DECODER = os.environ.get("USE_PARALLEL_DECODER", "").lower() in (
+    "1", "true", "yes", "on",
+)
 
 app = typer.Typer(
     name="analyze",
@@ -52,7 +64,12 @@ def classify_actions(
     """
     from rallycut.tracking.action_classifier import classify_rally_actions
     from rallycut.tracking.ball_tracker import BallPosition
-    from rallycut.tracking.contact_detector import ContactDetectionConfig, detect_contacts
+    from rallycut.tracking.contact_detector import (
+        ContactDetectionConfig,
+        detect_contacts,
+        detect_contacts_via_decoder,
+    )
+    from rallycut.tracking.decoder_actions import build_rally_actions_from_decoder
     from rallycut.tracking.decoder_runtime import run_decoder_for_production
     from rallycut.tracking.player_tracker import PlayerPosition
     from rallycut.tracking.sequence_action_runtime import get_sequence_probs
@@ -126,40 +143,78 @@ def classify_actions(
 
     # Step 1: Contact detection. Named config so the candidate decoder sees
     # the same knobs as detect_contacts (both drive candidate extraction).
+    #
+    # primary_track_ids filters candidates to only the 4 ref-crop-anchored
+    # tracks; without this, bystander/transient tracks can crowd out the
+    # actual actor at contact time (measured at 19.6% of actions on the
+    # 8-fixture click-GT set).
+    primary_raw = data.get("primaryTrackIds") or data.get("primary_track_ids")
+    primary_track_ids: list[int] | None = None
+    if primary_raw and isinstance(primary_raw, list):
+        primary_track_ids = [int(t) for t in primary_raw]
+
     contact_cfg = ContactDetectionConfig()
-    contact_seq = detect_contacts(
-        ball_positions=ball_positions,
-        player_positions=player_positions if player_positions else None,
-        config=contact_cfg,
-        net_y=court_split_y,
-        frame_count=data.get("frameCount"),
-        team_assignments=team_assignments,
-        sequence_probs=sequence_probs,
-    )
+
+    if USE_PARALLEL_DECODER:
+        if not quiet:
+            console.print(
+                "  [dim]USE_PARALLEL_DECODER=1 — running parallel Viterbi "
+                "decoder path[/dim]"
+            )
+        contact_seq = detect_contacts_via_decoder(
+            ball_positions=ball_positions,
+            player_positions=player_positions if player_positions else None,
+            config=contact_cfg,
+            frame_count=data.get("frameCount"),
+            team_assignments=team_assignments,
+            sequence_probs=sequence_probs,
+            primary_track_ids=primary_track_ids,
+        )
+        # Decoder emits action labels via Contact.decoder_action — skip the
+        # legacy classify_rally_actions + decoder-overlay; build RallyActions
+        # directly from the decoded contacts.
+        rally_actions = build_rally_actions_from_decoder(
+            contact_seq,
+            team_assignments=team_assignments,
+        )
+    else:
+        contact_seq = detect_contacts(
+            ball_positions=ball_positions,
+            player_positions=player_positions if player_positions else None,
+            config=contact_cfg,
+            net_y=court_split_y,
+            frame_count=data.get("frameCount"),
+            team_assignments=team_assignments,
+            sequence_probs=sequence_probs,
+            primary_track_ids=primary_track_ids,
+        )
+
+        # Task 5 (2026-04-20): candidate decoder overlay. Graceful fallback
+        # to [] when no trained classifier is on disk. +2.64pp Action Acc
+        # on 68-fold LOO (Task 4 A/B —
+        # reports/decoder_integration_2026_04_20.md). Phase 5 cleanup
+        # removes this overlay once USE_PARALLEL_DECODER is the default.
+        decoder_contacts = run_decoder_for_production(
+            ball_positions=ball_positions,
+            player_positions=player_positions if player_positions else [],
+            sequence_probs=sequence_probs,
+            contact_config=contact_cfg,
+        )
+
+        # Step 2: Action classification (includes the MS-TCN++ override
+        # internally when sequence_probs is passed — mirrors track-players
+        # --actions so this CLI matches production action classification
+        # behavior).
+        rally_actions = classify_rally_actions(
+            contact_seq,
+            team_assignments=team_assignments,
+            sequence_probs=sequence_probs,
+            decoder_contacts=decoder_contacts,
+        )
 
     if not quiet:
         console.print(f"\n  Contacts detected: {contact_seq.num_contacts}")
         console.print(f"  Net Y estimate: {contact_seq.net_y:.3f}")
-
-    # Task 5 (2026-04-20): candidate decoder overlay. Graceful fallback to []
-    # when no trained classifier is on disk. +2.64pp Action Acc on 68-fold LOO
-    # (Task 4 A/B — reports/decoder_integration_2026_04_20.md).
-    decoder_contacts = run_decoder_for_production(
-        ball_positions=ball_positions,
-        player_positions=player_positions if player_positions else [],
-        sequence_probs=sequence_probs,
-        contact_config=contact_cfg,
-    )
-
-    # Step 2: Action classification (includes the MS-TCN++ override internally
-    # when sequence_probs is passed — mirrors track-players --actions so this
-    # CLI matches production action classification behavior).
-    rally_actions = classify_rally_actions(
-        contact_seq,
-        team_assignments=team_assignments,
-        sequence_probs=sequence_probs,
-        decoder_contacts=decoder_contacts,
-    )
 
     if not quiet:
         console.print(f"  Actions classified: {len(rally_actions.actions)}")
@@ -318,12 +373,19 @@ def rank_highlights(
         )
         # Named config so the candidate decoder sees the same knobs as
         # detect_contacts (both drive candidate extraction).
+        primary_raw2 = data.get("primaryTrackIds") or data.get("primary_track_ids")
+        primary_tids_2: list[int] | None = (
+            [int(t) for t in primary_raw2]
+            if primary_raw2 and isinstance(primary_raw2, list)
+            else None
+        )
         contact_cfg = ContactDetectionConfig()
         contact_seq = detect_contacts(
             ball_positions, player_positions or None, config=contact_cfg,
             net_y=court_split_y,
             frame_count=data.get("frameCount"),
             team_assignments=ta,
+            primary_track_ids=primary_tids_2,
             sequence_probs=sequence_probs,
         )
         # Task 5 (2026-04-20): candidate decoder overlay. Graceful fallback to
