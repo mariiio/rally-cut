@@ -283,18 +283,25 @@ def _load_track_to_player_maps(
                 if rid and t2p:
                     result[rid] = {int(k): int(v) for k, v in t2p.items()}
 
-        # Canonical map wins per-rally when present. The producer
-        # (`compute_canonical_pid_map`) emits canonical entries only for
-        # rallies where every primary track was confidently scored against
-        # the ref-crop prototypes and all 4 primary tracks are present, so
-        # an entry is always a complete 1:1 replacement of the legacy
-        # `trackToPlayer` for that rally. Partial-coverage merging was tried
-        # in v2 and tanked score_accuracy by -1.21pp because team templates
-        # rely on the rally-level pid permutation being a clean bijection.
+        # Canonical map wins per-rally ONLY when it covers all 4 pids.
+        # Partial canonical maps (e.g. rally 0 with 2 primary tracks
+        # confidently scored) are correct for editor display via the
+        # web-side priority chain (canonical → legacy → sort-order), but
+        # for production_eval's permutation-invariant oracle to match,
+        # the rally needs all 4 pids assigned 1:1. Merging partial
+        # canonical with legacy via claim-displacement preserves 1:1 but
+        # drops pid coverage when canonical disagrees with legacy on the
+        # track→pid match, regressing the oracle metric. Cleaner: take
+        # canonical only when it's complete; otherwise fall through to
+        # legacy `trackToPlayer` entirely (set above).
         if isinstance(canonical_json, dict):
-            for rid, rally_map in canonical_json.get("rallies", {}).items():
-                if rid and rally_map:
-                    result[rid] = {int(k): int(v) for k, v in rally_map.items()}
+            for rid, rally_map_raw in canonical_json.get("rallies", {}).items():
+                if not rid or not rally_map_raw:
+                    continue
+                rally_map = {int(k): int(v) for k, v in rally_map_raw.items()}
+                if set(rally_map.values()) != {1, 2, 3, 4}:
+                    continue
+                result[rid] = rally_map
 
     return result
 

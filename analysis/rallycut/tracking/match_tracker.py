@@ -2485,22 +2485,21 @@ def compute_canonical_pid_map(
         embeddings = np.stack([emb for _, emb in valid_tracks], axis=0)  # (T, D)
         sims = embeddings @ proto_mat.T  # (T, P) cosine, both sides L2-normed
 
-        # Per-rally all-or-nothing gate: emit canonical for the rally only
-        # when *every* primary track has a top-2 prototype gap above τ AND
-        # the rally has all 4 primary tracks present (the regime the plan
-        # defines as "crops complete + tracking complete"). Partial-coverage
-        # merging into legacy was tried in v2 — it broke 1:1 within the
-        # rally and tanked score_accuracy by -1.21pp because team templates
-        # rely on a clean pid permutation. Per-rally gating preserves the
-        # invariant downstream consumers depend on.
-        if len(valid_tracks) < 4:
-            n_abstained += 1
-            logger.info(
-                "canonical_pid.abstain rally=%s reason=incomplete_tracking n_tracks=%d",
-                rally.rally_id, len(valid_tracks),
-            )
-            continue
+        # No abstain on incomplete tracking. The first rally (and occasional
+        # short rallies later) commonly have fewer than 4 primary tracks
+        # because not all players are on court yet — abstaining the rally
+        # forces the editor to fall through to legacy `appliedFullMapping`,
+        # which for rally 0 is assigned by the Y-sort `_initialize_first_rally`
+        # heuristic that doesn't know the user's ref-crop pid labels. Result
+        # was visible drift on rally 0 even when crops were complete.
+        # Rectangular `linear_sum_assignment` on a T×4 cost matrix already
+        # handles the partial case correctly: it assigns each present track
+        # a unique pid via max-similarity, preserving 1:1 within the rally.
+        # Tracks not present in this rally can't be displayed anyway.
 
+        # Ambiguity abstain stays as the safety net — keeps the rally out of
+        # the canonical map when any present track's top-2 prototype gap is
+        # below the noise floor (signal too weak to lock identity).
         if sims.shape[1] >= 2:
             sorted_sims = np.sort(sims, axis=1)[:, ::-1]
             top2_gap = sorted_sims[:, 0] - sorted_sims[:, 1]
