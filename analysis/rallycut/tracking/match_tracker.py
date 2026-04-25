@@ -89,6 +89,17 @@ REID_BLEND = 0.50
 # Protects against regressions from unrepresentative reference crops.
 REID_MIN_MARGIN = 0.08
 
+# Phase 3 global k-means seeding is a closed NO-GO workstream (see
+# memory/attribution_primitive_first_phase0_2026_04_24.md §dormant flags).
+# The flag was env-gated and the env-read line was removed during the
+# dormant-flag cleanup, but the call-site reference at ~line 2650 was
+# left dangling and broke `match-players` at runtime with NameError.
+# Defining the constants as `False` / sentinel keeps the dormant path
+# compiled while leaving the workstream closed; remove constants +
+# call-site together when the path is excised.
+GLOBAL_SEED_ENABLED = False
+GLOBAL_SEED_MAX_CENTROID_COS = 0.45
+
 # Frame cutoff used to restrict first-rally side classification to the
 # serve formation window.  During the serve the 2v2 arrangement is
 # formal (each team on their own side); mid-rally players may cross into
