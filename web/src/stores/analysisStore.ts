@@ -262,12 +262,29 @@ function armMatchAnalysisDebounce(videoId: string, set: SetFn, get: GetFn) {
       const { triggerMatchAnalysis } = await import('@/services/api');
       updatePipeline({ progress: 92, stepMessage: 'Generating match stats...' });
       await triggerMatchAnalysis(videoId);
+      await refreshMatchAnalysisCache(videoId);
       await completeAnalysis(videoId, set, get);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Match analysis failed';
       updatePipeline({ phase: 'error', error: message, stepMessage: 'Match analysis failed' });
     }
   }, MATCH_ANALYSIS_DEBOUNCE_MS);
+}
+
+/**
+ * Force-reload the cached MatchAnalysis snapshot in playerTrackingStore so
+ * the editor renders fresh `appliedFullMapping` / `canonicalPidMap` instead
+ * of the stale pre-rerun cache. Without this, every successful
+ * triggerMatchAnalysis silently leaves the UI showing the previous run's
+ * pid permutation — the symptom that flipped GT badges across re-runs.
+ */
+async function refreshMatchAnalysisCache(videoId: string): Promise<void> {
+  try {
+    const { usePlayerTrackingStore } = await import('@/stores/playerTrackingStore');
+    await usePlayerTrackingStore.getState().loadMatchAnalysis(videoId, true);
+  } catch (err) {
+    console.warn('[ANALYSIS] Failed to refresh match-analysis cache:', err);
+  }
 }
 
 export const useAnalysisStore = create<AnalysisState>()(
@@ -412,6 +429,7 @@ export const useAnalysisStore = create<AnalysisState>()(
             try {
               const { triggerMatchAnalysis } = await import('@/services/api');
               await triggerMatchAnalysis(videoId);
+              await refreshMatchAnalysisCache(videoId);
               await completeAnalysis(videoId, set, get);
             } catch (err) {
               const message = err instanceof Error ? err.message : 'Match analysis failed';

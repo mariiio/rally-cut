@@ -74,6 +74,7 @@ export function PlayerReferenceCropDialog({ open, videoId, onClose }: PlayerRefe
   const loadReferenceCrops = usePlayerTrackingStore((state) => state.loadReferenceCrops);
   const addReferenceCrop = usePlayerTrackingStore((state) => state.addReferenceCrop);
   const removeReferenceCrop = usePlayerTrackingStore((state) => state.removeReferenceCrop);
+  const loadMatchAnalysis = usePlayerTrackingStore((state) => state.loadMatchAnalysis);
 
   // Load reference crops on open
   useEffect(() => {
@@ -271,6 +272,11 @@ export function PlayerReferenceCropDialog({ open, videoId, onClose }: PlayerRefe
       await runMatchAnalysis(videoId, (progress) => {
         setRerunStep(progress.step || `Step ${progress.index}/${progress.total}`);
       });
+      // Force-refresh the cached MatchAnalysis snapshot in the store —
+      // without this the editor keeps rendering from the pre-rerun cache
+      // and shows stale `appliedFullMapping` / `canonicalPidMap`. That's
+      // the exact failure mode that flipped GT badges across re-runs.
+      await loadMatchAnalysis(videoId, true);
       // Let other components (rally list confidence badge, match-stats)
       // refresh without prop-drilling a callback.
       window.dispatchEvent(new CustomEvent('match-analysis-updated', { detail: { videoId } }));
@@ -281,7 +287,7 @@ export function PlayerReferenceCropDialog({ open, videoId, onClose }: PlayerRefe
       setRerunStep('');
       setRerunning(false);
     }
-  }, [videoId]);
+  }, [videoId, loadMatchAnalysis]);
 
   const cropsByPlayer = useMemo(() => {
     const grouped: Record<number, typeof referenceCrops> = { 1: [], 2: [], 3: [], 4: [] };
