@@ -299,7 +299,15 @@ export function MatchStatsPanel() {
 
   useEffect(() => {
     loadStats();
-  }, [loadStats]);
+    // Reload when a match-analysis run finishes so the panel reflects
+    // fresh playerStats / teamStats instead of the pre-rerun cache.
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ videoId?: string }>).detail;
+      if (!detail?.videoId || detail.videoId === activeMatchId) loadStats();
+    };
+    window.addEventListener('match-analysis-updated', handler);
+    return () => window.removeEventListener('match-analysis-updated', handler);
+  }, [loadStats, activeMatchId]);
 
   if (loading) {
     return (

@@ -177,11 +177,28 @@ export function VideoPlayer() {
     return map;
   }, [isLabelingActions, currentRally, playerTracks]);
 
-  // Match stats for landing overlay
+  // Match stats for landing overlay. Refreshes on activeMatchId change AND
+  // on `match-analysis-updated` events so the landing-zone overlay reflects
+  // the latest reattribute-actions output instead of the pre-rerun cache.
   const [matchStats, setMatchStats] = useState<MatchStats | null>(null);
   useEffect(() => {
     if (!activeMatchId) return;
-    getMatchStatsApi(activeMatchId).then(setMatchStats).catch(() => {});
+    let cancelled = false;
+    const load = () => {
+      getMatchStatsApi(activeMatchId)
+        .then((s) => { if (!cancelled) setMatchStats(s); })
+        .catch(() => {});
+    };
+    load();
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ videoId?: string }>).detail;
+      if (!detail?.videoId || detail.videoId === activeMatchId) load();
+    };
+    window.addEventListener('match-analysis-updated', handler);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('match-analysis-updated', handler);
+    };
   }, [activeMatchId]);
 
   // Lazy-fetch match analysis so GT overlays can resolve display pid from

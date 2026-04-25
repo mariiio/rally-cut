@@ -274,9 +274,12 @@ function armMatchAnalysisDebounce(videoId: string, set: SetFn, get: GetFn) {
 /**
  * Force-reload the cached MatchAnalysis snapshot in playerTrackingStore so
  * the editor renders fresh `appliedFullMapping` / `canonicalPidMap` instead
- * of the stale pre-rerun cache. Without this, every successful
- * triggerMatchAnalysis silently leaves the UI showing the previous run's
- * pid permutation — the symptom that flipped GT badges across re-runs.
+ * of the stale pre-rerun cache, then dispatch `match-analysis-updated` so
+ * any other component-local caches (e.g. `matchStats` in VideoPlayer /
+ * MatchStatsPanel, confidence badges in RallyList) also refresh. Without
+ * this, every successful triggerMatchAnalysis silently leaves the UI
+ * showing the previous run's data — the symptom that flipped GT badges
+ * across re-runs.
  */
 async function refreshMatchAnalysisCache(videoId: string): Promise<void> {
   try {
@@ -284,6 +287,9 @@ async function refreshMatchAnalysisCache(videoId: string): Promise<void> {
     await usePlayerTrackingStore.getState().loadMatchAnalysis(videoId, true);
   } catch (err) {
     console.warn('[ANALYSIS] Failed to refresh match-analysis cache:', err);
+  }
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('match-analysis-updated', { detail: { videoId } }));
   }
 }
 

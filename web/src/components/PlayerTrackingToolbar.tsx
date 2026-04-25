@@ -95,11 +95,18 @@ export function PlayerTrackingToolbar() {
   const trackData = backendRallyId ? playerTracks[backendRallyId]?.tracksJson : null;
   const hasTrackingData = !!trackData?.tracks?.length;
 
-  // Load existing tracking data when rally is selected
+  // Load existing tracking data when rally is selected. Also force-reload
+  // on `match-analysis-updated` so the predicted action attributions
+  // (mutated by reattribute-actions in stage 5) reflect the latest rerun
+  // instead of the cached pre-rerun snapshot.
   useEffect(() => {
-    if (backendRallyId) {
-      loadPlayerTrack(backendRallyId, fps);
-    }
+    if (!backendRallyId) return;
+    loadPlayerTrack(backendRallyId, fps);
+    const handler = () => {
+      loadPlayerTrack(backendRallyId, fps, true);
+    };
+    window.addEventListener('match-analysis-updated', handler);
+    return () => window.removeEventListener('match-analysis-updated', handler);
   }, [backendRallyId, fps, loadPlayerTrack]);
 
   // Load action ground truth when tracking data is available
