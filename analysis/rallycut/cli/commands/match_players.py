@@ -722,20 +722,19 @@ def match_players(
                         f"sha={canonical_payload['sourceRefCropsSha'][:12]}..."
                     )
 
+    # Both columns are written in a single UPDATE so a re-run after
+    # crop deletion atomically clears canonical_pid_map_json alongside the
+    # fresh match_analysis_json — no window where the legacy and canonical
+    # maps disagree. Phase 5 adds the API hook for crop-edit invalidation;
+    # this CLI write is the second arm of that contract.
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "UPDATE videos SET match_analysis_json = %s WHERE id = %s",
-                [json.dumps(result_json), video_id],
-            )
-            # Always overwrite canonical_pid_map_json with the freshly
-            # computed value (or NULL when the 4-crop precondition isn't met)
-            # so re-running match-players after a crop deletion clears stale
-            # state. Phase 5 adds the API hook for crop-edit invalidation;
-            # this CLI write is the second arm of that contract.
-            cur.execute(
-                "UPDATE videos SET canonical_pid_map_json = %s WHERE id = %s",
+                "UPDATE videos "
+                "SET match_analysis_json = %s, canonical_pid_map_json = %s "
+                "WHERE id = %s",
                 [
+                    json.dumps(result_json),
                     json.dumps(canonical_payload) if canonical_payload else None,
                     video_id,
                 ],

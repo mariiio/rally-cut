@@ -41,7 +41,8 @@ export function ActionLabelingMode({ videoRef, onLabelAdded }: ActionLabelingMod
   const trackData = backendRallyId ? playerTracks[backendRallyId]?.tracksJson : null;
 
   // Lazy-load match analysis when labeling begins — gives us the per-rally
-  // appliedFullMapping we need to anchor GT to raw BoT-SORT track ids.
+  // canonicalPidMap (preferred) and appliedFullMapping (legacy fallback) we
+  // need to anchor GT to raw BoT-SORT track ids.
   useEffect(() => {
     if (!isLabelingActions || !activeMatchId) return;
     if (matchAnalysis[activeMatchId]) return;

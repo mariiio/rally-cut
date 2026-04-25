@@ -52,6 +52,7 @@ from rallycut.tracking.team_identity import (
 if TYPE_CHECKING:
     from rallycut.court.calibration import CourtCalibrator
     from rallycut.tracking.ball_tracker import BallPosition
+    from rallycut.tracking.crop_guided_identity import IdentityAnchors
     from rallycut.tracking.player_tracker import PlayerPosition
     from rallycut.tracking.reid_general import GeneralReIDModel
 
@@ -2788,7 +2789,7 @@ CANONICAL_PID_TIEBREAK_TAU = 0.01
 def compute_canonical_pid_map(
     video_path: Path,
     rallies: list[RallyTrackData],
-    anchors: Any,  # crop_guided_identity.IdentityAnchors
+    anchors: IdentityAnchors,
     *,
     num_samples: int = 12,
 ) -> dict[str, dict[int, int]]:
@@ -2811,9 +2812,7 @@ def compute_canonical_pid_map(
     ``sorted(track_id)`` so equal-cost assignments resolve identically across
     runs. Tested in `tests/integration/test_canonical_pid_determinism.py`.
     """
-    from rallycut.tracking.crop_guided_identity import IdentityAnchors
-
-    if not isinstance(anchors, IdentityAnchors) or not anchors.prototypes:
+    if not anchors.prototypes:
         return {}
 
     pids = anchors.player_ids  # already sorted in IdentityAnchors
