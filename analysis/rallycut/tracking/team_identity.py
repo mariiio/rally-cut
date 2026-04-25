@@ -72,24 +72,62 @@ def _bhattacharyya_distance(
     return 1.0 - float(np.sum(np.sqrt(a * b)))
 
 
+def _legacy_partition(profiles: dict[int, PlayerAppearanceProfile]) -> dict[int, int]:
+    """Legacy ``pid <= 2 → team 0`` partition. Used as a tiebreaker when
+    positional team votes disagree, and as the sole signal when no
+    positional data is available (test fixtures, recovery paths)."""
+    return {pid: 0 if pid <= 2 else 1 for pid in profiles}
+
+
 def build_team_templates(
     profiles: dict[int, PlayerAppearanceProfile],
+    *,
+    track_to_player_per_rally: list[dict[int, int]] | None = None,
+    track_court_sides_per_rally: list[dict[int, int]] | None = None,
 ) -> tuple[TeamTemplate, TeamTemplate]:
     """Build two team templates from match_tracker's player profiles.
 
-    Groups by match_tracker's convention: players 1-2 = team 0, 3-4 = team 1.
+    Group membership is decided by *positional reality*, not the legacy
+    ``pid <= 2`` partition: for each canonical pid we mode-vote across
+    rallies "which side of the net was this physical body on?" using
+    per-rally ``track_court_sides`` (output of ``_classify_track_sides``)
+    composed with per-rally ``track_to_player``. The pid is grouped with
+    its mode-team. This decouples team membership from the pid-numbering
+    convention so user-labeled ref-crop pids can freely cross what used
+    to be the rigid 1+2 / 3+4 partition without breaking the templates
+    they're built into.
+
+    Tie handling: if a pid has no positional votes (never observed on
+    either side), or has equal votes for both teams, the legacy
+    ``pid <= 2`` partition breaks the tie deterministically. This keeps
+    the function bit-stable across runs even on degenerate inputs.
+
+    Backward compatible: when both per-rally inputs are ``None`` (test
+    fixtures that don't carry positional data), falls through to the
+    legacy partition. New production code paths should always pass them.
 
     Args:
         profiles: Player ID (1-4) to appearance profile.
+        track_to_player_per_rally: Per-rally ``{track_id: pid}``. Same
+            length as ``track_court_sides_per_rally``; both come from the
+            tracker's ``RallyTrackingResult`` + diagnostics.
+        track_court_sides_per_rally: Per-rally ``{track_id: 0 (near) | 1
+            (far)}`` from ``_classify_track_sides``.
 
     Returns:
         (template_0, template_1) with labels "0" and "1".
     """
-    team_0_ids = sorted(pid for pid in profiles if pid <= 2)
-    team_1_ids = sorted(pid for pid in profiles if pid >= 3)
+    pid_team = _resolve_pid_team_membership(
+        profiles,
+        track_to_player_per_rally,
+        track_court_sides_per_rally,
+    )
 
-    team_0_profiles = [profiles[pid] for pid in team_0_ids if pid in profiles]
-    team_1_profiles = [profiles[pid] for pid in team_1_ids if pid in profiles]
+    team_0_ids = sorted(pid for pid, t in pid_team.items() if t == 0)
+    team_1_ids = sorted(pid for pid, t in pid_team.items() if t == 1)
+
+    team_0_profiles = [profiles[pid] for pid in team_0_ids]
+    team_1_profiles = [profiles[pid] for pid in team_1_ids]
 
     # Inter-team discriminability from lower-body histograms.
     distances: list[float] = []
@@ -111,6 +149,40 @@ def build_team_templates(
         team_0_ids, team_1_ids, discriminability,
     )
     return template_0, template_1
+
+
+def _resolve_pid_team_membership(
+    profiles: dict[int, PlayerAppearanceProfile],
+    track_to_player_per_rally: list[dict[int, int]] | None,
+    track_court_sides_per_rally: list[dict[int, int]] | None,
+) -> dict[int, int]:
+    """Mode-vote per pid → team across rallies. Tie-break by legacy partition."""
+    if (
+        track_to_player_per_rally is None
+        or track_court_sides_per_rally is None
+        or len(track_to_player_per_rally) != len(track_court_sides_per_rally)
+    ):
+        return _legacy_partition(profiles)
+
+    # Tally team votes per pid across all rallies.
+    votes: dict[int, dict[int, int]] = {pid: {0: 0, 1: 0} for pid in profiles}
+    for ttp, sides in zip(track_to_player_per_rally, track_court_sides_per_rally):
+        for tid, pid in ttp.items():
+            side = sides.get(int(tid))
+            if side in (0, 1) and pid in votes:
+                votes[int(pid)][int(side)] += 1
+
+    legacy = _legacy_partition(profiles)
+    pid_team: dict[int, int] = {}
+    for pid in profiles:
+        v0, v1 = votes[pid][0], votes[pid][1]
+        if v0 == 0 and v1 == 0:
+            pid_team[pid] = legacy[pid]
+        elif v0 == v1:
+            pid_team[pid] = legacy[pid]
+        else:
+            pid_team[pid] = 0 if v0 > v1 else 1
+    return pid_team
 
 
 def localize_team_near(

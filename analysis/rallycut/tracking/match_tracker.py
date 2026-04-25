@@ -2756,8 +2756,32 @@ def match_players_across_rallies(
     # Pass 2: Re-score all rallies with final profiles
     results = tracker.refine_assignments(results)
 
-    # Build team templates from final profiles
-    team_templates = build_team_templates(tracker.state.players)
+    # Build team templates from canonical-aware positional team membership.
+    # Each diagnostic carries the per-rally `track_court_sides` produced by
+    # `_classify_track_sides`; pairing with each rally's `track_to_player`
+    # yields per-pid mode-vote of "near vs far team" — replaces the legacy
+    # `pid <= 2 → team 0` partition that broke under canonical (ref-crop
+    # sourced) pids.
+    track_to_player_per_rally = [r.track_to_player for r in results]
+    track_court_sides_per_rally = [
+        d.track_court_sides for d in tracker.diagnostics
+    ]
+    if len(track_court_sides_per_rally) != len(track_to_player_per_rally):
+        # Mismatch shouldn't happen in production (diagnostics are emitted
+        # 1:1 with rallies) but if it does, fall through to the legacy
+        # partition rather than building a wrong template silently.
+        logger.warning(
+            "team-template input length mismatch: results=%d diagnostics=%d; "
+            "falling back to legacy partition",
+            len(track_to_player_per_rally), len(track_court_sides_per_rally),
+        )
+        track_to_player_per_rally = None  # type: ignore[assignment]
+        track_court_sides_per_rally = None  # type: ignore[assignment]
+    team_templates = build_team_templates(
+        tracker.state.players,
+        track_to_player_per_rally=track_to_player_per_rally,
+        track_court_sides_per_rally=track_court_sides_per_rally,
+    )
 
     return MatchPlayersResult(
         rally_results=results,
