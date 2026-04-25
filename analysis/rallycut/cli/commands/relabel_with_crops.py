@@ -85,7 +85,16 @@ def relabel_with_crops_cmd(
         )
         raise typer.Exit(1)
 
-    match_analysis: dict[str, Any] = row[0] if isinstance(row[0], dict) else json.loads(row[0])
+    raw = row[0]
+    if isinstance(raw, dict):
+        match_analysis: dict[str, Any] = raw
+    elif isinstance(raw, (str, bytes, bytearray)):
+        match_analysis = json.loads(raw)
+    else:
+        console.print(
+            f"[red]Error[/red]: unexpected match_analysis_json type {type(raw).__name__}"
+        )
+        raise typer.Exit(1)
 
     scratchpad = match_analysis.get("rallyScratchpad")
     if not scratchpad:
@@ -116,7 +125,7 @@ def relabel_with_crops_cmd(
 
     if not quiet:
         console.print("Loading reference crops from DB...")
-    _, reference_profiles = _load_db_reference_crops(video_id, video_path, quiet=quiet)
+    _, reference_profiles, _ = _load_db_reference_crops(video_id, video_path, quiet=quiet)
     if not reference_profiles:
         console.print(
             "[red]Error[/red]: no rows found in player_reference_crops for "

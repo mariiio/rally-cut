@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 from typing import Any, cast
@@ -15,16 +16,116 @@ from rallycut.cli.utils import handle_errors
 console = Console()
 
 
+# Schema version for canonicalPidMapJson. Bump only on breaking shape changes
+# (read-side helpers fall back to legacy fields when version is unknown).
+CANONICAL_PID_MAP_VERSION = 1
+
+
+def _canonical_pid_map_payload(
+    canonical_map: dict[str, dict[int, int]],
+    crop_rows: list[tuple[Any, ...]],
+) -> dict[str, Any]:
+    """Build the persisted canonicalPidMapJson payload.
+
+    `sourceRefCropsSha` digests the (player_id, frame_ms, bbox) tuples sorted
+    by player_id then frame_ms. Any change to a ref crop yields a different
+    sha — Phase 5's invalidation can compare without re-fetching the crops.
+    Hashing the tuples (not the JPEG bytes) costs zero S3 reads and is
+    sufficient because the tuple uniquely identifies the crop content.
+    """
+    sortable = sorted(
+        (
+            (
+                int(r[0]),  # player_id
+                int(r[1]),  # frame_ms
+                float(r[2]), float(r[3]), float(r[4]), float(r[5]),  # bbox
+            )
+            for r in crop_rows
+        ),
+        key=lambda t: (t[0], t[1]),
+    )
+    sha = hashlib.sha256(json.dumps(sortable, sort_keys=True).encode("utf-8")).hexdigest()
+    return {
+        "version": CANONICAL_PID_MAP_VERSION,
+        "sourceRefCropsSha": sha,
+        "rallies": {
+            rid: {str(tid): pid for tid, pid in rally_map.items()}
+            for rid, rally_map in canonical_map.items()
+        },
+    }
+
+
+def _align_canonical_to_legacy(
+    canonical_map: dict[str, dict[int, int]],
+    rally_entries: list[dict[str, Any]],
+) -> dict[str, dict[int, int]]:
+    """Apply a video-wide permutation that minimizes disagreement with legacy.
+
+    ``localize_team_near`` and ``team_templates`` are encoded against the
+    legacy pid assignment from cross-rally Hungarian. The canonical map
+    carries the correct *identity* signal but may use different *labels* —
+    e.g. a track legacy called pid 3 may end up pid 1 under canonical.
+    Searching the 4!=24 permutations of {1,2,3,4} for the one maximizing
+    Σ [π(canonical[rid][tid]) == legacy[rid][tid]] preserves identity (π is
+    a bijection, so same physical body still maps to a single consistent
+    pid across rallies) while rotating labels to keep downstream consumers
+    valid.
+
+    Bit-deterministic — itertools.permutations yields a fixed order and ties
+    break to the first-seen permutation.
+    """
+    import itertools
+
+    if not canonical_map:
+        return canonical_map
+
+    legacy_per_rally: dict[str, dict[int, int]] = {}
+    for entry in rally_entries:
+        rid = entry.get("rallyId", "")
+        t2p_raw = entry.get("trackToPlayer") or {}
+        if rid and t2p_raw:
+            legacy_per_rally[rid] = {int(k): int(v) for k, v in t2p_raw.items()}
+
+    if not legacy_per_rally:
+        return canonical_map
+
+    pids = (1, 2, 3, 4)
+    best_score = -1
+    best_perm: tuple[int, ...] = pids
+    for perm in itertools.permutations(pids):
+        permute = dict(zip(pids, perm))
+        score = 0
+        for rid, rally_map in canonical_map.items():
+            legacy_map = legacy_per_rally.get(rid, {})
+            for tid, canonical_pid in rally_map.items():
+                if permute.get(canonical_pid) == legacy_map.get(tid):
+                    score += 1
+        if score > best_score:
+            best_score = score
+            best_perm = perm
+
+    permute = dict(zip(pids, best_perm))
+    return {
+        rid: {tid: permute.get(p, p) for tid, p in rally_map.items()}
+        for rid, rally_map in canonical_map.items()
+    }
+
+
 def _load_db_reference_crops(
     video_id: str,
     video_path: Path,
     quiet: bool,
-) -> tuple[None, Any]:
+) -> tuple[list[tuple[Any, ...]], Any, dict[int, list[Any]]]:
     """Load reference crops from DB and build frozen HSV + ReID profiles.
 
     Returns:
-        (None, reference_profiles). First element reserved for future use.
-        reference_profiles is None if no crops found.
+        (crop_rows, reference_profiles, bgr_crops_by_player). ``crop_rows`` is
+        the raw DB rows ``(player_id, frame_ms, bbox_x, bbox_y, bbox_w, bbox_h)``
+        used downstream to compute the canonical-pid-map source sha and to
+        rebuild :class:`IdentityAnchors`. ``bgr_crops_by_player`` is the
+        per-player list of full-resolution BGR crops extracted from the source
+        video; reusing it for the canonical-map path saves a second video pass.
+        Empty containers when no crops exist.
     """
     from rallycut.evaluation.db import get_connection
 
@@ -40,7 +141,7 @@ def _load_db_reference_crops(
             crop_rows = cur.fetchall()
 
     if not crop_rows:
-        return None, None
+        return [], None, {}
 
     crop_infos: list[dict[str, Any]] = []
     for r in crop_rows:
@@ -135,7 +236,7 @@ def _load_db_reference_crops(
             console.print(f"  Reference profile P{pid}: {n} crop(s){reid_str}")
         console.print()
 
-    return None, reference_profiles
+    return crop_rows, reference_profiles, bgr_crops_by_player
 
 
 def _reverse_rally_positions(
@@ -311,11 +412,16 @@ def match_players(
 
     # Load reference crop profiles: from JSON file, or from DB
     reference_profiles = None
+    # Carried forward into the canonical-pid-map computation. Only the DB
+    # path populates these; the JSON-file path leaves canonicalPidMapJson
+    # alone.
+    canonical_crop_rows: list[tuple[Any, ...]] = []
+    canonical_bgr_crops: dict[int, list[Any]] = {}
 
     # Try DB reference crops first (unless JSON file is explicitly provided)
     if reference_crops_json is None:
-        _, reference_profiles = _load_db_reference_crops(
-            video_id, video_path, quiet,
+        canonical_crop_rows, reference_profiles, canonical_bgr_crops = (
+            _load_db_reference_crops(video_id, video_path, quiet)
         )
 
     if reference_crops_json is not None:
@@ -575,11 +681,64 @@ def match_players(
     if match_result.scratchpad:
         result_json["rallyScratchpad"] = match_result.scratchpad
 
+    # Canonical pid map (ref-crop-sourced single source of truth).
+    # Activates when the DB has ≥1 reference crop for all 4 pids. The
+    # IdentityAnchors path mean-pools however many crops each pid has, so
+    # extra crops only improve prototype quality — there's no point in
+    # restricting to exactly 4 total. Partial sets (≤3 distinct pids) fall
+    # through to the legacy Hungarian path. Bit-deterministic across re-runs
+    # (see tests/integration/test_canonical_pid_determinism.py); consumers
+    # (production_eval, future web editor read path) prefer it over
+    # matchAnalysisJson.trackToPlayer.
+    canonical_payload: dict[str, Any] | None = None
+    distinct_pids = {int(r[0]) for r in canonical_crop_rows}
+    if distinct_pids == {1, 2, 3, 4} and canonical_bgr_crops:
+        from rallycut.tracking.crop_guided_identity import build_anchors_from_crops
+        from rallycut.tracking.match_tracker import compute_canonical_pid_map
+
+        anchors = build_anchors_from_crops(canonical_bgr_crops, source="user")
+        if anchors.prototypes and len(anchors.prototypes) == 4:
+            canonical_map = compute_canonical_pid_map(
+                video_path=video_path,
+                rallies=rallies,
+                anchors=anchors,
+            )
+            if canonical_map:
+                # Align labels to the legacy convention so team_templates and
+                # score-GT stay valid. Identity (same body → same pid) is
+                # preserved by the permutation; only the {1,2,3,4} labels
+                # rotate to match the legacy Hungarian output. See
+                # _align_canonical_to_legacy docstring for the rationale.
+                canonical_map = _align_canonical_to_legacy(
+                    canonical_map, rally_entries,
+                )
+                canonical_payload = _canonical_pid_map_payload(
+                    canonical_map, canonical_crop_rows,
+                )
+                result_json["canonicalPidMap"] = canonical_payload
+                if not quiet:
+                    console.print(
+                        f"  Canonical pid map: {len(canonical_map)} rallies, "
+                        f"sha={canonical_payload['sourceRefCropsSha'][:12]}..."
+                    )
+
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE videos SET match_analysis_json = %s WHERE id = %s",
                 [json.dumps(result_json), video_id],
+            )
+            # Always overwrite canonical_pid_map_json with the freshly
+            # computed value (or NULL when the 4-crop precondition isn't met)
+            # so re-running match-players after a crop deletion clears stale
+            # state. Phase 5 adds the API hook for crop-edit invalidation;
+            # this CLI write is the second arm of that contract.
+            cur.execute(
+                "UPDATE videos SET canonical_pid_map_json = %s WHERE id = %s",
+                [
+                    json.dumps(canonical_payload) if canonical_payload else None,
+                    video_id,
+                ],
             )
         conn.commit()
 

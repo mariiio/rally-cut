@@ -2765,3 +2765,139 @@ def match_players_across_rallies(
         diagnostics=tracker.diagnostics,
         scratchpad=scratchpad_to_dict(tracker),
     )
+
+
+# Per-rally abstention threshold. The rally is dropped from the canonical
+# map when *any* primary track's top-2 prototype-score gap is below τ —
+# downstream consumers (`_load_track_to_player_maps`) then fall through to
+# legacy `matchAnalysisJson.trackToPlayer` for that rally. Plan-doc
+# rationale: a low-confidence track in an otherwise clean rally would force
+# downstream consumers to either accept a possibly-wrong canonical pid or
+# fall back per-track and break the rally-level 1:1 invariant team_template
+# lookups depend on. All-or-nothing keeps every emitted rally a clean
+# 4-player permutation.
+#
+# τ=0.01 is the empirical noise floor for separable players in DINOv2
+# cosine space. Higher values (we tried 0.05) over-fire — most rallies have
+# at least one track-pair within 0.05 because similar-uniform VB players
+# cluster tightly in embedding space. Lower values would let label-flips
+# leak through.
+CANONICAL_PID_TIEBREAK_TAU = 0.01
+
+
+def compute_canonical_pid_map(
+    video_path: Path,
+    rallies: list[RallyTrackData],
+    anchors: Any,  # crop_guided_identity.IdentityAnchors
+    *,
+    num_samples: int = 12,
+) -> dict[str, dict[int, int]]:
+    """Per-track crop scoring + per-rally Hungarian + ambiguity abstain.
+
+    For each rally:
+      1. Sample evenly-spaced frames on each primary track.
+      2. Extract DINOv2 ViT-S/14 features (same backbone as the anchors),
+         L2-normalize, score against the P prototypes.
+      3. If any track's top-2 prototype-score gap is below
+         ``CANONICAL_PID_TIEBREAK_TAU``, **abstain** — drop the rally from
+         the result so consumers fall through to legacy
+         ``matchAnalysisJson.trackToPlayer``.
+      4. Otherwise, run per-rally Hungarian on the (T, P) similarity matrix
+         and emit a deterministic ``{raw track_id: pid}`` mapping.
+
+    Determinism: cap.set+cap.read on a fixed video path is byte-deterministic;
+    DINOv2 inference in eval mode has no stochastic ops; ``linear_sum_assignment``
+    is deterministic on a fixed cost matrix; track ordering is forced via
+    ``sorted(track_id)`` so equal-cost assignments resolve identically across
+    runs. Tested in `tests/integration/test_canonical_pid_determinism.py`.
+    """
+    from rallycut.tracking.crop_guided_identity import IdentityAnchors
+
+    if not isinstance(anchors, IdentityAnchors) or not anchors.prototypes:
+        return {}
+
+    pids = anchors.player_ids  # already sorted in IdentityAnchors
+    proto_mat = anchors.prototype_matrix  # (P, D), L2-normalized
+
+    canonical_map: dict[str, dict[int, int]] = {}
+    n_abstained = 0
+
+    for rally in rallies:
+        if not rally.primary_track_ids or not rally.positions:
+            continue
+
+        appearances = extract_rally_appearances(
+            video_path=video_path,
+            positions=rally.positions,
+            primary_track_ids=rally.primary_track_ids,
+            start_ms=rally.start_ms,
+            end_ms=rally.end_ms,
+            num_samples=num_samples,
+            extract_reid=True,
+            reid_model=None,
+        )
+
+        # Stable iteration order — sort by track_id so the cost matrix rows
+        # are deterministic across runs.
+        valid_tracks = sorted(
+            (
+                (tid, stats.reid_embedding)
+                for tid, stats in appearances.items()
+                if stats.reid_embedding is not None
+            ),
+            key=lambda item: item[0],
+        )
+        if not valid_tracks:
+            continue
+
+        embeddings = np.stack([emb for _, emb in valid_tracks], axis=0)  # (T, D)
+        sims = embeddings @ proto_mat.T  # (T, P) cosine, both sides L2-normed
+
+        # Per-rally all-or-nothing gate: emit canonical for the rally only
+        # when *every* primary track has a top-2 prototype gap above τ AND
+        # the rally has all 4 primary tracks present (the regime the plan
+        # defines as "crops complete + tracking complete"). Partial-coverage
+        # merging into legacy was tried in v2 — it broke 1:1 within the
+        # rally and tanked score_accuracy by -1.21pp because team templates
+        # rely on a clean pid permutation. Per-rally gating preserves the
+        # invariant downstream consumers depend on.
+        if len(valid_tracks) < 4:
+            n_abstained += 1
+            logger.info(
+                "canonical_pid.abstain rally=%s reason=incomplete_tracking n_tracks=%d",
+                rally.rally_id, len(valid_tracks),
+            )
+            continue
+
+        if sims.shape[1] >= 2:
+            sorted_sims = np.sort(sims, axis=1)[:, ::-1]
+            top2_gap = sorted_sims[:, 0] - sorted_sims[:, 1]
+            min_gap = float(top2_gap.min())
+            if min_gap < CANONICAL_PID_TIEBREAK_TAU:
+                n_abstained += 1
+                worst_row = int(np.argmin(top2_gap))
+                worst_tid = valid_tracks[worst_row][0]
+                logger.info(
+                    "canonical_pid.abstain rally=%s reason=ambiguous track=%d gap=%.4f tau=%.4f",
+                    rally.rally_id, worst_tid, min_gap,
+                    CANONICAL_PID_TIEBREAK_TAU,
+                )
+                continue
+
+        cost = -sims  # min-sum Hungarian → max-similarity
+        row_idx, col_idx = linear_sum_assignment(cost)
+
+        rally_map: dict[int, int] = {}
+        for r_i, c_i in zip(row_idx, col_idx):
+            tid = valid_tracks[int(r_i)][0]
+            rally_map[int(tid)] = int(pids[int(c_i)])
+
+        canonical_map[rally.rally_id] = rally_map
+
+    if n_abstained:
+        logger.info(
+            "canonical_pid.summary kept_rallies=%d abstained_rallies=%d",
+            len(canonical_map), n_abstained,
+        )
+
+    return canonical_map

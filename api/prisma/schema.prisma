@@ -228,6 +228,13 @@ model Video {
   courtCalibrationSource  String?               @map("court_calibration_source")
   qualityReportJson     Json?                 @map("quality_report_json")
   matchAnalysisJson     Json?                 @map("match_analysis_json")
+  /// Ref-crop-sourced canonical pid mapping. Schema:
+  /// { version: 1, sourceRefCropsSha: string,
+  ///   rallies: { [rallyId]: { [rawTrackId: string]: pid } } }
+  /// Written by `match-players` only when 4 PlayerReferenceCrop rows exist;
+  /// nulled on any ref-crop create/update/delete. Single source of truth for
+  /// canonical pid display when present.
+  canonicalPidMapJson   Json?                 @map("canonical_pid_map_json")
   pendingAnalysisEditsJson Json?             @map("pending_analysis_edits_json")
   matchAnalysisRanAt       DateTime?         @map("match_analysis_ran_at")
   matchStatsJson        Json?                 @map("match_stats_json")

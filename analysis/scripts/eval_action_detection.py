@@ -242,19 +242,28 @@ def _load_match_team_assignments(
 def _load_track_to_player_maps(
     video_ids: set[str],
 ) -> dict[str, dict[int, int]]:
-    """Load track_to_player maps from match_analysis_json (all confidences).
+    """Load track_to_player maps for pid normalization.
 
-    Returns rally_id -> {track_id: player_id (1-4)}.
+    Returns rally_id -> {raw track_id: player_id (1-4)}.
+
+    Source priority (per ref-crop canonical-identity plan,
+    docs/superpowers/plans/2026-04-25-ref-crop-canonical-identity.md):
+        1. ``videos.canonical_pid_map_json`` per rally — written by
+           ``match-players`` when the video has the full 4-ref-crop set;
+           bit-deterministic across re-runs. The single source of truth.
+        2. ``videos.match_analysis_json[].trackToPlayer`` — legacy Hungarian
+           output; used for videos lacking the full crop set or rallies the
+           canonical map didn't cover.
     """
     if not video_ids:
         return {}
 
     placeholders = ", ".join(["%s"] * len(video_ids))
     query = f"""
-        SELECT id, match_analysis_json
+        SELECT id, match_analysis_json, canonical_pid_map_json
         FROM videos
         WHERE id IN ({placeholders})
-          AND match_analysis_json IS NOT NULL
+          AND (match_analysis_json IS NOT NULL OR canonical_pid_map_json IS NOT NULL)
     """
 
     result: dict[str, dict[int, int]] = {}
@@ -264,16 +273,28 @@ def _load_track_to_player_maps(
             cur.execute(query, list(video_ids))
             rows = cur.fetchall()
 
-    for _video_id_val, ma_json in rows:
-        if not isinstance(ma_json, dict):
-            continue
-        for rally_entry in ma_json.get("rallies", []):
-            rid = rally_entry.get("rallyId") or rally_entry.get("rally_id", "")
-            t2p = rally_entry.get("trackToPlayer") or rally_entry.get(
-                "track_to_player", {}
-            )
-            if rid and t2p:
-                result[rid] = {int(k): int(v) for k, v in t2p.items()}
+    for _video_id_val, ma_json, canonical_json in rows:
+        if isinstance(ma_json, dict):
+            for rally_entry in ma_json.get("rallies", []):
+                rid = rally_entry.get("rallyId") or rally_entry.get("rally_id", "")
+                t2p = rally_entry.get("trackToPlayer") or rally_entry.get(
+                    "track_to_player", {}
+                )
+                if rid and t2p:
+                    result[rid] = {int(k): int(v) for k, v in t2p.items()}
+
+        # Canonical map wins per-rally when present. The producer
+        # (`compute_canonical_pid_map`) emits canonical entries only for
+        # rallies where every primary track was confidently scored against
+        # the ref-crop prototypes and all 4 primary tracks are present, so
+        # an entry is always a complete 1:1 replacement of the legacy
+        # `trackToPlayer` for that rally. Partial-coverage merging was tried
+        # in v2 and tanked score_accuracy by -1.21pp because team templates
+        # rely on the rally-level pid permutation being a clean bijection.
+        if isinstance(canonical_json, dict):
+            for rid, rally_map in canonical_json.get("rallies", {}).items():
+                if rid and rally_map:
+                    result[rid] = {int(k): int(v) for k, v in rally_map.items()}
 
     return result
 

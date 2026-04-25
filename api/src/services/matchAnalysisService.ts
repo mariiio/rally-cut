@@ -56,6 +56,17 @@ interface MatchAnalysisResult {
   teamTemplates?: Record<string, TeamTemplateData>;
 }
 
+// Persisted shape of `Video.canonicalPidMapJson`. Written by the Python
+// `match-players` CLI (analysis/rallycut/cli/commands/match_players.py)
+// when the video has all 4 ref crops AND the rally-level all-or-nothing
+// gate passes; null otherwise. Plan:
+// docs/superpowers/plans/2026-04-25-ref-crop-canonical-identity.md.
+export interface CanonicalPidMap {
+  version: 1;
+  sourceRefCropsSha: string;
+  rallies: Record<string, Record<string, number>>;
+}
+
 export interface MatchStatsResult {
   totalRallies: number;
   totalContacts: number;
