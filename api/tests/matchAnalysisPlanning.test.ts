@@ -41,4 +41,12 @@ describe('planStages', () => {
   it('merge triggers fullRerun', () => {
     expect(planStages({ entries: [e('r1', 'merge')] })).toMatchObject({ fullRerun: true });
   });
+
+  it('refCrop triggers fullRerun (canonical pid map needs full rebuild)', () => {
+    expect(planStages({ entries: [e('', 'refCrop')] })).toMatchObject({ fullRerun: true });
+  });
+
+  it('refCrop alongside scalars still triggers fullRerun', () => {
+    expect(planStages({ entries: [e('r1', 'scalar'), e('', 'refCrop')] })).toMatchObject({ fullRerun: true });
+  });
 });

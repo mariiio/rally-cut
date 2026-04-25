@@ -5,7 +5,10 @@ export type StagePlan = {
   changedRallyIds: string[];    // stages 4/5 processed for these only
 };
 
-const FULL_RERUN_KINDS: ReadonlyArray<PendingEdit['editKind']> = ['extend', 'create', 'merge'];
+// 'refCrop' triggers a full rerun because the ref-crop change invalidates
+// every rally's canonical pid map — the prototypes the per-rally
+// Hungarian scores against have changed.
+const FULL_RERUN_KINDS: ReadonlyArray<PendingEdit['editKind']> = ['extend', 'create', 'merge', 'refCrop'];
 const CHANGED_KINDS: ReadonlyArray<PendingEdit['editKind']> = ['shorten', 'split'];
 
 export function planStages(edits: PendingEditsJson): StagePlan {

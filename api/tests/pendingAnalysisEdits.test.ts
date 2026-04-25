@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../src/lib/prisma';
-import { appendEdit, appendEditsBatch, consumePendingEdits } from '../src/services/pendingAnalysisEdits';
+import { appendEdit, appendEditsBatch, appendVideoScopedEdit, consumePendingEdits } from '../src/services/pendingAnalysisEdits';
 
 const userId = '11111111-1111-1111-1111-000000000b05';
 const videoId = '22222222-2222-2222-2222-000000000b05';
@@ -57,5 +57,23 @@ describe('pendingAnalysisEdits', () => {
   it('consumePendingEdits on empty returns empty entries', async () => {
     const result = await consumePendingEdits(videoId);
     expect(result.entries).toEqual([]);
+  });
+
+  it('appendVideoScopedEdit writes refCrop with empty rallyId', async () => {
+    await appendVideoScopedEdit(prisma, videoId, 'refCrop');
+    const v = await prisma.video.findUnique({ where: { id: videoId } });
+    const entries = (v!.pendingAnalysisEditsJson as any).entries;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ rallyId: '', editKind: 'refCrop' });
+  });
+
+  it('multiple refCrop edits coalesce in queue (planStages handles fullRerun)', async () => {
+    await appendVideoScopedEdit(prisma, videoId, 'refCrop');
+    await appendVideoScopedEdit(prisma, videoId, 'refCrop');
+    await appendVideoScopedEdit(prisma, videoId, 'refCrop');
+    const v = await prisma.video.findUnique({ where: { id: videoId } });
+    const entries = (v!.pendingAnalysisEditsJson as any).entries;
+    expect(entries).toHaveLength(3);
+    expect(entries.every((e: any) => e.editKind === 'refCrop' && e.rallyId === '')).toBe(true);
   });
 });

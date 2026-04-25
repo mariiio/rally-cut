@@ -48,6 +48,7 @@ import { queueVideoProcessing } from "../services/processingService.js";
 import { trackAllRallies, getBatchTrackingStatus } from "../services/batchTrackingService.js";
 import { getMatchAnalysis, getMatchStats, runMatchAnalysis, triggerMatchAnalysis, type ProgressCallback } from "../services/matchAnalysisService.js";
 import { runPreflightChecks, runPreviewChecks, getAnalysisPipelineStatus, savePlayerMatchingGt, getPlayerMatchingGt } from "../services/qualityService.js";
+import { appendVideoScopedEdit } from "../services/pendingAnalysisEdits.js";
 import multer from "multer";
 
 const MAX_REFERENCE_CROPS_PER_PLAYER = 6;
@@ -652,7 +653,11 @@ router.post(
       const cropId = crypto.randomUUID();
       const s3Key = `player-crops/${req.params.id}/${req.body.playerId}/${cropId}.jpg`;
 
-      // Enforce max crops per player atomically
+      // Enforce max crops per player atomically. The same transaction also
+      // invalidates the ref-crop-derived canonical pid map (next match-
+      // analysis run rebuilds it against the new prototype set) and
+      // enqueues a 'refCrop' pending edit so the existing 5s edit-quiescence
+      // debounce coalesces multi-crop uploads into a single rerun.
       const crop = await prisma.$transaction(async (tx) => {
         const existingCount = await tx.playerReferenceCrop.count({
           where: { videoId: req.params.id, playerId: req.body.playerId },
@@ -661,7 +666,7 @@ router.post(
           throw new Error(`Player ${req.body.playerId} already has ${existingCount} reference crops (max ${MAX_REFERENCE_CROPS_PER_PLAYER})`);
         }
         await uploadPlayerCrop(s3Key, imageBuffer);
-        return tx.playerReferenceCrop.create({
+        const created = await tx.playerReferenceCrop.create({
           data: {
             videoId: req.params.id,
             playerId: req.body.playerId,
@@ -673,6 +678,12 @@ router.post(
             bboxH: req.body.bbox.h,
           },
         });
+        await tx.video.update({
+          where: { id: req.params.id },
+          data: { canonicalPidMapJson: Prisma.DbNull },
+        });
+        await appendVideoScopedEdit(tx, req.params.id, 'refCrop');
+        return created;
       });
 
       const downloadUrl = await generateDownloadUrl(s3Key);
@@ -827,8 +838,20 @@ router.delete(
         return res.status(404).json({ error: "Crop not found" });
       }
 
-      // Delete DB first (recoverable), then S3 (best-effort cleanup)
-      await prisma.playerReferenceCrop.delete({ where: { id: crop.id } });
+      // Delete DB row + invalidate canonical pid map + enqueue refCrop edit
+      // atomically so consumers never observe a state where the row is
+      // gone but the canonical map still claims to be sourced from it.
+      // S3 cleanup runs after the transaction (best-effort; the s3Key is
+      // dead-but-harmless if the cleanup fails — DB row is the source of
+      // truth).
+      await prisma.$transaction(async (tx) => {
+        await tx.playerReferenceCrop.delete({ where: { id: crop.id } });
+        await tx.video.update({
+          where: { id: req.params.id },
+          data: { canonicalPidMapJson: Prisma.DbNull },
+        });
+        await appendVideoScopedEdit(tx, req.params.id, 'refCrop');
+      });
       await deleteObject(crop.s3Key).catch(() => {});
 
       return res.json({ success: true });
