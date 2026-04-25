@@ -4,45 +4,9 @@ import { useEffect, useCallback, RefObject, useMemo } from 'react';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useEditorStore } from '@/stores/editorStore';
-import type { ActionGroundTruthLabel, MatchAnalysis } from '@/services/api';
+import type { ActionGroundTruthLabel } from '@/services/api';
+import { canonicalRallyMapFor, pidToTrackId as resolveDisplayPidToTrackId } from '@/utils/canonicalPid';
 import { rallyMatchEntry } from '@/utils/gtLabelDisplay';
-
-/**
- * Invert a rally's raw-trackId→canonical-pid mapping into pid→trackId using
- * `appliedFullMapping` only.
- *
- * We deliberately do NOT fall back to `trackToPlayer` here. `trackToPlayer`
- * carries Hungarian's canonical-pid output, which doesn't match what the
- * editor displays before `remap-track-ids` has run: pre-remap the editor
- * shows sort-order-based player numbers (see `labelingPlayerNumbers` in
- * VideoPlayer.tsx / `playerNumberMap` in PlayerTrackingToolbar.tsx), and
- * `trackToPlayer`'s canonical pids can disagree with that sort order. If we
- * inverted `trackToPlayer` here, pressing "Player 2" would store the raw id
- * of Hungarian's pid-2, which might render as P4 on the sort-order-based
- * badge — the exact symptom we hit on a retracked rally after match-players
- * ran but remap-track-ids had not.
- *
- * When `appliedFullMapping` is absent, the caller falls back to sort-order
- * inversion — the same source the display uses. Read path
- * (`resolveGtDisplayPid`) mirrors this: appliedFullMapping → playerNumberMap
- * (sort-order), never trackToPlayer.
- */
-function buildPidToTrackId(
-  rallyEntry: MatchAnalysis['rallies'][number] | undefined,
-): Record<number, number> {
-  const out: Record<number, number> = {};
-  if (!rallyEntry) return out;
-  const source = rallyEntry.appliedFullMapping;
-  if (!source) return out;
-  for (const [rawTidStr, pid] of Object.entries(source)) {
-    const rawTid = Number(rawTidStr);
-    if (!Number.isFinite(rawTid) || !Number.isFinite(pid)) continue;
-    // First-wins on collisions — consistent with how `measure_relabel_lift.py`
-    // canonicalizes via ttp.
-    if (!(pid in out)) out[pid as number] = rawTid;
-  }
-  return out;
-}
 
 const ACTION_KEYS: Record<string, ActionGroundTruthLabel['action']> = {
   s: 'serve',
@@ -84,24 +48,53 @@ export function ActionLabelingMode({ videoRef, onLabelAdded }: ActionLabelingMod
     void loadMatchAnalysis(activeMatchId);
   }, [isLabelingActions, activeMatchId, matchAnalysis, loadMatchAnalysis]);
 
-  const currentRallyEntry = useMemo(() => {
-    const analysis = activeMatchId ? matchAnalysis[activeMatchId] : undefined;
-    return rallyMatchEntry(analysis, backendRallyId);
-  }, [activeMatchId, backendRallyId, matchAnalysis]);
-
-  const pidToTrackId = useMemo(
-    () => buildPidToTrackId(currentRallyEntry),
-    [currentRallyEntry],
+  const currentAnalysis = activeMatchId ? matchAnalysis[activeMatchId] : undefined;
+  const currentRallyEntry = useMemo(
+    () => rallyMatchEntry(currentAnalysis, backendRallyId),
+    [currentAnalysis, backendRallyId],
+  );
+  const currentCanonicalRallyMap = useMemo(
+    () => canonicalRallyMapFor(currentAnalysis, backendRallyId),
+    [currentAnalysis, backendRallyId],
   );
 
-  /** Reverse a visible track id (= canonical pid post-remap, or raw id when
-   *  no mapping is available) into the raw BoT-SORT id we want to store. */
+  const sortedTracks = useMemo(
+    () => (trackData ? [...trackData.tracks].sort((a, b) => a.trackId - b.trackId) : []),
+    [trackData],
+  );
+  const sortOrderMap = useMemo(() => {
+    const m = new Map<number, number>();
+    sortedTracks.forEach((t, idx) => m.set(t.trackId, idx + 1));
+    return m;
+  }, [sortedTracks]);
+
+  /** Reverse a visible display pid (1-4) into the raw BoT-SORT id to anchor
+   *  the GT row. Read-side priority is mirrored: canonical first, then
+   *  legacy `appliedFullMapping`, then sort-order. */
+  const resolveRawTrackIdForPid = useCallback(
+    (displayPid: number): number | null =>
+      resolveDisplayPidToTrackId(
+        displayPid,
+        currentCanonicalRallyMap,
+        currentRallyEntry?.appliedFullMapping,
+        sortOrderMap,
+      ),
+    [currentCanonicalRallyMap, currentRallyEntry, sortOrderMap],
+  );
+
+  /** Visible trackId could be either a canonical pid (post-remap rallies)
+   *  or a raw BoT-SORT id (pre-remap). When it falls in {1..4} we invert
+   *  through the same priority chain to recover the raw id; otherwise it's
+   *  already raw. */
   const resolveRawTrackId = useCallback(
     (visibleTrackId: number): number => {
-      const mapped = pidToTrackId[visibleTrackId];
-      return mapped ?? visibleTrackId;
+      if (visibleTrackId >= 1 && visibleTrackId <= 4) {
+        const raw = resolveRawTrackIdForPid(visibleTrackId);
+        if (raw !== null) return raw;
+      }
+      return visibleTrackId;
     },
-    [pidToTrackId],
+    [resolveRawTrackIdForPid],
   );
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
@@ -147,20 +140,16 @@ export function ActionLabelingMode({ videoRef, onLabelAdded }: ActionLabelingMod
       const labelAtFrame = gtLabels.find(l => l.frame === frame);
       if (!labelAtFrame) return;
 
-      // Resolve "Player N" to a raw BoT-SORT track id via appliedFullMapping
-      // (pid→trackId inversion). Fallback: sort-order index over visible
-      // tracks, matching the pre-mapping behavior.
-      let rawTrackId = pidToTrackId[num];
-      if (rawTrackId === undefined) {
-        const sortedTracks = [...trackData.tracks].sort((a, b) => a.trackId - b.trackId);
-        const playerIndex = num - 1;
-        if (playerIndex >= sortedTracks.length) return;
-        rawTrackId = sortedTracks[playerIndex].trackId;
+      // Resolve "Player N" to a raw BoT-SORT track id. Priority:
+      // canonicalPidMap (ref-crop sourced) → appliedFullMapping (legacy
+      // Hungarian) → sort-order over visible tracks.
+      const rawTrackId = resolveRawTrackIdForPid(num);
+      if (rawTrackId === null) {
         console.warn(
-          '[ActionLabelingMode] No appliedFullMapping for rally — storing ' +
-          `visible trackId ${rawTrackId} as raw anchor for Player ${num}. ` +
-          'Run the match-analysis pipeline to stabilize GT across re-runs.',
+          `[ActionLabelingMode] Could not resolve Player ${num} to a raw track id ` +
+          'on this rally; skipping label.',
         );
+        return;
       }
       updateActionLabelPlayer(backendRallyId, frame, rawTrackId);
       return;
@@ -223,7 +212,7 @@ export function ActionLabelingMode({ videoRef, onLabelAdded }: ActionLabelingMod
 
     addActionLabel(backendRallyId, label);
     onLabelAdded?.(action, frame);
-  }, [isLabelingActions, backendRallyId, trackData, selectedRally, videoRef, addActionLabel, updateActionLabelPlayer, setIsLabelingActions, onLabelAdded, seek, pidToTrackId, resolveRawTrackId]);
+  }, [isLabelingActions, backendRallyId, trackData, selectedRally, videoRef, addActionLabel, updateActionLabelPlayer, setIsLabelingActions, onLabelAdded, seek, resolveRawTrackId, resolveRawTrackIdForPid]);
 
   useEffect(() => {
     if (!isLabelingActions) return;

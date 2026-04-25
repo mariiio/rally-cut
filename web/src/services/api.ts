@@ -2559,14 +2559,25 @@ export interface MatchAnalysis {
     endMs: number;
     trackToPlayer: Record<string, number>;
     // Raw BoT-SORT trackId → canonical pid. Unlike `trackToPlayer` (identity
-    // after remap), this preserves the Hungarian mapping and is the anchor
-    // used to resolve action-GT `trackId` to a display pid.
+    // after remap), this preserves the Hungarian mapping and is the legacy
+    // anchor for resolving action-GT `trackId` to a display pid. Superseded
+    // by `canonicalPidMap` when the video has a full ref-crop set.
     appliedFullMapping?: Record<string, number>;
     remapApplied?: boolean;
     assignmentConfidence: number;
     sideSwitchDetected: boolean;
     serverPlayerId: number | null;
   }>;
+  /// Ref-crop-sourced canonical pid mapping. Present only when
+  /// Video.canonicalPidMapJson is non-null (every pid in {1,2,3,4} has at
+  /// least one reference crop AND the per-rally all-or-nothing gate fired).
+  /// Bit-deterministic across re-runs; `resolveCanonicalPid` reads it in
+  /// preference to per-rally `appliedFullMapping`.
+  canonicalPidMap?: {
+    version: 1;
+    sourceRefCropsSha: string;
+    rallies: Record<string, Record<string, number>>;
+  } | null;
 }
 
 /**

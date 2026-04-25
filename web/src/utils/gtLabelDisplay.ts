@@ -1,28 +1,26 @@
 import type { ActionGroundTruthLabel, MatchAnalysis } from '@/services/api';
+import { type CanonicalRallyMap, resolveCanonicalPid } from '@/utils/canonicalPid';
 
 /**
  * Resolve the display pid (1-4) for a GT label.
  *
- * Priority:
- *   1. `trackId` (raw BoT-SORT id) → look up in the rally's
- *      `appliedFullMapping` (raw → canonical pid). If post-remap positions are
- *      what the overlay sees, then `playerNumberMap` collapses to identity
- *      over canonical ids — either path yields the same number.
- *   2. `trackId` present but no mapping → try `playerNumberMap` (local sorted
- *      index over visible tracks) as a best-effort display.
- *   3. Legacy `playerTrackId` → `playerNumberMap`.
- *   4. Nothing resolvable → `null` (caller renders raw value).
+ * Delegates the trackId → pid lookup to ``resolveCanonicalPid`` so the
+ * canonicalPidMap (ref-crop-sourced) takes precedence over
+ * ``appliedFullMapping`` (legacy Hungarian) which takes precedence over
+ * sort-order. Adds the GT-specific fallback to legacy ``playerTrackId``
+ * for rows predating the ``trackId`` anchor (commit 3cf67c1).
  */
 export function resolveGtDisplayPid(
   gt: ActionGroundTruthLabel,
+  canonicalRallyMap: CanonicalRallyMap | undefined,
   appliedFullMapping: Record<string, number> | undefined,
   playerNumberMap: Map<number, number> | undefined,
 ): number | null {
   if (gt.trackId !== undefined) {
-    const canonical = appliedFullMapping?.[String(gt.trackId)];
-    if (canonical !== undefined && Number.isFinite(canonical)) return canonical;
-    const localNum = playerNumberMap?.get(gt.trackId);
-    if (localNum !== undefined) return localNum;
+    const resolved = resolveCanonicalPid(
+      gt.trackId, canonicalRallyMap, appliedFullMapping, playerNumberMap,
+    );
+    if (resolved !== null) return resolved;
   }
   if (gt.playerTrackId !== undefined && gt.playerTrackId >= 0) {
     const localNum = playerNumberMap?.get(gt.playerTrackId);

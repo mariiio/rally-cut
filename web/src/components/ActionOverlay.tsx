@@ -29,10 +29,14 @@ interface ActionOverlayProps {
   onUpdateLabel?: (frame: number, action: ActionGroundTruthLabel['action']) => void;
   onDeleteLabel?: (frame: number) => void;
   playerNumberMap?: Map<number, number>; // trackId → display number 1-4
-  /** Raw trackId → canonical pid (1-4), per-rally. Source for resolving
-   *  GT label `trackId` to a display number when positions have been
-   *  remapped by the pipeline. */
+  /** Raw trackId → canonical pid (1-4), per-rally. Legacy Hungarian output;
+   *  used as the second-tier source after canonicalRallyMap. */
   appliedFullMapping?: Record<string, number>;
+  /** Raw trackId → canonical pid (1-4), per-rally, sourced from
+   *  Video.canonicalPidMapJson. Wins over appliedFullMapping when present —
+   *  it's bit-deterministic across re-runs and reflects the user's
+   *  ref-crop-anchored identity. Pre-extracted via canonicalRallyMapFor. */
+  canonicalRallyMap?: Record<string, number>;
 }
 
 // How long (seconds) to show the action label after its contact frame
@@ -51,6 +55,7 @@ export function ActionOverlay({
   onDeleteLabel,
   playerNumberMap,
   appliedFullMapping,
+  canonicalRallyMap,
 }: ActionOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const labelsRef = useRef<HTMLDivElement[]>([]);
@@ -190,7 +195,7 @@ export function ActionOverlay({
           font-size: 10px;
           opacity: 0.8;
         `;
-        const pNum = resolveGtDisplayPid(gt, appliedFullMapping, playerNumberMap);
+        const pNum = resolveGtDisplayPid(gt, canonicalRallyMap, appliedFullMapping, playerNumberMap);
         badge.textContent = pNum != null ? `P${pNum}` : `#${anchor}`;
         label.appendChild(badge);
       }
@@ -214,7 +219,7 @@ export function ActionOverlay({
         label.removeEventListener('click', clickHandler);
       }
     };
-  }, [actionsWithTime, gtWithTime, isLabelingMode, handleGtLabelClick, playerNumberMap, appliedFullMapping]);
+  }, [actionsWithTime, gtWithTime, isLabelingMode, handleGtLabelClick, playerNumberMap, appliedFullMapping, canonicalRallyMap]);
 
   // Animation loop — uses requestVideoFrameCallback for frame-accurate sync
   useEffect(() => {

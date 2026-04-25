@@ -1043,7 +1043,7 @@ function runCli<T>(
 export async function getMatchAnalysis(
   videoId: string,
   userId: string,
-): Promise<MatchAnalysisResult | null> {
+): Promise<(MatchAnalysisResult & { canonicalPidMap?: CanonicalPidMap | null }) | null> {
   const video = await prisma.video.findUnique({
     where: { id: videoId },
   });
@@ -1056,7 +1056,15 @@ export async function getMatchAnalysis(
     throw new ForbiddenError('You do not have permission to view match analysis for this video');
   }
 
-  return (video.matchAnalysisJson as unknown as MatchAnalysisResult) ?? null;
+  const analysis = (video.matchAnalysisJson as unknown as MatchAnalysisResult) ?? null;
+  if (!analysis) {
+    return null;
+  }
+  // Surface canonicalPidMapJson alongside matchAnalysisJson so the web
+  // client's resolveCanonicalPid can read the ref-crop-sourced map without
+  // a second round-trip. Null when the video lacks the full crop set.
+  const canonicalPidMap = (video.canonicalPidMapJson as unknown as CanonicalPidMap | null) ?? null;
+  return { ...analysis, canonicalPidMap };
 }
 
 /**
