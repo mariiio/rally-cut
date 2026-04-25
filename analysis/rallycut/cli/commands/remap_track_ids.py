@@ -212,7 +212,8 @@ def remap_track_ids_cmd(
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT match_analysis_json FROM videos WHERE id = %s",
+                "SELECT match_analysis_json, canonical_pid_map_json "
+                "FROM videos WHERE id = %s",
                 [video_id],
             )
             row = cur.fetchone()
@@ -225,8 +226,22 @@ def remap_track_ids_cmd(
         raise typer.Exit(1)
 
     match_analysis = cast(dict[str, Any], row[0])
+    canonical_pid_map_json = cast(dict[str, Any] | None, row[1])
 
-    # Build per-rally track→player mappings and index rally entries
+    # Per-rally canonical map (ref-crop sourced). When present for a rally,
+    # it WINS over trackToPlayer — `appliedFullMapping` becomes a synonym
+    # for `canonicalPidMap.rallies[rid]`. This collapses the two pid sources
+    # into one and prevents the legacy Hungarian permutation from drifting
+    # the displayed pid badge across re-runs after the user has uploaded
+    # ref crops.
+    canonical_per_rally: dict[str, dict[int, int]] = {}
+    if isinstance(canonical_pid_map_json, dict):
+        for rid_c, m in canonical_pid_map_json.get("rallies", {}).items():
+            if rid_c and m:
+                canonical_per_rally[rid_c] = {int(k): int(v) for k, v in m.items()}
+
+    # Build per-rally track→player mappings and index rally entries.
+    # Source priority: canonical_per_rally → matchAnalysisJson.trackToPlayer.
     raw_mappings: dict[str, dict[int, int]] = {}
     rally_entries_by_id: dict[str, dict[str, Any]] = {}
     for rally_entry in match_analysis.get("rallies", []):
@@ -234,10 +249,13 @@ def remap_track_ids_cmd(
         track_to_player = rally_entry.get("trackToPlayer") or rally_entry.get(
             "track_to_player", {}
         )
-        if rid and track_to_player:
-            raw_mappings[rid] = {int(k): int(v) for k, v in track_to_player.items()}
         if rid:
             rally_entries_by_id[rid] = rally_entry
+            canonical_for_rally = canonical_per_rally.get(rid)
+            if canonical_for_rally:
+                raw_mappings[rid] = canonical_for_rally
+            elif track_to_player:
+                raw_mappings[rid] = {int(k): int(v) for k, v in track_to_player.items()}
 
     if not raw_mappings:
         console.print("[yellow]No track mappings found in match analysis[/yellow]")

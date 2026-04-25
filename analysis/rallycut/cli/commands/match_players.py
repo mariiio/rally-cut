@@ -55,62 +55,6 @@ def _canonical_pid_map_payload(
     }
 
 
-def _align_canonical_to_legacy(
-    canonical_map: dict[str, dict[int, int]],
-    rally_entries: list[dict[str, Any]],
-) -> dict[str, dict[int, int]]:
-    """Apply a video-wide permutation that minimizes disagreement with legacy.
-
-    ``localize_team_near`` and ``team_templates`` are encoded against the
-    legacy pid assignment from cross-rally Hungarian. The canonical map
-    carries the correct *identity* signal but may use different *labels* —
-    e.g. a track legacy called pid 3 may end up pid 1 under canonical.
-    Searching the 4!=24 permutations of {1,2,3,4} for the one maximizing
-    Σ [π(canonical[rid][tid]) == legacy[rid][tid]] preserves identity (π is
-    a bijection, so same physical body still maps to a single consistent
-    pid across rallies) while rotating labels to keep downstream consumers
-    valid.
-
-    Bit-deterministic — itertools.permutations yields a fixed order and ties
-    break to the first-seen permutation.
-    """
-    import itertools
-
-    if not canonical_map:
-        return canonical_map
-
-    legacy_per_rally: dict[str, dict[int, int]] = {}
-    for entry in rally_entries:
-        rid = entry.get("rallyId", "")
-        t2p_raw = entry.get("trackToPlayer") or {}
-        if rid and t2p_raw:
-            legacy_per_rally[rid] = {int(k): int(v) for k, v in t2p_raw.items()}
-
-    if not legacy_per_rally:
-        return canonical_map
-
-    pids = (1, 2, 3, 4)
-    best_score = -1
-    best_perm: tuple[int, ...] = pids
-    for perm in itertools.permutations(pids):
-        permute = dict(zip(pids, perm))
-        score = 0
-        for rid, rally_map in canonical_map.items():
-            legacy_map = legacy_per_rally.get(rid, {})
-            for tid, canonical_pid in rally_map.items():
-                if permute.get(canonical_pid) == legacy_map.get(tid):
-                    score += 1
-        if score > best_score:
-            best_score = score
-            best_perm = perm
-
-    permute = dict(zip(pids, best_perm))
-    return {
-        rid: {tid: permute.get(p, p) for tid, p in rally_map.items()}
-        for rid, rally_map in canonical_map.items()
-    }
-
-
 def _load_db_reference_crops(
     video_id: str,
     video_path: Path,
@@ -704,14 +648,16 @@ def match_players(
                 anchors=anchors,
             )
             if canonical_map:
-                # Align labels to the legacy convention so team_templates and
-                # score-GT stay valid. Identity (same body → same pid) is
-                # preserved by the permutation; only the {1,2,3,4} labels
-                # rotate to match the legacy Hungarian output. See
-                # _align_canonical_to_legacy docstring for the rationale.
-                canonical_map = _align_canonical_to_legacy(
-                    canonical_map, rally_entries,
-                )
+                # Canonical pids = user's ref-crop labels, full stop. We
+                # explicitly do NOT permute to match legacy Hungarian's
+                # output. The plan-doc's "ref crops are the identity source"
+                # rule means a user upload of "pid 1 = Carlos" is the
+                # contract — every consumer (display, GT, stats) reads
+                # this. Earlier code aligned canonical to legacy to avoid
+                # a -1.21pp score_accuracy regression in `team_templates`,
+                # but that flipped GT badges across re-runs and broke the
+                # workstream's user-visible promise. The team_templates +
+                # score-GT recalibration is a separate follow-up.
                 canonical_payload = _canonical_pid_map_payload(
                     canonical_map, canonical_crop_rows,
                 )

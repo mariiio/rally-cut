@@ -78,6 +78,26 @@ These are the right direction per the architecture audit, but each wants its own
   - (b) is cleaner architecturally; (a) is faster to land. Both are defensible.
 - A/B-gate before shipping either. No ship without numbers.
 
+## Post-ship truth (2026-04-25)
+
+Phases 1+2+3+5 + the auto-trigger landed across commits `66dddb1` / `ea158b7` / `d2f450c` / `a32465f` / `1d3512b`. Followed by a corrective commit (next one in this session) that **drops `_align_canonical_to_legacy` and makes `remap-track-ids` write `appliedFullMapping = canonicalPidMap` per rally**.
+
+The reason: the alignment was added to absorb a -1.21pp `score_accuracy` regression, but it actively defeated the workstream's user-visible promise. Aligning canonical pids to whatever permutation legacy Hungarian produced this run flipped GT badges across re-runs (P2 → P4 reproducer reported by user mid-session). The user's ref-crop label is the contract; everything else adapts to it.
+
+Final design (post-correction):
+- Canonical pid = whatever the user labeled their ref crop as. Bit-deterministic across runs given the same crops + tracks. No permutation, no negotiation.
+- `appliedFullMapping` is now a synonym for `canonicalPidMap.rallies[rid]` when canonical exists. Two columns, one truth. Legacy Hungarian output only fills the gap when canonical is absent.
+- `pendingAnalysisEdits` `'refCrop'` edit kind triggers a full match-analysis rerun via the existing 5s client-side debounce; auto-fired on any ref-crop CRUD via `notifyRefCropEdited`.
+
+Accepted tradeoff: `score_accuracy` -1.21pp on the populated subset. Not a bug — it's a real partition-invariant violation. Legacy match-tracker placed teammates in adjacent pid slots (P1+P2 = team 0, P3+P4 = team 1), and `team_templates` assumed that partition. When users label "P1 = Carlos (team A)" + "P2 = Jose (team B)" the partition breaks; the team-membership lookup keyed on pid lookup misfires; `calibrate_convention_from_gt` can flip A/B labels but can't fix a wrong partition. Recalibrating `team_templates` and re-anchoring score-GT against canonical convention is a separate follow-up plan (out of scope here).
+
+## Out of scope follow-ups (added 2026-04-25)
+
+- **`team_templates` recalibration against canonical pids** — rebuild dynamically per video from canonical's first-rally output; eliminates the partition assumption.
+- **Score-GT reconciliation** — `gt_serving_team` is already a string label so no DB migration; the team-string ↔ pid-set mapping needs to be re-established via `calibrate_convention_from_gt` adapted for canonical pids.
+- **UI flag "identity unstable, upload 4 ref crops"** for videos lacking a full crop set.
+- **Bulk-populate of remaining 13 full-crop videos** (blocked on FFmpeg/MinIO stream-timeout infra issue).
+
 ## One-line summary
 
-Source canonical pid from user-labeled ref crops; cache the derivation; read everywhere from that cache; don't recompute unless the user changes a crop.
+Source canonical pid from user-labeled ref crops; cache the derivation; read everywhere from that cache; don't recompute unless the user changes a crop. **Do not permute canonical to match legacy Hungarian output — the user's labeling is the contract.**
