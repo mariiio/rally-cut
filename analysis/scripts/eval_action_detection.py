@@ -83,9 +83,20 @@ def _build_player_positions(
 class GtLabel:
     frame: int
     action: str
+    # Legacy field — the displayed pid at click time. Silently rewritten by
+    # remap-track-ids on every match-analysis run, so its current value
+    # reflects the LATEST canonical permutation, not the user's original
+    # click intent. Used for backward-compat fallback only.
     player_track_id: int
     ball_x: float | None = None
     ball_y: float | None = None
+    # Raw BoT-SORT trackId anchor (commit 3cf67c1). Stable across
+    # match-analysis re-runs because remap-track-ids never touches it.
+    # Preferred read source for player-attribution comparisons: resolves
+    # through the same track_id_map as predictions, so both sides reflect
+    # the current canonical convention regardless of `appliedFullMapping`
+    # history. Optional — None on rows pre-dating the trackId schema.
+    track_id: int | None = None
 
 
 @dataclass
@@ -167,12 +178,14 @@ def load_rallies_with_action_gt(
                 gt_labels = []
                 if action_gt_json:
                     for label in action_gt_json:
+                        track_id_raw = label.get("trackId")
                         gt_labels.append(GtLabel(
                             frame=label["frame"],
                             action=label["action"],
                             player_track_id=label.get("playerTrackId", -1),
                             ball_x=label.get("ballX"),
                             ball_y=label.get("ballY"),
+                            track_id=int(track_id_raw) if track_id_raw is not None else None,
                         ))
 
                 results.append(RallyData(
@@ -566,20 +579,35 @@ def match_contacts(
         used_preds: set[int] = set()
 
     for gi, gt in enumerate(gt_sorted):
-        # Determine if GT track_id is evaluable
+        # Resolve GT pid through the same track_id_map as predictions so both
+        # sides reflect the current canonical convention. Priority: stable
+        # `gt.track_id` (raw BoT-SORT id, retrack-stable anchor) → legacy
+        # `gt.player_track_id` (silently rewritten by remap-track-ids; matches
+        # current convention only if `appliedFullMapping` history is intact).
+        # When neither map nor track_id is available, fall back to the legacy
+        # mirror — same behavior as before this change.
+        if track_id_map is not None and gt.track_id is not None:
+            gt_pid = track_id_map.get(gt.track_id, gt.player_track_id)
+        else:
+            gt_pid = gt.player_track_id
+
+        # Determine if GT pid is evaluable
         evaluable = True
-        if available_track_ids is not None and gt.player_track_id >= 0:
-            evaluable = gt.player_track_id in available_track_ids
+        if available_track_ids is not None and gt_pid >= 0:
+            evaluable = gt_pid in available_track_ids
 
         pi = gt_to_pred.get(gi)
         if pi is not None:
             pred = pred_sorted[pi]
 
             # Court-side accuracy: check if predicted court_side matches
-            # expected side for the GT player's team
+            # expected side for the GT player's team. Team assignments are
+            # keyed on raw track_id (positional team detection), so prefer
+            # `gt.track_id` when available; fall back to the legacy mirror.
             cs_correct: bool | None = None
-            if team_assignments and gt.player_track_id >= 0:
-                gt_team = team_assignments.get(gt.player_track_id)
+            cs_lookup_id = gt.track_id if gt.track_id is not None else gt.player_track_id
+            if team_assignments and cs_lookup_id >= 0:
+                gt_team = team_assignments.get(cs_lookup_id)
                 pred_cs = pred.get("courtSide")
                 if gt_team is not None and pred_cs in ("near", "far"):
                     cs_correct = pred_cs == team_to_side[gt_team]
@@ -592,7 +620,7 @@ def match_contacts(
                 gt_action=gt.action,
                 pred_frame=pred.get("frame"),
                 pred_action=pred.get("action"),
-                player_correct=(gt.player_track_id == pred_tid),
+                player_correct=(gt_pid == pred_tid),
                 player_evaluable=evaluable,
                 court_side_correct=cs_correct,
             ))
@@ -643,20 +671,29 @@ def _match_synthetic_serves(
             if abs(m.gt_frame - s_frame) > synth_tolerance:
                 continue
 
-            # Find GT label for player attribution evaluation
-            gt_tid = -1
+            # Find GT label for player attribution evaluation. Mirror the
+            # main match_contacts resolution: prefer `gt.track_id` through
+            # track_id_map (current canonical convention) and fall back to
+            # the legacy `gt.player_track_id` mirror.
+            gt_pid = -1
+            gt_raw_id: int | None = None
             for gt in gt_labels:
                 if gt.frame == m.gt_frame:
-                    gt_tid = gt.player_track_id
+                    gt_raw_id = gt.track_id
+                    if track_id_map is not None and gt.track_id is not None:
+                        gt_pid = track_id_map.get(gt.track_id, gt.player_track_id)
+                    else:
+                        gt_pid = gt.player_track_id
                     break
 
             evaluable = True
-            if available_track_ids is not None and gt_tid >= 0:
-                evaluable = gt_tid in available_track_ids
+            if available_track_ids is not None and gt_pid >= 0:
+                evaluable = gt_pid in available_track_ids
 
             cs_correct: bool | None = None
-            if team_assignments and gt_tid >= 0:
-                gt_team = team_assignments.get(gt_tid)
+            cs_lookup_id = gt_raw_id if gt_raw_id is not None else gt_pid
+            if team_assignments and cs_lookup_id >= 0:
+                gt_team = team_assignments.get(cs_lookup_id)
                 pred_cs = synth.get("courtSide")
                 if gt_team is not None and pred_cs in ("near", "far"):
                     cs_correct = pred_cs == team_to_side[gt_team]
@@ -669,7 +706,7 @@ def _match_synthetic_serves(
                 gt_action=m.gt_action,
                 pred_frame=s_frame,
                 pred_action=synth.get("action"),
-                player_correct=(gt_tid == synth_tid),
+                player_correct=(gt_pid == synth_tid),
                 player_evaluable=evaluable,
                 court_side_correct=cs_correct,
             )

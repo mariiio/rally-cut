@@ -937,9 +937,17 @@ def _run_once(
         # Attach raw (gt_tid, pred_tid) side-channel to each match for the
         # within-rally permutation oracle. match_contacts doesn't carry these
         # on MatchResult, so we recover them here by looking up the originals
-        # on gt_labels / real_pred keyed on (frame, action).
+        # on gt_labels / real_pred keyed on (frame, action). Mirror
+        # match_contacts' GT resolution: prefer `gt.track_id` through
+        # rally_t2p (current canonical convention), fall back to legacy
+        # `gt.player_track_id`. Without this, the oracle compares stale
+        # GT pids against current-canonical pred pids and over-rotates.
+        def _gt_pid_for(gl: Any) -> int:
+            if rally_t2p is not None and gl.track_id is not None:
+                return rally_t2p.get(gl.track_id, gl.player_track_id)
+            return gl.player_track_id
         gt_by_frame_action: dict[tuple[int, str], int] = {
-            (gl.frame, gl.action): gl.player_track_id for gl in rally.gt_labels
+            (gl.frame, gl.action): _gt_pid_for(gl) for gl in rally.gt_labels
         }
         pred_by_frame_action: dict[tuple[int, str], int] = {
             (a.get("frame", -1), a.get("action", "")): a.get("playerTrackId", -1)
