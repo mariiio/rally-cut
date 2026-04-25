@@ -913,6 +913,12 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
         set((state) => ({
           referenceCrops: [...state.referenceCrops, crop],
         }));
+        // The API endpoint already nulled canonicalPidMapJson and queued a
+        // 'refCrop' pending edit; this nudges analysisStore so the existing
+        // match-analysis debounce/rebuild path actually fires. Without this,
+        // the queued edit sits until the user happens to also edit a rally.
+        const { useAnalysisStore } = await import('@/stores/analysisStore');
+        useAnalysisStore.getState().notifyRefCropEdited(videoId);
         return crop;
       },
 
@@ -921,6 +927,8 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
         set((state) => ({
           referenceCrops: state.referenceCrops.filter((c) => c.id !== cropId),
         }));
+        const { useAnalysisStore } = await import('@/stores/analysisStore');
+        useAnalysisStore.getState().notifyRefCropEdited(videoId);
       },
     }),
     {

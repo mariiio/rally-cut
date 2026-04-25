@@ -61,6 +61,17 @@ interface AnalysisState {
    *  Edits during active tracking (before the batch finishes) are held until
    *  the batch completes and arms the initial debounce. */
   notifyRallyEdited: (videoId: string) => void;
+
+  /** Called by playerTrackingStore after a ref-crop CRUD for this video.
+   *  Same debounce semantics as notifyRallyEdited for `ready_tracking` —
+   *  multi-crop uploads coalesce into one match-analysis run. Additionally
+   *  re-enters the analysis from `done` so a crop edit on a fully-analyzed
+   *  video rebuilds the canonical pid map against the new prototypes; the
+   *  API-side MATCH_ANALYSIS_IN_PROGRESS guard dedupes if a run is already
+   *  in flight. No-op for in-progress phases (the queued 'refCrop' edit is
+   *  picked up by the next consumePendingEdits call) and for `error`/`idle`
+   *  (user retries manually). */
+  notifyRefCropEdited: (videoId: string) => void;
 }
 
 // ============================================================================
@@ -375,6 +386,44 @@ export const useAnalysisStore = create<AnalysisState>()(
         if (!pipeline || pipeline.phase !== 'ready_tracking') return;
         if (!pipeline.batchTrackingComplete) return;
         armMatchAnalysisDebounce(videoId, set, get);
+      },
+
+      notifyRefCropEdited: (videoId: string) => {
+        const pipeline = get().pipelines[videoId];
+        const phase = pipeline?.phase ?? 'idle';
+
+        if (phase === 'ready_tracking' && pipeline?.batchTrackingComplete) {
+          armMatchAnalysisDebounce(videoId, set, get);
+          return;
+        }
+
+        if (phase === 'done') {
+          // Re-enter the pipeline so the canonical pid map rebuilds against
+          // the updated prototype set. Set phase to match_analyzing so the
+          // editor reflects the in-flight rebuild; transition back to done
+          // (or error) via completeAnalysis once triggerMatchAnalysis returns.
+          const updatePipeline = makePipelineUpdater(videoId, set);
+          updatePipeline({
+            phase: 'match_analyzing',
+            progress: 92,
+            stepMessage: 'Reference crops changed — rebuilding match analysis...',
+          });
+          void (async () => {
+            try {
+              const { triggerMatchAnalysis } = await import('@/services/api');
+              await triggerMatchAnalysis(videoId);
+              await completeAnalysis(videoId, set, get);
+            } catch (err) {
+              const message = err instanceof Error ? err.message : 'Match analysis failed';
+              updatePipeline({ phase: 'error', error: message, stepMessage: 'Match analysis failed' });
+            }
+          })();
+          return;
+        }
+
+        // idle / detecting / tracking / match_analyzing / error: no-op.
+        // Active runs read pendingAnalysisEditsJson at start and will pick
+        // up the queued 'refCrop' edit on the next consumePendingEdits.
       },
 
       resumeIfNeeded: async (videoId: string) => {
