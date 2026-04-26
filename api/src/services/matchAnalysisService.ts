@@ -33,6 +33,22 @@ interface TeamTemplateData {
   confidence: number;
 }
 
+// Video-wide pid→team mapping derived by per-pid majority vote across
+// rallies. Written by compute-match-stats CLI (see
+// analysis/rallycut/statistics/match_stats.py: compute_merged_team_identity).
+// `valid: false` means the vote could not commit (no 2-and-2 partition or
+// any per-pid confidence below 0.5). Consumers should fall back to
+// per-rally team labels in that case rather than commit a poisoned identity.
+export interface MergedTeamIdentity {
+  version: 1;
+  pidTeams: Record<string, "A" | "B">;
+  perPidConfidence: Record<string, number>;
+  partition: number[][];  // [[teamA_pids], [teamB_pids]] when valid, else []
+  valid: boolean;
+  totalRalliesVoting: number;
+  source: "majority_vote";
+}
+
 interface MatchAnalysisResult {
   videoId: string;
   numRallies: number;
@@ -54,6 +70,11 @@ interface MatchAnalysisResult {
   }>;
   playerProfiles?: Record<string, Record<string, unknown>>;
   teamTemplates?: Record<string, TeamTemplateData>;
+  // Persisted by compute-match-stats (stage 6) as a single source of
+  // truth for video-wide team identity. Replaces the legacy practice of
+  // re-deriving team labels from per-rally `teamAssignments` via
+  // last-rally-wins aggregation.
+  mergedTeamIdentity?: MergedTeamIdentity;
 }
 
 // Persisted shape of `Video.canonicalPidMapJson`. Written by the Python

@@ -334,41 +334,45 @@ def _persist_corrections_and_identity(
 
     Called after ``compute_match_stats`` returns. Two updates:
 
-    1. For each rally with serve_receive corrections, RMW
-       ``player_tracks.actions_json`` to add per-action ``teamCorrected``
-       overlay + ``correctionsApplied`` audit list. The raw ``team`` field
-       is preserved (corrections are an overlay, not a mutation).
+    1. For ALL rallies in the video (not just those with current corrections),
+       RMW ``player_tracks.actions_json`` to set or clear the overlay fields
+       (``teamCorrected`` per action, ``correctionsApplied`` per rally) so
+       stale overlays from previous runs don't outlive the violation that
+       produced them. The raw ``team`` field is preserved (corrections are
+       an overlay, not a mutation).
     2. RMW ``videos.match_analysis_json`` to add ``mergedTeamIdentity``
        (always — even an invalid identity carries useful diagnostic data).
 
-    Both writes are wrapped in a single transaction so partial failure
-    leaves the DB consistent. RMW races are not a concern here:
-    ``compute_match_stats`` is the last stage of ``runMatchAnalysis`` which
-    is itself in-memory-guarded against parallel runs per video
-    (matchAnalysisService.ts:158).
+    Both writes commit together so partial failure leaves the DB consistent.
+    RMW races are not a concern here: ``compute_match_stats`` is the last
+    stage of ``runMatchAnalysis`` which is itself in-memory-guarded against
+    parallel runs per video (matchAnalysisService.ts:158).
     """
     from rallycut.evaluation.db import get_connection
 
-    if not serve_receive_corrections and not merged_team_identity:
-        return
-
     with get_connection() as conn:
         with conn.cursor() as cur:
-            # 1) Per-rally actions_json overlay
-            for rally_id, overlay in serve_receive_corrections.items():
-                cur.execute(
-                    "SELECT actions_json FROM player_tracks "
-                    "WHERE rally_id = %s",
-                    [rally_id],
-                )
-                row = cur.fetchone()
-                if row is None or row[0] is None:
-                    continue
-                actions_data = row[0]
+            # 1) Per-rally actions_json overlay — covers ALL rallies, not
+            # just those with current corrections, so stale overlays from
+            # prior runs are cleared when the violation goes away.
+            cur.execute(
+                "SELECT pt.rally_id, pt.actions_json "
+                "FROM player_tracks pt "
+                "JOIN rallies r ON r.id = pt.rally_id "
+                "WHERE r.video_id = %s "
+                "  AND pt.actions_json IS NOT NULL",
+                [video_id],
+            )
+            rally_rows = cur.fetchall()
+
+            n_rallies_updated = 0
+            for row in rally_rows:
+                rally_id = str(row[0])
+                actions_data = row[1]
                 if not isinstance(actions_data, dict):
                     continue
 
-                # Index overlay by (frame, playerTrackId) for O(1) lookup
+                overlay = serve_receive_corrections.get(rally_id, [])
                 overlay_index = {
                     (int(c["frame"]), int(c["playerTrackId"])): c
                     for c in overlay
@@ -378,22 +382,44 @@ def _persist_corrections_and_identity(
                 if not isinstance(actions_list, list):
                     continue
 
+                # Track changes to skip no-op writes — keeps player_tracks
+                # rows untouched when the overlay state already matches the
+                # current corrections (idempotent re-runs).
+                had_correction_field = "correctionsApplied" in actions_data
+                changed = False
                 for action in actions_list:
+                    if not isinstance(action, dict):
+                        continue
                     key = (
                         int(action.get("frame", -1)),
                         int(action.get("playerTrackId", -1)),
                     )
                     if key in overlay_index:
-                        action["teamCorrected"] = (
-                            overlay_index[key]["correctedTeam"]
-                        )
+                        new_corrected = overlay_index[key]["correctedTeam"]
+                        if action.get("teamCorrected") != new_corrected:
+                            action["teamCorrected"] = new_corrected
+                            changed = True
+                    elif "teamCorrected" in action:
+                        # Clear stale overlay for actions no longer in
+                        # the current corrections set.
+                        del action["teamCorrected"]
+                        changed = True
 
-                actions_data["correctionsApplied"] = overlay
-                cur.execute(
-                    "UPDATE player_tracks SET actions_json = %s "
-                    "WHERE rally_id = %s",
-                    [json.dumps(actions_data), rally_id],
-                )
+                if overlay:
+                    if actions_data.get("correctionsApplied") != overlay:
+                        actions_data["correctionsApplied"] = overlay
+                        changed = True
+                elif had_correction_field:
+                    del actions_data["correctionsApplied"]
+                    changed = True
+
+                if changed:
+                    cur.execute(
+                        "UPDATE player_tracks SET actions_json = %s "
+                        "WHERE rally_id = %s",
+                        [json.dumps(actions_data), rally_id],
+                    )
+                    n_rallies_updated += 1
 
             # 2) Video-wide merged team identity
             if merged_team_identity:
@@ -401,9 +427,9 @@ def _persist_corrections_and_identity(
                     "SELECT match_analysis_json FROM videos WHERE id = %s",
                     [video_id],
                 )
-                row = cur.fetchone()
-                if row is not None and row[0] is not None:
-                    ma_data = row[0]
+                video_row = cur.fetchone()
+                if video_row is not None and video_row[0] is not None:
+                    ma_data = video_row[0]
                     if isinstance(ma_data, dict):
                         ma_data["mergedTeamIdentity"] = merged_team_identity
                         cur.execute(
@@ -415,10 +441,15 @@ def _persist_corrections_and_identity(
         conn.commit()
 
     if not quiet:
-        n_rally = len(serve_receive_corrections)
-        n_actions = sum(len(v) for v in serve_receive_corrections.values())
+        n_corrections_total = sum(
+            len(v) for v in serve_receive_corrections.values()
+        )
+        n_rally_with_correction = len(serve_receive_corrections)
         valid = merged_team_identity.get("valid", False)
         console.print(
-            f"  Persisted: {n_actions} action corrections across "
-            f"{n_rally} rallies; mergedTeamIdentity valid={valid}"
+            f"  Persisted: {n_corrections_total} action corrections across "
+            f"{n_rally_with_correction} rallies "
+            f"({n_rallies_updated} rally rows touched, "
+            f"includes stale-overlay clears); "
+            f"mergedTeamIdentity valid={valid}"
         )

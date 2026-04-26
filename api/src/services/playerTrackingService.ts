@@ -87,6 +87,20 @@ interface ActionInfo {
   confidence: number;
   team: string;  // "A" (near court), "B" (far court), or "unknown"
   isSynthetic?: boolean;
+  // High-confidence team correction overlay written by compute-match-stats
+  // (see analysis/rallycut/statistics/match_stats.py: only the math-rule-
+  // derived `serve_receive` strategy populates this). The raw `team`
+  // field is preserved untouched — consumers should read
+  // `teamCorrected ?? team`.
+  teamCorrected?: string;
+}
+
+interface CorrectionEntry {
+  frame: number;
+  playerTrackId: number;
+  originalTeam: string;
+  correctedTeam: string;
+  strategy: string;  // currently always "serve_receive" (only persisted strategy)
 }
 
 interface ActionsData {
@@ -96,6 +110,10 @@ interface ActionsData {
   actions: ActionInfo[];
   teamAssignments?: Record<string, string>;  // trackId → "A"|"B"
   servingTeam?: string;  // "A" or "B"
+  // Per-rally audit list of team corrections applied as overlay on
+  // `actions[].teamCorrected`. Only `serve_receive`-strategy fixes are
+  // persisted; lower-confidence strategies stay stats-only.
+  correctionsApplied?: CorrectionEntry[];
 }
 
 export interface TrackPlayersResult {
