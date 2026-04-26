@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any, cast
 
@@ -578,6 +579,17 @@ def match_players(
                     "falling back to full rebuild[/yellow]"
                 )
 
+    # Within-track split flag (Task 6, 2026-04-26). When the env flag is set
+    # AND ref-crops were loaded above into `canonical_bgr_crops`, the
+    # match-players helper trains a few-shot ReID classifier from those crops
+    # and wires a per-rally crop extractor so the splitter inside
+    # `process_rally` can fire. Default-off keeps every other code path
+    # byte-identical.
+    enable_track_split = os.environ.get("ENABLE_REF_CROP_TRACK_SPLIT", "0") == "1"
+    crops_by_pid_for_classifier: dict[int, list[Any]] | None = None
+    if enable_track_split and canonical_bgr_crops:
+        crops_by_pid_for_classifier = canonical_bgr_crops
+
     # Run matching
     match_result: MatchPlayersResult = match_players_across_rallies(
         video_path=video_path,
@@ -586,6 +598,8 @@ def match_players(
         reference_profiles=reference_profiles,
         reid_model=general_reid_model,
         calibrator=court_calibrator,
+        enable_track_split=enable_track_split,
+        crops_by_pid_for_classifier=crops_by_pid_for_classifier,
     )
     results = match_result.rally_results
 

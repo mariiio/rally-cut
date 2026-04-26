@@ -2698,6 +2698,69 @@ def scratchpad_to_dict(tracker: MatchPlayerTracker) -> dict[str, Any]:
     }
 
 
+def _build_rally_crop_extractor(
+    video_path: Path,
+    rally_start_ms: int,
+    positions: list[PlayerPosition],
+    fps: float,
+) -> Callable[[int, int], np.ndarray | None]:
+    """Build a ``(track_id, rally_relative_frame) -> BGR crop`` closure.
+
+    Used by the within-track appearance splitter (Task 6, 2026-04-26).
+    The splitter passes rally-relative frame numbers — the closure adds
+    ``rally_start_frame_in_video`` to derive the absolute video frame, looks
+    up the bbox via a per-rally cache, seeks the shared ``cv2.VideoCapture``,
+    and returns the cropped BGR frame.
+
+    Returns ``None`` on every error path (capture broken, frame not found,
+    bbox missing or out-of-range, crop too small) — callers (the splitter's
+    crop-collection loop) skip ``None`` and degrade gracefully.
+
+    The capture is opened lazily on first call. Each rally builds its own
+    extractor → its own capture; the cap is held until the closure is
+    garbage-collected. Acceptable for our scale (~9 fixtures × ~10 rallies);
+    revisit if used in a long-running service.
+    """
+    rally_start_frame_in_video = int(round(rally_start_ms / 1000.0 * fps))
+    bbox_by_tid_frame: dict[tuple[int, int], dict[str, float]] = {
+        (int(p.track_id), int(p.frame_number)): {
+            "x": float(p.x), "y": float(p.y),
+            "width": float(p.width), "height": float(p.height),
+        }
+        for p in positions
+    }
+    state: dict[str, Any] = {"cap": None}
+
+    def crop_extractor(track_id: int, rally_rel_frame: int) -> np.ndarray | None:
+        bbox = bbox_by_tid_frame.get((int(track_id), int(rally_rel_frame)))
+        if bbox is None:
+            return None
+        cap: Any = state["cap"]
+        if cap is None:
+            cap = cv2.VideoCapture(str(video_path))
+            state["cap"] = cap
+            if not cap.isOpened():
+                return None
+        abs_frame = rally_start_frame_in_video + int(rally_rel_frame)
+        cap.set(cv2.CAP_PROP_POS_FRAMES, abs_frame)
+        ok, img = cap.read()
+        if not ok or img is None:
+            return None
+        h, w = img.shape[:2]
+        x1 = max(0, int((bbox["x"] - bbox["width"] / 2) * w))
+        y1 = max(0, int((bbox["y"] - bbox["height"] / 2) * h))
+        x2 = min(w, int((bbox["x"] + bbox["width"] / 2) * w))
+        y2 = min(h, int((bbox["y"] + bbox["height"] / 2) * h))
+        if x2 <= x1 + 4 or y2 <= y1 + 4:
+            return None
+        crop = img[y1:y2, x1:x2]
+        if crop.size == 0 or crop.shape[0] < 16 or crop.shape[1] < 8:
+            return None
+        return np.asarray(crop, dtype=np.uint8)
+
+    return crop_extractor
+
+
 def match_players_across_rallies(
     video_path: Path,
     rallies: list[RallyTrackData],
@@ -2707,6 +2770,9 @@ def match_players_across_rallies(
     extract_reid: bool = False,
     reid_model: GeneralReIDModel | None = None,
     calibrator: CourtCalibrator | None = None,
+    *,
+    enable_track_split: bool = False,
+    crops_by_pid_for_classifier: dict[int, list[np.ndarray]] | None = None,
 ) -> MatchPlayersResult:
     """
     Match players across all rallies in a video for consistent IDs.
@@ -2732,6 +2798,17 @@ def match_players_across_rallies(
             classification. When provided, track foot positions are projected
             through the homography to determine court side (net at 8.0m),
             and a hard penalty (SIDE_PENALTY_CALIBRATED) is applied.
+        enable_track_split: When True (and ``crops_by_pid_for_classifier`` has
+            crops for ≥2 pids), train a few-shot ``PlayerReIDClassifier`` from
+            ref-crop images and attach it + a per-rally crop extractor to the
+            tracker so the within-track appearance splitter
+            (``_maybe_segment_tracks_by_appearance``, Task 4) can fire.
+            Independently flag-gated by ``ENABLE_REF_CROP_TRACK_SPLIT=1`` —
+            both must be set for the splitter to run. Default False keeps every
+            existing caller of this function byte-identical.
+        crops_by_pid_for_classifier: ``{player_id: [BGR crop]}`` from the
+            video's reference crops. Required when ``enable_track_split`` is
+            True; ignored otherwise.
 
     Returns:
         MatchPlayersResult with track→player mappings and accumulated profiles.
@@ -2757,6 +2834,47 @@ def match_players_across_rallies(
         collect_diagnostics=collect_diagnostics,
         reference_profiles=reference_profiles,
     )
+
+    # Optional pre-Hungarian within-track appearance split (Task 6, 2026-04-26).
+    # Train the few-shot classifier ONCE per video from the user's ref crops,
+    # attach to the tracker; the splitter inside `process_rally` reads it via
+    # `getattr(self, "_few_shot_classifier", None)` and is otherwise inert.
+    # Per-rally crop extractor is rebuilt inside the rally loop below.
+    track_split_active = False
+    rally_split_fps = 30.0
+    if enable_track_split and crops_by_pid_for_classifier:
+        pids_with_crops = [
+            pid for pid, crops in crops_by_pid_for_classifier.items() if crops
+        ]
+        if len(pids_with_crops) >= 2:
+            from rallycut.tracking.reid_embeddings import PlayerReIDClassifier
+
+            clf = PlayerReIDClassifier()
+            clf.train(
+                {pid: crops_by_pid_for_classifier[pid] for pid in pids_with_crops},
+                augmentations_per_crop=20,
+                epochs=60,
+            )
+            tracker._few_shot_classifier = clf  # type: ignore[attr-defined]
+            track_split_active = True
+            logger.info(
+                "Track-split classifier trained on %d pids (sizes: %s)",
+                len(pids_with_crops),
+                {pid: len(crops_by_pid_for_classifier[pid]) for pid in pids_with_crops},
+            )
+
+            # Read fps once per video — the per-rally extractors share it.
+            cap_probe = cv2.VideoCapture(str(video_path))
+            if cap_probe.isOpened():
+                rally_split_fps = cap_probe.get(cv2.CAP_PROP_FPS) or 30.0
+                cap_probe.release()
+        else:
+            logger.info(
+                "Track-split requested but only %d pids have crops "
+                "(need ≥2) — splitter inert.",
+                len(pids_with_crops),
+            )
+
     results: list[RallyTrackingResult] = []
 
     for rally_idx, rally in enumerate(rallies):
@@ -2770,6 +2888,20 @@ def match_players_across_rallies(
             extract_reid=extract_reid,
             reid_model=reid_model,
         )
+
+        # Build per-rally crop extractor for the splitter (Task 6, 2026-04-26).
+        # Each rally needs its own (bbox, frame) lookup keyed on the rally's
+        # primary positions; rebuild on every iteration. Inert when no
+        # classifier was attached above (splitter checks both internally).
+        if track_split_active:
+            tracker._crop_extractor = _build_rally_crop_extractor(  # type: ignore[attr-defined]
+                video_path=video_path,
+                rally_start_ms=rally.start_ms,
+                positions=rally.positions,
+                fps=rally_split_fps,
+            )
+        else:
+            tracker._crop_extractor = None  # type: ignore[attr-defined]
 
         # Process rally
         result = tracker.process_rally(

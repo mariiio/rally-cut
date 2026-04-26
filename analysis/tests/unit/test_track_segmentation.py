@@ -514,6 +514,59 @@ def test_remap_contacts_applies_frame_conditional_for_split_parent():
     assert contacts["contacts"][0]["playerCandidates"][0][0] == 2
 
 
+def test_build_rally_crop_extractor_returns_none_on_missing_video(tmp_path):
+    """Task 6: the per-rally crop extractor handles broken capture and
+    missing-bbox cases gracefully without raising."""
+    from rallycut.tracking.match_tracker import _build_rally_crop_extractor
+
+    fake_video = tmp_path / "doesnt_exist.mp4"
+    positions = [
+        PlayerPosition(
+            track_id=1, frame_number=0, x=0.5, y=0.5,
+            width=0.05, height=0.15, confidence=0.9,
+        )
+    ]
+    extractor = _build_rally_crop_extractor(
+        video_path=fake_video,
+        rally_start_ms=0,
+        positions=positions,
+        fps=30.0,
+    )
+    # Bbox unknown → None (returned before the cap is even opened)
+    assert extractor(track_id=99, rally_rel_frame=0) is None
+    # Bbox known but capture cannot open the missing file → None
+    assert extractor(track_id=1, rally_rel_frame=0) is None
+
+
+def test_match_players_attaches_classifier_when_flag_on(monkeypatch):
+    """Task 6 smoke: with ENABLE_REF_CROP_TRACK_SPLIT=1 and ≥2 pids worth
+    of crops, ``PlayerReIDClassifier`` trains and ``predict_single`` returns
+    a normalized probability dict.
+
+    Slow-ish (~few sec on CPU) because it loads DINOv2 ViT-S/14 once. Kept
+    here because the project doesn't register a ``slow`` marker — runs in
+    well under 30s on CPU/MPS.
+    """
+    monkeypatch.setenv("ENABLE_REF_CROP_TRACK_SPLIT", "1")
+
+    from rallycut.tracking.reid_embeddings import PlayerReIDClassifier
+
+    rng = np.random.default_rng(42)
+    crops_by_pid = {
+        1: [rng.integers(0, 255, (96, 64, 3), dtype=np.uint8) for _ in range(2)],
+        2: [rng.integers(0, 255, (96, 64, 3), dtype=np.uint8) for _ in range(2)],
+    }
+
+    clf = PlayerReIDClassifier()
+    stats = clf.train(crops_by_pid, augmentations_per_crop=2, epochs=2)
+    assert clf.is_trained
+    assert stats["n_samples"] > 0
+
+    probs = clf.predict_single(crops_by_pid[1][0])
+    assert set(probs.keys()) == {1, 2}
+    assert abs(sum(probs.values()) - 1.0) < 1e-3
+
+
 def test_remap_actions_applies_frame_conditional_and_drops_split_team_assignment():
     from rallycut.cli.commands.remap_track_ids import (
         UNLABELED_TRACK_ID,
