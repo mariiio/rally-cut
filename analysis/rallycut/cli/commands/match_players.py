@@ -396,6 +396,18 @@ def match_players(
             bbox = entry.get("bbox")
             frame_ms = entry.get("frameMs")
 
+            # Mirror DB-path tuple shape so canonical_pid_map_json gets built
+            # on the API/manifest path too (gated at line 639). Without this,
+            # every retrack initiated by matchAnalysisService writes
+            # canonical_pid_map_json = NULL even when 4 ref crops × 4 pids
+            # exist, because canonical_bgr_crops stays empty.
+            if bbox is not None and frame_ms is not None:
+                canonical_crop_rows.append((
+                    int(pid), int(frame_ms),
+                    float(bbox["x"]), float(bbox["y"]),
+                    float(bbox["w"]), float(bbox["h"]),
+                ))
+
             if bbox and frame_ms is not None and fw > 0:
                 # Seek video and extract features at full resolution
                 cap.set(cv2.CAP_PROP_POS_MSEC, frame_ms)
@@ -430,6 +442,9 @@ def match_players(
                 console.print(f"[yellow]Warning:[/yellow] Could not extract crop for P{pid}")
 
         cap.release()
+
+        # Surface the JSON-branch BGR crops to the canonical-map gate below.
+        canonical_bgr_crops = bgr_crops_by_player_json
 
         # Extract DINOv2 embeddings from reference crops.
         # Falls back to HSV-only if DINOv2 fails.
