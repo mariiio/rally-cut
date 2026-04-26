@@ -1,0 +1,12 @@
+$ uv run rallycut match-players eb693a6f-30df-4265-9291-eea46b6a1426 --quiet
+
+
+--- stderr ---
+Using cache found in /Users/mario/.cache/torch/hub/facebookresearch_dinov2_main
+/Users/mario/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/layers/swiglu_ffn.py:51: UserWarning: xFormers is not available (SwiGLU)
+  warnings.warn("xFormers is not available (SwiGLU)")
+/Users/mario/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/layers/attention.py:33: UserWarning: xFormers is not available (Attention)
+  warnings.warn("xFormers is not available (Attention)")
+/Users/mario/.cache/torch/hub/facebookresearch_dinov2_main/dinov2/layers/block.py:40: UserWarning: xFormers is not available (Block)
+  warnings.warn("xFormers is not available (Block)")
+team-template input length mismatch: results=7 diagnostics=0; falling back to legacy partition

@@ -1,0 +1,40 @@
+$ uv run rallycut reattribute-actions 635dcba2-2645-49d1-ac62-072f05c957d9
+
+Re-attributing actions for video 635dcba2...
+  30 rallies with match teams, 26 eligible for re-attribution (conf >= 0.70)
+  e5c1a9b3: no changes (teams stamped)
+  6587002c: no changes (teams stamped)
+  fcc5dcba: no changes (teams stamped)
+  d24901dd: no changes (teams stamped)
+  2f806f76: no changes (teams stamped)
+  e5a1da4f: no changes (teams stamped)
+  66921886: no changes (teams stamped)
+  51aa8083: no changes (teams stamped)
+  b52bc536: no changes (teams stamped)
+  83dea3ce: no changes (teams stamped)
+  70bd06c8: no changes (teams stamped)
+  67b3e1ad: no changes (teams stamped)
+  a1151ff4: no changes (teams stamped)
+  bf5b72cf: 1/7 actions re-attributed
+  1d316b85: no changes (teams stamped)
+  248aaf83: no changes (teams stamped)
+  06927cb0: no changes (teams stamped)
+  a938fad1: 1/6 actions re-attributed
+  4567964d: no changes (teams stamped)
+  f1f09039: no changes (teams stamped)
+  0b43709e: no changes (teams stamped)
+  78587ac4: no changes (teams stamped)
+  a1a5baf7: no changes (teams stamped)
+  d70fa5ad: no changes (teams stamped)
+  bd10eae6: no changes (teams stamped)
+  5d9e9e43: no changes (teams stamped)
+  06b907f1: no changes (teams stamped)
+  974d4b76: no changes (teams stamped)
+  15c43db1: no changes (teams stamped)
+  9ef7b6f9: no changes (teams stamped)
+  Team localization: 30 rallies, Viterbi fallback: 0, label_a=0, 9 serving_team 
+changes
+
+  Total: 2/165 actions re-attributed across 30 rallies
+  Updated 30 player tracks in DB
+  Viterbi serving_team: 9 changed / 30 stamped

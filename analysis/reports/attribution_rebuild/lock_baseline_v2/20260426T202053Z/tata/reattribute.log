@@ -1,0 +1,30 @@
+$ uv run rallycut reattribute-actions 7d77980f-3006-40e0-adc0-db491a5bb659
+
+Re-attributing actions for video 7d77980f...
+  20 rallies with match teams, 20 eligible for re-attribution (conf >= 0.70)
+  8b0b9e13: no changes (teams stamped)
+  09553ef1: no changes (teams stamped)
+  ad7cccbf: no changes (teams stamped)
+  97c42190: no changes (teams stamped)
+  e50f127e: no changes (teams stamped)
+  30ffb876: no changes (teams stamped)
+  8c802c26: no changes (teams stamped)
+  724ead56: no changes (teams stamped)
+  03144243: no changes (teams stamped)
+  4bfafd6d: no changes (teams stamped)
+  fdc4375b: no changes (teams stamped)
+  689854e3: no changes (teams stamped)
+  d5c51d52: no changes (teams stamped)
+  4e7e589c: no changes (teams stamped)
+  d934f57a: no changes (teams stamped)
+  613fde44: no changes (teams stamped)
+  1f9ce33a: no changes (teams stamped)
+  9f46f74e: no changes (teams stamped)
+  db841666: no changes (teams stamped)
+  6e4a9de1: no changes (teams stamped)
+  Team localization: 20 rallies, Viterbi fallback: 0, label_a=0, 6 serving_team 
+changes
+
+  Total: 0/119 actions re-attributed across 20 rallies
+  Updated 20 player tracks in DB
+  Viterbi serving_team: 6 changed / 20 stamped

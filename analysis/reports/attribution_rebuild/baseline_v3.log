@@ -1,0 +1,110 @@
+Logs: /Users/mario/Personal/Projects/RallyCut/analysis/reports/attribution_rebuild/lock_baseline_v2/20260426T202053Z
+Targets: ['tata', 'toto', 'lala', 'lulu', 'wawa', 'cece', 'cuco', 'rere', 'yeye']
+
+[1/9] tata...
+
+=== tata (7d77980f) ===
+  ref_crops in DB: 21
+  match-players...
+      [match-players] OK in 92.2s
+  reattribute-actions...
+      [reattribute-actions] OK in 1.8s
+  Surface A: n=109 correct=48 (44.0%) missing=14
+
+[2/9] toto...
+
+=== toto (635dcba2) ===
+  ref_crops in DB: 18
+  match-players...
+      [match-players] OK in 185.6s
+  reattribute-actions...
+      [reattribute-actions] OK in 1.7s
+  Surface A: n=58 correct=16 (27.6%) missing=14
+
+[3/9] lala...
+
+=== lala (84e66e74) ===
+  ref_crops in DB: 16
+  match-players...
+      [match-players] OK in 100.3s
+  reattribute-actions...
+      [reattribute-actions] OK in 1.7s
+  Surface A: n=71 correct=19 (26.8%) missing=10
+
+[4/9] lulu...
+
+=== lulu (4f2bd66a) ===
+  ref_crops in DB: 20
+  match-players...
+      [match-players] OK in 116.6s
+  reattribute-actions...
+      [reattribute-actions] OK in 1.9s
+  Surface A: n=37 correct=4 (10.8%) missing=8
+
+[5/9] wawa...
+
+=== wawa (5c756c41) ===
+  ref_crops in DB: 19
+  match-players...
+      [match-players] OK in 57.9s
+  reattribute-actions...
+      [reattribute-actions] OK in 1.5s
+  Surface A: n=32 correct=8 (25.0%) missing=11
+
+[6/9] cece...
+
+=== cece (950fbe5d) ===
+  ref_crops in DB: 18
+  match-players...
+      [match-players] OK in 32.0s
+  reattribute-actions...
+      [reattribute-actions] OK in 1.3s
+  Surface A: n=28 correct=5 (17.9%) missing=6
+
+[7/9] cuco...
+
+=== cuco (d3486f0b) ===
+  ref_crops in DB: 21
+  match-players...
+      [match-players] OK in 49.7s
+  reattribute-actions...
+      [reattribute-actions] OK in 1.4s
+  Surface A: n=40 correct=1 (2.5%) missing=3
+
+[8/9] rere...
+
+=== rere (808a5618) ===
+  ref_crops in DB: 20
+  match-players...
+      [match-players] OK in 21.1s
+  reattribute-actions...
+      [reattribute-actions] OK in 1.3s
+  Surface A: n=36 correct=8 (22.2%) missing=3
+
+[9/9] yeye...
+
+=== yeye (eb693a6f) ===
+  ref_crops in DB: 23
+  match-players...
+      [match-players] OK in 40.5s
+  reattribute-actions...
+      [reattribute-actions] OK in 1.6s
+  Surface A: n=62 correct=15 (24.2%) missing=6
+
+==========================================================================================
+BASELINE v2 — Surface A per fixture
+==========================================================================================
+fixture  n_gt  correct    rate  missing  wrong  crops
+tata      109       48   44.0%       14     47     21
+toto       58       16   27.6%       14     28     18
+lala       71       19   26.8%       10     42     16
+lulu       37        4   10.8%        8     25     20
+wawa       32        8   25.0%       11     13     19
+cece       28        5   17.9%        6     17     18
+cuco       40        1    2.5%        3     36     21
+rere       36        8   22.2%        3     25     20
+yeye       62       15   24.2%        6     41     23
+------------------------------------------------------------------------------------------
+AGG       473      124   26.2%       75    274
+
+wrote reports/attribution_rebuild/baseline_v3.json
