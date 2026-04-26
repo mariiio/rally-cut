@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 import numpy as np
 import pytest
 
+from rallycut.cli.commands.match_players import _build_per_frame_pid_map
 from rallycut.tracking._subtrack import SubTrackCandidate
 from rallycut.tracking.match_tracker import (
     SEGMENT_MIN_PER_SEGMENT_MARGIN,
@@ -301,3 +302,81 @@ def test_apply_subtrack_assignments_with_conflict_keeps_higher_margin():
     assert set(remaining_tracks) == {1, 4}
     # pid 1 claimed; pids 2/3/4 remain.
     assert set(remaining_pids) == {2, 3, 4}
+
+
+# ---------------------------------------------------------------------------
+# Task 5: per-frame pid map translator (CLI-side helper)
+# ---------------------------------------------------------------------------
+
+
+def _make_sub(parent_tid: int, seg_idx: int, f_start: int, f_end: int,
+              argmax_pid: int, margin: float) -> SubTrackCandidate:
+    return SubTrackCandidate(
+        parent_track_id=parent_tid, segment_index=seg_idx,
+        f_start=f_start, f_end=f_end,
+        appearance_stats=TrackAppearanceStats(track_id=parent_tid),
+        aggregated_argmax_pid=argmax_pid, aggregated_margin=margin,
+    )
+
+
+def test_per_frame_pid_map_real_tracks_only():
+    """No sub-tracks: every (real_tid, anything) maps to the assigned pid."""
+    track_to_player = {1: 1, 2: 2, 3: 3, 4: 4}
+    pf = _build_per_frame_pid_map(track_to_player, sub_tracks=[])
+    # Real-track entries use the (-1) sentinel for "any frame"
+    assert pf.get((1, -1)) == 1
+    assert pf.get((2, -1)) == 2
+    assert pf.get((3, -1)) == 3
+    assert pf.get((4, -1)) == 4
+
+
+def test_per_frame_pid_map_split_track_gives_per_segment_pids():
+    """Split parent: pre-segment gets pid_pre, post-segment gets pid_post."""
+    sub_pre = _make_sub(2, 0, 0, 99, argmax_pid=2, margin=0.20)
+    sub_post = _make_sub(2, 1, 100, 240, argmax_pid=1, margin=0.40)
+    track_to_player = {
+        sub_pre.synthetic_track_id: 2,
+        sub_post.synthetic_track_id: 1,
+        # other (un-split) real tracks
+        3: 3,
+        4: 4,
+    }
+    pf = _build_per_frame_pid_map(track_to_player, sub_tracks=[sub_pre, sub_post])
+    # Pre-segment frames map to pid=2
+    assert pf.get((2, 0)) == 2
+    assert pf.get((2, 50)) == 2
+    assert pf.get((2, 99)) == 2
+    # Post-segment frames map to pid=1
+    assert pf.get((2, 100)) == 1
+    assert pf.get((2, 200)) == 1
+    assert pf.get((2, 240)) == 1
+    # Non-split real tracks still use the sentinel
+    assert pf.get((3, -1)) == 3
+    assert pf.get((4, -1)) == 4
+    # Frames outside both segments aren't mapped (would happen if positions exist
+    # outside [f_start, f_end] of any sub-track for parent_tid=2, but Task 3
+    # ensures sub-tracks cover all of the parent's frames).
+    # Verify there's no sentinel for the split parent (its pid is per-segment, not constant).
+    assert pf.get((2, -1)) is None
+
+
+def test_per_frame_pid_map_lost_subtrack_leaves_frames_unlabeled():
+    """If a sub-track is dropped from track_to_player (conflict loser), its
+    frames are NOT in the per-frame map → CLI writes no label for them."""
+    sub_pre = _make_sub(2, 0, 0, 99, argmax_pid=1, margin=0.10)
+    sub_post = _make_sub(2, 1, 100, 240, argmax_pid=1, margin=0.40)
+    # _apply_subtrack_assignments would keep only sub_post (higher margin).
+    track_to_player = {
+        sub_post.synthetic_track_id: 1,
+        # Note: sub_pre is NOT in track_to_player.
+        3: 3,
+        4: 4,
+    }
+    pf = _build_per_frame_pid_map(track_to_player, sub_tracks=[sub_pre, sub_post])
+    # Pre-segment frames are unlabeled (sub_pre lost)
+    assert pf.get((2, 0)) is None
+    assert pf.get((2, 50)) is None
+    assert pf.get((2, 99)) is None
+    # Post-segment frames mapped to pid=1
+    assert pf.get((2, 100)) == 1
+    assert pf.get((2, 240)) == 1

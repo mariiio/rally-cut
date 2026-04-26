@@ -12,6 +12,7 @@ from rich.console import Console
 from rich.table import Table
 
 from rallycut.cli.utils import handle_errors
+from rallycut.tracking._subtrack import SubTrackCandidate
 
 console = Console()
 
@@ -19,6 +20,48 @@ console = Console()
 # Schema version for canonicalPidMapJson. Bump only on breaking shape changes
 # (read-side helpers fall back to legacy fields when version is unknown).
 CANONICAL_PID_MAP_VERSION = 1
+
+
+def _build_per_frame_pid_map(
+    track_to_player: dict[int, int],
+    sub_tracks: list[SubTrackCandidate],
+) -> dict[tuple[int, int], int]:
+    """Translate Hungarian + sub-track direct-assignment output into a
+    per-frame label mapping.
+
+    Returns dict keyed on ``(parent_track_id, frame_number) -> pid``.
+
+    Conventions:
+    - Real (un-split) tracks: key is ``(track_id, -1)`` — sentinel meaning
+      "any frame". The CLI's per-frame writer first looks up
+      ``(track_id, frame_number)`` and falls back to ``(track_id, -1)``.
+    - Split tracks: each sub-track contributes
+      ``(parent_track_id, f) -> pid`` for ``f`` in ``[f_start, f_end]``.
+      Sub-tracks that lost the pid conflict in
+      ``_apply_subtrack_assignments`` are absent from ``track_to_player``
+      and therefore their frames are absent from the returned map (writer
+      leaves those frames unlabeled).
+
+    This matches the "miss > wrong" north-star: when a sub-track loses a
+    conflict and its frames have no pid resolution, the writer emits no
+    label rather than guessing.
+    """
+    sub_by_synth = {s.synthetic_track_id: s for s in sub_tracks}
+    split_parents = {s.parent_track_id for s in sub_tracks}
+
+    out: dict[tuple[int, int], int] = {}
+    for tid, pid in track_to_player.items():
+        if tid in sub_by_synth:
+            sub = sub_by_synth[tid]
+            for f in range(sub.f_start, sub.f_end + 1):
+                out[(sub.parent_track_id, f)] = pid
+        elif tid in split_parents:
+            # Should not happen — split parents are removed from track_to_player
+            # in `_apply_subtrack_assignments`. Guard defensively.
+            continue
+        else:
+            out[(tid, -1)] = pid
+    return out
 
 
 def _canonical_pid_map_payload(
