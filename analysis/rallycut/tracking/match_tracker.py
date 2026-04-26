@@ -20,6 +20,7 @@ Architecture:
 from __future__ import annotations
 
 import logging
+import os
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -741,6 +742,7 @@ class MatchPlayerTracker:
         # Side switch detection runs in Pass 2 (combinatorial search)
         side_switch_detected = False
 
+        sub_tracks: list[SubTrackCandidate] = []
         if self.rally_count <= 1 and not self.frozen_player_ids:
             # Phase 3: seeded profiles enrich the per-match prior, but the
             # first-rally track->pid mapping still goes through the baseline
@@ -750,11 +752,38 @@ class MatchPlayerTracker:
                 top_tracks, track_avg_y, track_court_sides
             )
         else:
-            track_to_player = self._assign_tracks_to_players_global(
-                top_tracks, track_stats, track_court_sides,
-                use_side_penalty=not self.frozen_player_ids,
-                early_positions=early_positions,
+            # Optional pre-Hungarian within-track split (Task 4, 2026-04-26).
+            # Returns [] when flag is off, no classifier, or no frozen profiles.
+            sub_tracks = self._maybe_segment_tracks_by_appearance(
+                track_ids=top_tracks,
+                track_stats=track_stats,
+                positions=player_positions,
+                classifier=getattr(self, "_few_shot_classifier", None),
+                crop_extractor=getattr(self, "_crop_extractor", None),
             )
+            if sub_tracks:
+                all_pids = sorted(self.state.players.keys())
+                direct_subtrack_assignments, remaining_top_tracks, remaining_pids = (
+                    self._apply_subtrack_assignments(sub_tracks, top_tracks, all_pids)
+                )
+                # Run Hungarian on remaining real tracks against remaining pids.
+                hungarian_result = self._assign_tracks_to_players_global(
+                    remaining_top_tracks, track_stats, track_court_sides,
+                    use_side_penalty=not self.frozen_player_ids,
+                    early_positions=early_positions,
+                    restrict_to_pids=remaining_pids,
+                )
+                # Combine direct sub-track assignments + Hungarian result.
+                track_to_player = {**direct_subtrack_assignments, **hungarian_result}
+            else:
+                track_to_player = self._assign_tracks_to_players_global(
+                    top_tracks, track_stats, track_court_sides,
+                    use_side_penalty=not self.frozen_player_ids,
+                    early_positions=early_positions,
+                )
+
+        # Stash for downstream per-frame writer (Task 5).
+        self._last_rally_sub_tracks = sub_tracks
 
         # Step 5: Within-team refinement
         if self.rally_count > 1 or self.frozen_player_ids:
@@ -1040,6 +1069,7 @@ class MatchPlayerTracker:
         *,
         use_side_penalty: bool = True,
         early_positions: dict[int, tuple[float, float]] | None = None,
+        restrict_to_pids: list[int] | None = None,
     ) -> dict[int, int]:
         """Global 4x4 Hungarian assignment with side + position costs.
 
@@ -1054,6 +1084,12 @@ class MatchPlayerTracker:
             track_court_sides: Track -> 0 (near) or 1 (far).
             use_side_penalty: Whether to add side penalty to cost matrix.
             early_positions: Early-rally positions per track for continuity.
+            restrict_to_pids: Optional list of pids the cost matrix and
+                assignment should be restricted to. Default `None` means
+                "use all players from `self.state.players`" (preserves
+                pre-Task-4 behaviour). When provided (Task 4 dispatch
+                after sub-track direct assignment), only these pids
+                participate in Hungarian.
 
         Returns:
             track_id -> player_id mapping.
@@ -1061,7 +1097,10 @@ class MatchPlayerTracker:
         if not track_ids:
             return {}
 
-        all_player_ids = sorted(self.state.players.keys())  # [1, 2, 3, 4]
+        if restrict_to_pids is not None:
+            all_player_ids = sorted(restrict_to_pids)
+        else:
+            all_player_ids = sorted(self.state.players.keys())  # [1, 2, 3, 4]
         n_tracks = len(track_ids)
         n_players = len(all_player_ids)
         size = max(n_tracks, n_players)
@@ -1213,6 +1252,87 @@ class MatchPlayerTracker:
             ))
 
         return result
+
+    def _maybe_segment_tracks_by_appearance(
+        self,
+        track_ids: list[int],
+        track_stats: dict[int, TrackAppearanceStats],
+        positions: list[PlayerPosition],
+        classifier: Any,
+        crop_extractor: Callable[[int, int], np.ndarray | None] | None = None,
+    ) -> list[SubTrackCandidate]:
+        """Flag-gated wrapper around `_segment_tracks_by_appearance`.
+
+        Active only when:
+          - ENABLE_REF_CROP_TRACK_SPLIT environment variable is "1"
+          - A trained classifier is supplied
+          - frozen_player_ids is non-empty (means video has ref-crop profiles)
+          - crop_extractor is not None
+        """
+        if os.environ.get("ENABLE_REF_CROP_TRACK_SPLIT", "0") != "1":
+            return []
+        if classifier is None or not getattr(classifier, "is_trained", False):
+            return []
+        if not getattr(self, "frozen_player_ids", None):
+            return []
+        if crop_extractor is None:
+            return []
+        return self._segment_tracks_by_appearance(
+            track_ids, track_stats, positions, classifier, crop_extractor,
+        )
+
+    @staticmethod
+    def _apply_subtrack_assignments(
+        sub_tracks: list[SubTrackCandidate],
+        top_tracks: list[int],
+        all_pids: list[int],
+    ) -> tuple[dict[int, int], list[int], list[int]]:
+        """Convert sub-track per-segment argmax pids into direct
+        track_id -> pid assignments, bypassing Hungarian.
+
+        For each pid claimed by multiple sub-tracks, only the highest-margin
+        sub-track wins direct assignment; losers are dropped from `direct`
+        (their frames will fall into the per-frame conflict resolver in
+        Task 5 and end up unlabeled).
+
+        Args:
+            sub_tracks: SubTrackCandidates from `_segment_tracks_by_appearance`.
+            top_tracks: All track_ids selected for the rally (real BoT-SORT ids).
+            all_pids: All canonical pids (typically [1, 2, 3, 4]).
+
+        Returns:
+            direct: dict[synthetic_track_id, pid] for sub-tracks that won.
+            remaining_track_ids: real top_tracks with split parents removed.
+            remaining_pids: pids NOT claimed by any sub-track in `direct`.
+        """
+        # Group sub-tracks by claimed pid; pick highest-margin per pid.
+        by_pid: dict[int, list[SubTrackCandidate]] = {}
+        for s in sub_tracks:
+            if s.aggregated_argmax_pid is None:
+                continue
+            by_pid.setdefault(s.aggregated_argmax_pid, []).append(s)
+
+        direct: dict[int, int] = {}
+        for pid, candidates in by_pid.items():
+            winner = max(candidates, key=lambda s: s.aggregated_margin or 0.0)
+            direct[winner.synthetic_track_id] = pid
+
+        # Parents that contributed any sub-track are removed from real-tracks
+        # (the segments now own their frames; the parent is being replaced).
+        split_parents = {s.parent_track_id for s in sub_tracks}
+        remaining_track_ids = [t for t in top_tracks if t not in split_parents]
+
+        claimed_pids = set(direct.values())
+        remaining_pids = [p for p in all_pids if p not in claimed_pids]
+        return direct, remaining_track_ids, remaining_pids
+
+    def _resolve_subtrack_pid_conflicts(
+        self,
+        track_to_player: dict[int, int],
+        sub_tracks: list[SubTrackCandidate],
+    ) -> dict[int, int]:
+        """Stub completed in Task 5 — returns input unchanged for now."""
+        return track_to_player
 
     def _segment_tracks_by_appearance(
         self,
