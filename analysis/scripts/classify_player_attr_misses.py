@@ -14,7 +14,7 @@ with player_correct=False classifies the miss into one of:
 
 Stratifies by:
   - contact_index (0=first contact of rally) for D4 serve-asymmetry check
-  - canonicalLocked status of the rally
+  - (legacy) canonicalLocked status — deprecated, now always False
   - per-action breakdown (serve / receive / set / attack / dig / block)
 
 Outputs:
@@ -36,7 +36,6 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-import psycopg
 from rich.console import Console
 from rich.table import Table
 
@@ -60,31 +59,13 @@ console = Console()
 
 
 def _load_canonical_locked(video_ids: set[str]) -> dict[str, bool]:
-    """Return rally_id -> canonicalLocked from match_analysis_json."""
-    if not video_ids:
-        return {}
-    out: dict[str, bool] = {}
-    sql = (
-        "SELECT id, match_analysis_json FROM videos "
-        "WHERE id = ANY(%s) AND match_analysis_json IS NOT NULL"
-    )
-    with psycopg.connect(
-        "host=localhost port=5436 user=postgres password=postgres dbname=rallycut"
-    ) as conn:
-        with conn.cursor() as cur:
-            cur.execute(sql, [list(video_ids)])
-            for _video_id, ma_json in cur.fetchall():
-                if not isinstance(ma_json, dict):
-                    continue
-                for r in ma_json.get("rallies", []):
-                    rid = r.get("rallyId") or r.get("rally_id")
-                    if not rid:
-                        continue
-                    locked = r.get("canonicalLocked")
-                    if locked is None:
-                        locked = r.get("canonical_locked", False)
-                    out[rid] = bool(locked)
-    return out
+    """Legacy bucket dimension — canonical-lock feature has been removed.
+
+    Returns empty dict so all rallies are treated as unlocked in the
+    bucketing output.  The `locked` field is kept on MissRecord for
+    back-compat with existing reports; it is always False now.
+    """
+    return {}
 
 
 @dataclass

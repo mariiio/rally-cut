@@ -22,7 +22,6 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
 import type { CalibrationCorner } from './playerTrackingService.js';
-import { filterOutCanonicalLockedRallies } from './playerTrackingService.js';
 import { triggerModalBatchTracking } from './modalTrackingService.js';
 import { expireStaleBatchTrackingJobs } from './staleJobRecovery.js';
 
@@ -75,26 +74,7 @@ export async function trackAllRallies(
     throw new ValidationError('No confirmed rallies found for this video');
   }
 
-  // F3b — skip retrack on canonicalLocked rallies. Their GT-anchored
-  // trackToPlayer mapping would be silently invalidated by fresh raw IDs.
-  const rallyIds = video.rallies.map((r) => r.id);
-  const { unlocked: unlockedRallyIds, locked: lockedRallyIds } =
-    await filterOutCanonicalLockedRallies(videoId, rallyIds);
-  if (lockedRallyIds.length > 0) {
-    console.log(
-      `[BATCH_TRACK] Skipping ${lockedRallyIds.length}/${rallyIds.length} canonicalLocked rallies for video ${videoId}`,
-    );
-  }
-  const unlockedSet = new Set(unlockedRallyIds);
-  const ralliesToTrack = video.rallies.filter((r) => unlockedSet.has(r.id));
-  if (ralliesToTrack.length === 0) {
-    if (options.skipTracked) {
-      return { jobId: null, totalRallies: 0 };
-    }
-    throw new ValidationError(
-      'All rallies are canonicalLocked — nothing to track',
-    );
-  }
+  const ralliesToTrack = video.rallies;
 
   // Prefer original quality for tracking — proxy (720p) degrades ball detection.
   // Falls back to proxy if original has been quality-downgraded.

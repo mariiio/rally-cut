@@ -1,13 +1,12 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma.js";
-import { ForbiddenError, LockedRallyRequiresConfirmError, NotFoundError, RalliesOverlapError, RallyTrackingStateError, SplitBoundsError } from "../middleware/errorHandler.js";
+import { ForbiddenError, NotFoundError, RalliesOverlapError, RallyTrackingStateError, SplitBoundsError } from "../middleware/errorHandler.js";
 import type { CreateRallyInput, UpdateRallyInput } from "../schemas/rally.js";
 import { reindexTrackingData } from "./playerTrackingService.js";
 import { markRetrackIfExtended } from "./batchTrackingService.js";
 import { canAccessVideoRallies } from "./shareService.js";
 import { appendEdit, appendEditsBatch } from "./pendingAnalysisEdits.js";
 import { slicePlayerTrack, concatPlayerTracks } from "./rallySlicing.js";
-import { assertNotLocked } from "./canonicalLockGuard.js";
 
 export async function listRallies(videoId: string, userId: string) {
   // canAccessVideoRallies throws NotFoundError if video doesn't exist
@@ -90,12 +89,6 @@ export async function updateRally(id: string, userId: string, data: UpdateRallyI
           data: { matchAnalysisJson: Prisma.DbNull, matchStatsJson: Prisma.DbNull },
         });
       }
-      // Guard: extending bounds invalidates GT — reject if rally is locked
-      const willExtend = (data.startMs ?? rally.startMs) < rally.startMs || (data.endMs ?? rally.endMs) > rally.endMs;
-      if (willExtend) {
-        await assertNotLocked(tx, id, 'EXTEND');
-      }
-
       // Mark for retrack if bounds were extended (inside tx — rolled back atomically on failure)
       await markRetrackIfExtended(
         tx,
@@ -129,7 +122,7 @@ export async function updateRally(id: string, userId: string, data: UpdateRallyI
   });
 }
 
-export async function deleteRally(id: string, userId: string, opts?: { confirmUnlock?: boolean }): Promise<void> {
+export async function deleteRally(id: string, userId: string): Promise<void> {
   await prisma.$transaction(async (tx) => {
     const rally = await tx.rally.findUnique({
       where: { id },
@@ -137,27 +130,8 @@ export async function deleteRally(id: string, userId: string, opts?: { confirmUn
     });
     if (!rally || rally.video.userId !== userId) throw new NotFoundError('Rally', id);
 
-    // Canonical-lock confirm gate
+    // Drop the rally from matchAnalysisJson.rallies[] so stats don't reference it
     const json: any = rally.video.matchAnalysisJson ?? { rallies: [] };
-    const entry = (json.rallies ?? []).find((r: any) => r.rallyId === id);
-    const locked = entry?.canonicalLocked === true;
-    if (locked && !opts?.confirmUnlock) {
-      // Best-effort count of GT frames for the error payload
-      const pt = await tx.playerTrack.findUnique({ where: { rallyId: id }, select: { groundTruthJson: true, actionGroundTruthJson: true } });
-      const gtFrameCount = ((pt?.groundTruthJson as any)?.length ?? 0) + ((pt?.actionGroundTruthJson as any)?.length ?? 0);
-      throw new LockedRallyRequiresConfirmError(id, gtFrameCount);
-    }
-
-    // Audit log for the destructive confirmed path
-    if (locked && opts?.confirmUnlock) {
-      console.log(JSON.stringify({
-        event: 'rally.locked.deleted',
-        rallyId: id, videoId: rally.videoId, userId,
-        gtFrameCount: entry?.gtFrameCount ?? null,
-      }));
-    }
-
-    // Also drop the rally from matchAnalysisJson.rallies[] so stats don't reference it
     if (json.rallies) {
       json.rallies = json.rallies.filter((r: any) => r.rallyId !== id);
       await tx.video.update({ where: { id: rally.videoId }, data: { matchAnalysisJson: json } });
@@ -191,9 +165,6 @@ export async function splitRally(
         { startMs: rally.startMs, firstEndMs, secondStartMs, endMs: rally.endMs },
       );
     }
-
-    // Lock gate
-    await assertNotLocked(tx, rallyId, 'SPLIT');
 
     // PlayerTrack state gate
     const pt = rally.playerTrack;
@@ -257,8 +228,8 @@ export async function splitRally(
     const inheritServer = parentEntry?.serverPlayerId ?? null;
     json.rallies = (json.rallies ?? []).filter((r: any) => r.rallyId !== rallyId);
     json.rallies.push(
-      { rallyId: firstRally.id, canonicalLocked: false, trackToPlayer: inheritMapping, assignmentConfidence: parentEntry?.assignmentConfidence ?? null, serverPlayerId: inheritServer },
-      { rallyId: secondRally.id, canonicalLocked: false, trackToPlayer: inheritMapping, assignmentConfidence: parentEntry?.assignmentConfidence ?? null, serverPlayerId: inheritServer },
+      { rallyId: firstRally.id, trackToPlayer: inheritMapping, assignmentConfidence: parentEntry?.assignmentConfidence ?? null, serverPlayerId: inheritServer },
+      { rallyId: secondRally.id, trackToPlayer: inheritMapping, assignmentConfidence: parentEntry?.assignmentConfidence ?? null, serverPlayerId: inheritServer },
     );
     await tx.video.update({ where: { id: rally.videoId }, data: { matchAnalysisJson: json } });
 
@@ -272,33 +243,6 @@ export async function splitRally(
     ]);
 
     return { firstRally, secondRally };
-  });
-}
-
-export async function unlockRally(
-  rallyId: string,
-  userId: string,
-): Promise<{ rallyId: string; wasLocked: boolean; unlockedAt: Date }> {
-  return prisma.$transaction(async (tx) => {
-    const rally = await tx.rally.findUnique({
-      where: { id: rallyId },
-      select: { videoId: true, video: { select: { userId: true, matchAnalysisJson: true } } },
-    });
-    if (!rally || rally.video.userId !== userId) throw new NotFoundError('Rally', rallyId);
-
-    const json: any = rally.video.matchAnalysisJson ?? { rallies: [] };
-    const entry = (json.rallies ?? []).find((r: any) => r.rallyId === rallyId);
-    const wasLocked = entry?.canonicalLocked === true;
-
-    if (wasLocked) {
-      entry.canonicalLocked = false;
-      await tx.video.update({
-        where: { id: rally.videoId },
-        data: { matchAnalysisJson: json },
-      });
-    }
-
-    return { rallyId, wasLocked, unlockedAt: new Date() };
   });
 }
 
@@ -319,10 +263,6 @@ export async function mergeRallies(
 
     const [a, b] = [...raw].sort((x, y) => x.startMs - y.startMs);
     if (b.startMs < a.endMs) throw new RalliesOverlapError(rallyIds);
-
-    // Lock gate on both
-    await assertNotLocked(tx, a.id, 'MERGE');
-    await assertNotLocked(tx, b.id, 'MERGE');
 
     // PlayerTrack state gate on both
     for (const r of [a, b]) {
@@ -357,7 +297,7 @@ export async function mergeRallies(
     const aEntry = (json.rallies ?? []).find((r: any) => r.rallyId === a.id);
     json.rallies = (json.rallies ?? []).filter((r: any) => r.rallyId !== a.id && r.rallyId !== b.id);
     json.rallies.push({
-      rallyId: merged.id, canonicalLocked: false,
+      rallyId: merged.id,
       trackToPlayer: aEntry?.trackToPlayer ?? {},
       assignmentConfidence: null, serverPlayerId: null,
     });

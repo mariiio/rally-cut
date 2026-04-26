@@ -9,10 +9,6 @@ export type ErrorCode =
   | "LIMIT_EXCEEDED"
   | "CONFLICT"
   | "INTERNAL_ERROR"
-  | "LOCKED_RALLY_CANNOT_EXTEND"
-  | "LOCKED_RALLY_CANNOT_SPLIT"
-  | "LOCKED_RALLY_CANNOT_MERGE"
-  | "LOCKED_RALLY_REQUIRES_CONFIRM"
   | "RALLY_TRACKING_IN_PROGRESS"
   | "RALLY_TRACKING_FAILED"
   | "RALLIES_OVERLAP"
@@ -96,32 +92,6 @@ export class AccessDeniedError extends AppError {
       ownerName,
       hasPendingRequest,
     });
-  }
-}
-
-type LockedOp = "EXTEND" | "SPLIT" | "MERGE";
-
-export class LockedRallyError extends AppError {
-  constructor(op: LockedOp, rallyId: string) {
-    super(
-      `LOCKED_RALLY_CANNOT_${op}` as ErrorCode,
-      `Rally '${rallyId}' is canonical-locked; ${op.toLowerCase()} is not allowed. Unlock the rally first.`,
-      409,
-      { rallyId, op }
-    );
-    this.name = "LockedRallyError";
-  }
-}
-
-export class LockedRallyRequiresConfirmError extends AppError {
-  constructor(rallyId: string, gtFrameCount: number) {
-    super(
-      "LOCKED_RALLY_REQUIRES_CONFIRM",
-      `Rally '${rallyId}' is canonical-locked with ${gtFrameCount} GT frames. Pass {confirmUnlock: true} to proceed.`,
-      409,
-      { rallyId, gtFrameCount }
-    );
-    this.name = "LockedRallyRequiresConfirmError";
   }
 }
 

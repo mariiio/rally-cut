@@ -4,7 +4,6 @@ import { NotFoundError, ValidationError } from "../middleware/errorHandler.js";
 import type { BatchOperation, BatchResponse } from "../schemas/batch.js";
 import { reindexTrackingData } from "./playerTrackingService.js";
 import { markRetrackIfExtended } from "./batchTrackingService.js";
-import { isRallyLocked } from "./canonicalLockGuard.js";
 import { appendEdit } from "./pendingAnalysisEdits.js";
 
 export async function processBatch(
@@ -116,6 +115,14 @@ export async function processBatch(
               { startMs: rally.startMs, endMs: rally.endMs },
               { startMs: op.data.startMs ?? rally.startMs, endMs: op.data.endMs ?? rally.endMs },
             );
+            // Queue a pending edit so the next match-analysis run rebuilds
+            // matchAnalysisJson. Without this, the null'd JSON above stays
+            // null until something else (refCrop edit, manual re-analyze)
+            // happens to retrigger.
+            const newStart = op.data.startMs ?? rally.startMs;
+            const newEnd = op.data.endMs ?? rally.endMs;
+            const extended = newStart < rally.startMs || newEnd > rally.endMs;
+            await appendEdit(tx, rally.videoId, op.id, extended ? 'extend' : 'shorten');
           }
         } else if (op.entity === "highlight") {
           const highlight = await tx.highlight.findFirst({
@@ -151,11 +158,6 @@ export async function processBatch(
           });
           if (rally === null) {
             throw new ValidationError(`Rally ${op.id} not found in session`);
-          }
-          if (await isRallyLocked(tx, op.id)) {
-            throw new ValidationError(
-              `Rally ${op.id} is canonical-locked and cannot be deleted via batch. Use DELETE /v1/rallies/:id with {confirmUnlock: true}.`,
-            );
           }
           await tx.rally.delete({ where: { id: op.id } });
           await appendEdit(tx, rally.videoId, op.id, 'delete');

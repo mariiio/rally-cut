@@ -2,13 +2,13 @@ import 'dotenv/config';
 import { afterEach, describe, expect, it } from 'vitest';
 import { prisma } from '../src/lib/prisma';
 import { splitRally } from '../src/services/rallyService';
-import { LockedRallyError, RallyTrackingStateError, SplitBoundsError } from '../src/middleware/errorHandler';
+import { RallyTrackingStateError, SplitBoundsError } from '../src/middleware/errorHandler';
 
 const userId = '11111111-1111-1111-1111-000000000b11';
 const videoId = '22222222-2222-2222-2222-000000000b11';
 const rallyId = '33333333-3333-3333-3333-000000000b11';
 
-async function setupRally(opts: { locked?: boolean; trackStatus?: 'COMPLETED' | 'PROCESSING' | 'FAILED' | 'NONE' } = {}) {
+async function setupRally(opts: { trackStatus?: 'COMPLETED' | 'PROCESSING' | 'FAILED' | 'NONE' } = {}) {
   await prisma.playerTrack.deleteMany({ where: { rallyId } });
   await prisma.rally.deleteMany({ where: { videoId } });
   await prisma.video.deleteMany({ where: { id: videoId } });
@@ -21,7 +21,7 @@ async function setupRally(opts: { locked?: boolean; trackStatus?: 'COMPLETED' | 
       matchAnalysisJson: {
         videoId, numRallies: 1,
         rallies: [{
-          rallyId, canonicalLocked: opts.locked === true,
+          rallyId,
           trackToPlayer: { '1': 1 }, assignmentConfidence: 0.9, serverPlayerId: 1,
         }],
       },
@@ -91,7 +91,6 @@ describe('splitRally', () => {
     const v = await prisma.video.findUnique({ where: { id: videoId } });
     const rallies = (v!.matchAnalysisJson as any).rallies;
     expect(rallies.map((r: any) => r.rallyId).sort()).toEqual([firstRally.id, secondRally.id].sort());
-    expect(rallies.every((r: any) => r.canonicalLocked === false)).toBe(true);
     expect(rallies.every((r: any) => JSON.stringify(r.trackToPlayer) === JSON.stringify({ '1': 1 }))).toBe(true);
 
     // pendingAnalysisEdits has 2 split entries
@@ -103,14 +102,6 @@ describe('splitRally', () => {
     const { firstRally, secondRally } = await splitRally(rallyId, userId, { firstEndMs: 4000, secondStartMs: 6000 });
     expect(await prisma.playerTrack.findUnique({ where: { rallyId: firstRally.id } })).toBeNull();
     expect(await prisma.playerTrack.findUnique({ where: { rallyId: secondRally.id } })).toBeNull();
-  });
-
-  it('rejects split on locked rally', async () => {
-    await setupRally({ locked: true, trackStatus: 'COMPLETED' });
-    await expect(splitRally(rallyId, userId, { firstEndMs: 4000, secondStartMs: 6000 }))
-      .rejects.toBeInstanceOf(LockedRallyError);
-    // Parent still present
-    expect(await prisma.rally.findUnique({ where: { id: rallyId } })).not.toBeNull();
   });
 
   it('rejects split on PROCESSING PlayerTrack', async () => {

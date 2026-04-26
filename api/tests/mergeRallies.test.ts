@@ -2,14 +2,14 @@ import 'dotenv/config';
 import { afterEach, describe, expect, it } from 'vitest';
 import { prisma } from '../src/lib/prisma';
 import { mergeRallies } from '../src/services/rallyService';
-import { RalliesOverlapError, LockedRallyError } from '../src/middleware/errorHandler';
+import { RalliesOverlapError } from '../src/middleware/errorHandler';
 
 const userId = '11111111-1111-1111-1111-000000000b12';
 const videoId = '22222222-2222-2222-2222-000000000b12';
 const rallyA = '33333333-3333-3333-3333-000000000b1a';
 const rallyB = '33333333-3333-3333-3333-000000000b1b';
 
-async function setup(opts: { gap?: boolean; lockB?: boolean } = {}) {
+async function setup(opts: { gap?: boolean } = {}) {
   await prisma.playerTrack.deleteMany({ where: { rally: { videoId } } });
   await prisma.rally.deleteMany({ where: { videoId } });
   await prisma.video.deleteMany({ where: { id: videoId } });
@@ -22,8 +22,8 @@ async function setup(opts: { gap?: boolean; lockB?: boolean } = {}) {
       matchAnalysisJson: {
         videoId, numRallies: 2,
         rallies: [
-          { rallyId: rallyA, canonicalLocked: false, trackToPlayer: { '1': 1 }, assignmentConfidence: 0.9 },
-          { rallyId: rallyB, canonicalLocked: opts.lockB === true, trackToPlayer: { '1': 1 }, assignmentConfidence: 0.9 },
+          { rallyId: rallyA, trackToPlayer: { '1': 1 }, assignmentConfidence: 0.9 },
+          { rallyId: rallyB, trackToPlayer: { '1': 1 }, assignmentConfidence: 0.9 },
         ],
       },
     },
@@ -81,11 +81,6 @@ describe('mergeRallies', () => {
     expect(rally.startMs).toBe(0);
     expect(rally.endMs).toBe(10000);
     expect(await prisma.playerTrack.findUnique({ where: { rallyId: rally.id } })).toBeNull();
-  });
-
-  it('rejects when either input is locked', async () => {
-    await setup({ lockB: true });
-    await expect(mergeRallies([rallyA, rallyB], userId)).rejects.toBeInstanceOf(LockedRallyError);
   });
 
   it('rejects overlapping rallies', async () => {

@@ -6,7 +6,6 @@ import { reindexTrackingData } from "./playerTrackingService.js";
 import { markRetrackIfExtended } from "./batchTrackingService.js";
 import { canAccessSession } from "./shareService.js";
 import { getUserTier, getTierLimits } from "./tierService.js";
-import { isRallyLocked } from "./canonicalLockGuard.js";
 import { appendEdit } from "./pendingAnalysisEdits.js";
 
 /**
@@ -163,6 +162,13 @@ export async function syncState(
                   { startMs: existing.startMs, endMs: existing.endMs },
                   { startMs: rally.startMs, endMs: rally.endMs },
                 );
+                // Queue a pending edit so the next match-analysis run rebuilds
+                // matchAnalysisJson (which the reindexedVideoIds branch below
+                // nulls). Without this, the null'd JSON stays null until a
+                // refCrop edit or manual re-analyze happens to retrigger.
+                const extended =
+                  rally.startMs < existing.startMs || rally.endMs > existing.endMs;
+                await appendEdit(tx, videoId, rally.id, extended ? 'extend' : 'shorten');
               }
             }
             rallyId = rally.id;
@@ -269,12 +275,6 @@ export async function syncState(
         const toDelete = [...existingRallies.keys()].filter((id) => !seenIds.has(id));
         if (toDelete.length > 0) {
           for (const id of toDelete) {
-            // Lock guard: sync-state can't confirm-unlock → reject
-            if (await isRallyLocked(tx, id)) {
-              throw new ValidationError(
-                `Rally ${id} is canonical-locked and cannot be deleted via sync-state. Use DELETE /v1/rallies/:id with {confirmUnlock: true}.`,
-              );
-            }
             // Capture videoId before delete for the edit marker
             const rally = await tx.rally.findUnique({ where: { id }, select: { videoId: true } });
             await tx.rally.delete({ where: { id } });
