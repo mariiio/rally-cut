@@ -26,6 +26,7 @@ import { LabelingModeBanner } from './LabelingModeBanner';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { canonicalRallyMapFor } from '@/utils/canonicalPid';
 import { rallyMatchEntry } from '@/utils/gtLabelDisplay';
+import { effectiveTeamAssignments } from '@/utils/teamAssignments';
 import { AspectRatio } from '@/constants/enums';
 
 /** Binary search: find the rally containing the given time (O(log n)).
@@ -955,7 +956,7 @@ export function VideoPlayer() {
               videoRef={videoRef}
               containerRef={videoContainerRef}
               fps={activeMatch?.video?.fps ?? 30}
-              teamAssignments={showCourtDebugOverlay ? playerTracks[currentRally._backendId]!.tracksJson!.actions?.teamAssignments : undefined}
+              teamAssignments={showCourtDebugOverlay ? effectiveTeamAssignments(playerTracks[currentRally._backendId]!.tracksJson!.actions) : undefined}
               labelingPlayerNumbers={labelingPlayerNumbers}
             />
           )}

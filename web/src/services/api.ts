@@ -2594,6 +2594,19 @@ export interface MatchAnalysis {
     sourceRefCropsSha: string;
     rallies: Record<string, Record<string, number>>;
   } | null;
+  /// Video-wide pid→team mapping derived by per-pid majority vote across
+  /// rallies. Written by compute-match-stats. `valid: false` means the
+  /// vote could not commit (no 2-and-2 partition or any per-pid confidence
+  /// below 0.5); consumers should fall back to per-rally `teamAssignments`.
+  mergedTeamIdentity?: {
+    version: 1;
+    pidTeams: Record<string, 'A' | 'B'>;
+    perPidConfidence: Record<string, number>;
+    partition: number[][];
+    valid: boolean;
+    totalRalliesVoting: number;
+    source: 'majority_vote';
+  };
 }
 
 /**

@@ -15,8 +15,9 @@ import {
   CircularProgress,
   ToggleButton,
   ToggleButtonGroup,
+  Tooltip,
 } from '@mui/material';
-import type { MatchStats } from '@/services/api';
+import type { MatchAnalysis, MatchStats } from '@/services/api';
 import { getMatchStatsApi, getMatchAnalysis } from '@/services/api';
 import { useEditorStore } from '@/stores/editorStore';
 import CourtHeatmap from '@/components/CourtHeatmap';
@@ -104,7 +105,15 @@ function TeamStatsTable({ stats }: { stats: MatchStats }) {
   );
 }
 
-function PlayerStatsTable({ stats, playerNames }: { stats: MatchStats; playerNames: Record<string, string> }) {
+function PlayerStatsTable({
+  stats,
+  playerNames,
+  mergedTeamIdentity,
+}: {
+  stats: MatchStats;
+  playerNames: Record<string, string>;
+  mergedTeamIdentity?: MatchAnalysis['mergedTeamIdentity'];
+}) {
   const players = stats.playerStats.filter((p) => p.totalActions > 0);
   if (players.length === 0) return null;
 
@@ -130,15 +139,32 @@ function PlayerStatsTable({ stats, playerNames }: { stats: MatchStats; playerNam
           <TableBody>
             {players.map((p) => {
               const name = playerNames[String(p.playerId)];
+              // Surface per-pid majority-vote confidence when present.
+              // Low confidence (< 0.7) gets a subtle visual cue + tooltip
+              // so the user knows to sanity-check the team binding.
+              const confidence =
+                mergedTeamIdentity?.valid
+                  ? mergedTeamIdentity.perPidConfidence[String(p.playerId)]
+                  : undefined;
+              const lowConfidence = confidence != null && confidence < 0.7;
+              const chipLabel = name || `P${p.playerId}`;
+              const tooltipText =
+                confidence != null
+                  ? `Team ${p.team} — majority vote across ${mergedTeamIdentity?.totalRalliesVoting ?? 0} rallies (${(confidence * 100).toFixed(0)}% agreement)`
+                  : '';
+              const chip = (
+                <Chip
+                  label={chipLabel}
+                  size="small"
+                  color={p.team === 'A' ? 'primary' : p.team === 'B' ? 'secondary' : 'default'}
+                  variant={lowConfidence ? 'outlined' : 'filled'}
+                  sx={{ height: 18, fontSize: '0.65rem' }}
+                />
+              );
               return (
               <TableRow key={p.playerId}>
                 <TableCell>
-                  <Chip
-                    label={name || `P${p.playerId}`}
-                    size="small"
-                    color={p.team === 'A' ? 'primary' : p.team === 'B' ? 'secondary' : 'default'}
-                    sx={{ height: 18, fontSize: '0.65rem' }}
-                  />
+                  {tooltipText ? <Tooltip title={tooltipText}>{chip}</Tooltip> : chip}
                 </TableCell>
                 <TableCell align="center">{p.serves || '-'}</TableCell>
                 <TableCell align="center">{p.receives || '-'}</TableCell>
@@ -273,6 +299,9 @@ function LandingHeatmapSection({ stats }: { stats: MatchStats }) {
 export function MatchStatsPanel() {
   const [stats, setStats] = useState<MatchStats | null>(null);
   const [playerNames, setPlayerNames] = useState<Record<string, string>>({});
+  const [mergedTeamIdentity, setMergedTeamIdentity] = useState<
+    MatchAnalysis['mergedTeamIdentity']
+  >(undefined);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const activeMatchId = useEditorStore((s) => s.activeMatchId);
@@ -290,6 +319,7 @@ export function MatchStatsPanel() {
       // Extract player names from matchAnalysisJson
       const names = (analysis as Record<string, unknown> | null)?.playerNames as Record<string, string> | undefined;
       setPlayerNames(names ?? {});
+      setMergedTeamIdentity(analysis?.mergedTeamIdentity);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load stats');
     } finally {
@@ -341,7 +371,7 @@ export function MatchStatsPanel() {
       <Divider sx={{ my: 1 }} />
       <TeamStatsTable stats={stats} />
       <Divider sx={{ my: 1 }} />
-      <PlayerStatsTable stats={stats} playerNames={playerNames} />
+      <PlayerStatsTable stats={stats} playerNames={playerNames} mergedTeamIdentity={mergedTeamIdentity} />
       {stats.landingHeatmaps && (
         <>
           <Divider sx={{ my: 1 }} />
