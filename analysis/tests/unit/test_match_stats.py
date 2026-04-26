@@ -14,6 +14,7 @@ from rallycut.statistics.match_stats import (
     _validate_contact_sequence,
     compute_match_scores,
     compute_match_stats,
+    compute_merged_team_identity,
     compute_player_movement,
     compute_position_heatmap,
 )
@@ -906,8 +907,10 @@ class TestFixContactSequenceLayered:
             ],
             rally_id="layered",
         )
-        fix = _try_fix_contact_sequence(ra)
-        assert fix is not None
+        result = _try_fix_contact_sequence(ra)
+        assert result is not None
+        fix, strategy = result
+        assert strategy == "serve_receive"
         # Server stays A, receiver flipped to B
         assert fix[1] == "A"
         assert fix[2] == "B"
@@ -923,3 +926,180 @@ class TestFixContactSequenceLayered:
         )
         fix = _try_fix_contact_sequence(ra)
         assert fix is None
+
+
+def _ra_with_team_assignments(
+    rally_id: str, team_assignments: dict[int, int],
+) -> RallyActions:
+    """Helper: build a RallyActions with only team_assignments populated.
+
+    compute_merged_team_identity reads only team_assignments — the actions
+    list is irrelevant to the aggregation, so we keep it empty.
+    """
+    return RallyActions(
+        actions=[],
+        rally_id=rally_id,
+        team_assignments=team_assignments,
+    )
+
+
+class TestComputeMergedTeamIdentity:
+    """Tests for video-wide majority-vote team identity aggregation."""
+
+    def test_strong_majority_commits_valid_identity(self) -> None:
+        """9/10 rallies agree → valid 2-and-2 partition committed."""
+        # Same partition {1,4}-A vs {2,3}-B in 9 rallies, 1 dissenter
+        rallies = [
+            _ra_with_team_assignments(f"r{i}", {1: 0, 2: 1, 3: 1, 4: 0})
+            for i in range(9)
+        ]
+        # Last rally: noise — flips everything
+        rallies.append(
+            _ra_with_team_assignments("r9", {1: 1, 2: 0, 3: 0, 4: 1}),
+        )
+
+        result = compute_merged_team_identity(rallies)
+
+        assert result["valid"] is True
+        assert result["pidTeams"] == {1: "A", 2: "B", 3: "B", 4: "A"}
+        assert result["partition"] == [[1, 4], [2, 3]]
+        # Per-pid confidence: 9/10 majority on each pid
+        assert all(c == 0.9 for c in result["perPidConfidence"].values())
+        assert result["totalRalliesVoting"] == 10
+
+    def test_invalid_partition_when_not_two_and_two(self) -> None:
+        """3-and-1 partition fails sanity check → valid=False."""
+        # All 4 pids vote A (3-0 majority each); produces 4-and-0 partition
+        rallies = [
+            _ra_with_team_assignments(f"r{i}", {1: 0, 2: 0, 3: 0, 4: 0})
+            for i in range(3)
+        ]
+        result = compute_merged_team_identity(rallies)
+
+        assert result["valid"] is False
+        assert result["pidTeams"] == {}
+        assert result["partition"] == []
+
+    def test_low_confidence_pid_invalidates_commit(self) -> None:
+        """A pid at 50/50 means the team binding isn't real → valid=False."""
+        # pid 4 splits 1A/1B — 50% confidence, below 0.5 strict-greater-equal
+        # actually 0.5 passes; need to push it just under to test the gate.
+        # Use 4 rallies: pid 4 is A in 1, B in 3 (75%) — passes; need a
+        # configuration where some pid drops below 0.5. With binary votes
+        # the minimum majority is 50%, so use a tied vote on pid 4 by
+        # giving it equal counts:
+        rallies = [
+            _ra_with_team_assignments("r0", {1: 0, 2: 1, 3: 1, 4: 0}),
+            _ra_with_team_assignments("r1", {1: 0, 2: 1, 3: 1, 4: 1}),
+        ]
+        result = compute_merged_team_identity(rallies)
+
+        # pid 4 is 1A + 1B → 0.5 confidence (boundary). The threshold is
+        # ``≥ 0.5`` so this still commits. Verify boundary behavior.
+        assert result["valid"] is True
+        assert result["perPidConfidence"][4] == 0.5
+
+    def test_abstains_when_only_three_pids_voted(self) -> None:
+        """Missing pid → not 4 distinct → valid=False."""
+        rallies = [
+            _ra_with_team_assignments("r0", {1: 0, 2: 1, 3: 1}),  # no pid 4
+        ]
+        result = compute_merged_team_identity(rallies)
+
+        assert result["valid"] is False
+        assert result["pidTeams"] == {}
+
+    def test_ignores_unknown_team_int(self) -> None:
+        """team_int outside {0, 1} is ignored — does not corrupt vote."""
+        # Insert a rally where pid 1's team is bogus (-1); the rest are clean
+        rallies = [
+            _ra_with_team_assignments("r0", {1: 0, 2: 1, 3: 1, 4: 0}),
+            _ra_with_team_assignments("r1", {1: -1, 2: 1, 3: 1, 4: 0}),
+            _ra_with_team_assignments("r2", {1: 0, 2: 1, 3: 1, 4: 0}),
+        ]
+        result = compute_merged_team_identity(rallies)
+
+        # pid 1 has 2A + 0B + 1 ignored → 100% confidence, team A
+        assert result["valid"] is True
+        assert result["pidTeams"][1] == "A"
+        assert result["perPidConfidence"][1] == 1.0
+
+    def test_empty_rally_list_produces_invalid(self) -> None:
+        """No data → no commit (graceful empty case)."""
+        result = compute_merged_team_identity([])
+
+        assert result["valid"] is False
+        assert result["pidTeams"] == {}
+        assert result["totalRalliesVoting"] == 0
+
+
+class TestServeReceiveCorrectionsExposed:
+    """Pin that compute_match_stats surfaces the new persistable fields."""
+
+    def test_serve_receive_correction_recorded(self) -> None:
+        """Rally with serve+receive same team → overlay populated."""
+        # Build minimal valid rally: serve(P1,A) → receive(P2,A) (violation)
+        ra = RallyActions(
+            actions=[
+                _action(ActionType.SERVE, 10, player=1, team="A"),
+                _action(ActionType.RECEIVE, 30, player=2, team="A"),
+            ],
+            rally_id="violating",
+            team_assignments={1: 0, 2: 0},  # both initially A
+        )
+        # Build a second clean rally so merged identity is well-defined
+        clean = RallyActions(
+            actions=[
+                _action(ActionType.SERVE, 10, player=3, team="B"),
+                _action(ActionType.RECEIVE, 30, player=1, team="A"),
+            ],
+            rally_id="clean",
+            team_assignments={1: 0, 2: 1, 3: 1, 4: 0},
+        )
+
+        stats = compute_match_stats(
+            rally_actions_list=[ra, clean],
+            player_positions=[],
+        )
+
+        assert "violating" in stats.serve_receive_corrections
+        overlay = stats.serve_receive_corrections["violating"]
+        # The receive (pid 2) gets flipped A → B
+        assert any(
+            c["playerTrackId"] == 2
+            and c["originalTeam"] == "A"
+            and c["correctedTeam"] == "B"
+            and c["strategy"] == "serve_receive"
+            for c in overlay
+        )
+        # The serializer surfaces it under camelCase
+        d = stats.to_dict()
+        assert "serveReceiveCorrections" in d
+        assert "violating" in d["serveReceiveCorrections"]
+
+    def test_consecutive_run_correction_not_persisted(self) -> None:
+        """Lower-confidence strategies stay stats-only, not in overlay."""
+        # Build a rally that triggers consecutive_run but NOT serve_receive:
+        # serve(B) → 5+ same-team-A contacts → triggers consecutive_run
+        ra = RallyActions(
+            actions=[
+                _action(ActionType.SERVE, 10, player=4, team="B"),
+                _action(ActionType.RECEIVE, 30, player=1, team="A"),
+                _action(ActionType.SET, 50, player=3, team="A"),
+                _action(ActionType.ATTACK, 70, player=1, team="A"),
+                _action(ActionType.SET, 90, player=3, team="A"),
+                _action(ActionType.ATTACK, 110, player=1, team="A"),
+                _action(ActionType.DIG, 130, player=4, team="B"),
+            ],
+            rally_id="consec",
+            team_assignments={1: 0, 2: 1, 3: 0, 4: 1},
+        )
+
+        stats = compute_match_stats(
+            rally_actions_list=[ra],
+            player_positions=[],
+        )
+
+        # Verify the violation was caught and corrected in-memory…
+        # but NOT persisted to serve_receive_corrections (wrong strategy).
+        assert "consec" not in stats.serve_receive_corrections

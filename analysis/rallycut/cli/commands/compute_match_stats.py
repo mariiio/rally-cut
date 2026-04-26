@@ -287,6 +287,20 @@ def compute_match_stats_cmd(
 
     result = stats.to_dict()
 
+    # Persist serve-receive corrections back to per-rally actions_json so
+    # the web editor reads the corrected team labels (the source-of-truth
+    # ``team`` field stays untouched — corrections live in overlay fields
+    # ``teamCorrected`` per action + ``correctionsApplied`` audit list).
+    # And persist the video-wide majority-vote team identity into
+    # ``videos.match_analysis_json.mergedTeamIdentity`` so future consumers
+    # have a single, confidence-scored source of truth.
+    _persist_corrections_and_identity(
+        video_id=video_id,
+        serve_receive_corrections=stats.serve_receive_corrections,
+        merged_team_identity=stats.merged_team_identity,
+        quiet=quiet,
+    )
+
     if output:
         with open(output, "w") as f:
             json.dump(result, f, indent=2)
@@ -308,3 +322,103 @@ def compute_match_stats_cmd(
                 f"  Team {ts.team}: {ts.kills}K/{ts.attack_errors}E "
                 f"({ts.kill_pct:.0%} kill%), {ts.aces} aces"
             )
+
+
+def _persist_corrections_and_identity(
+    video_id: str,
+    serve_receive_corrections: dict[str, list[dict[str, Any]]],
+    merged_team_identity: dict[str, Any],
+    quiet: bool,
+) -> None:
+    """Write high-confidence team corrections + merged identity back to DB.
+
+    Called after ``compute_match_stats`` returns. Two updates:
+
+    1. For each rally with serve_receive corrections, RMW
+       ``player_tracks.actions_json`` to add per-action ``teamCorrected``
+       overlay + ``correctionsApplied`` audit list. The raw ``team`` field
+       is preserved (corrections are an overlay, not a mutation).
+    2. RMW ``videos.match_analysis_json`` to add ``mergedTeamIdentity``
+       (always — even an invalid identity carries useful diagnostic data).
+
+    Both writes are wrapped in a single transaction so partial failure
+    leaves the DB consistent. RMW races are not a concern here:
+    ``compute_match_stats`` is the last stage of ``runMatchAnalysis`` which
+    is itself in-memory-guarded against parallel runs per video
+    (matchAnalysisService.ts:158).
+    """
+    from rallycut.evaluation.db import get_connection
+
+    if not serve_receive_corrections and not merged_team_identity:
+        return
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # 1) Per-rally actions_json overlay
+            for rally_id, overlay in serve_receive_corrections.items():
+                cur.execute(
+                    "SELECT actions_json FROM player_tracks "
+                    "WHERE rally_id = %s",
+                    [rally_id],
+                )
+                row = cur.fetchone()
+                if row is None or row[0] is None:
+                    continue
+                actions_data = row[0]
+                if not isinstance(actions_data, dict):
+                    continue
+
+                # Index overlay by (frame, playerTrackId) for O(1) lookup
+                overlay_index = {
+                    (int(c["frame"]), int(c["playerTrackId"])): c
+                    for c in overlay
+                }
+
+                actions_list = actions_data.get("actions", [])
+                if not isinstance(actions_list, list):
+                    continue
+
+                for action in actions_list:
+                    key = (
+                        int(action.get("frame", -1)),
+                        int(action.get("playerTrackId", -1)),
+                    )
+                    if key in overlay_index:
+                        action["teamCorrected"] = (
+                            overlay_index[key]["correctedTeam"]
+                        )
+
+                actions_data["correctionsApplied"] = overlay
+                cur.execute(
+                    "UPDATE player_tracks SET actions_json = %s "
+                    "WHERE rally_id = %s",
+                    [json.dumps(actions_data), rally_id],
+                )
+
+            # 2) Video-wide merged team identity
+            if merged_team_identity:
+                cur.execute(
+                    "SELECT match_analysis_json FROM videos WHERE id = %s",
+                    [video_id],
+                )
+                row = cur.fetchone()
+                if row is not None and row[0] is not None:
+                    ma_data = row[0]
+                    if isinstance(ma_data, dict):
+                        ma_data["mergedTeamIdentity"] = merged_team_identity
+                        cur.execute(
+                            "UPDATE videos SET match_analysis_json = %s "
+                            "WHERE id = %s",
+                            [json.dumps(ma_data), video_id],
+                        )
+
+        conn.commit()
+
+    if not quiet:
+        n_rally = len(serve_receive_corrections)
+        n_actions = sum(len(v) for v in serve_receive_corrections.values())
+        valid = merged_team_identity.get("valid", False)
+        console.print(
+            f"  Persisted: {n_actions} action corrections across "
+            f"{n_rally} rallies; mergedTeamIdentity valid={valid}"
+        )

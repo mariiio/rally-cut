@@ -433,6 +433,21 @@ class MatchStats:
     video_fps: float = 30.0
     video_width: int = 1920
     video_height: int = 1080
+    # Per-rally serve-receive team corrections (high-confidence overlay
+    # written by ``compute_match_stats`` and persisted to
+    # ``player_tracks.actions_json`` by the CLI). Shape:
+    # ``{rally_id: [{frame, playerTrackId, originalTeam, correctedTeam,
+    # strategy}, ...]}``. Only ``serve_receive``-strategy fixes are
+    # included; lower-confidence strategies are stats-only.
+    serve_receive_corrections: dict[str, list[dict[str, Any]]] = field(
+        default_factory=dict,
+    )
+    # Video-wide pid→team mapping derived by per-pid majority vote across
+    # rallies (replaces last-rally-wins). ``valid=False`` means the vote
+    # could not commit (no 2-and-2 partition or low confidence) and
+    # consumers should fall back to per-rally team labels. See
+    # ``compute_merged_team_identity`` for shape.
+    merged_team_identity: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -459,6 +474,10 @@ class MatchStats:
             d["duoStats"] = [ds.to_dict() for ds in self.duo_stats]
         if self.landing_heatmaps:
             d["landingHeatmaps"] = self.landing_heatmaps
+        if self.serve_receive_corrections:
+            d["serveReceiveCorrections"] = self.serve_receive_corrections
+        if self.merged_team_identity:
+            d["mergedTeamIdentity"] = self.merged_team_identity
         return d
 
 
@@ -1443,7 +1462,86 @@ def _try_fix_track_swap(ra: RallyActions) -> dict[int, str] | None:
     return None
 
 
-def _try_fix_contact_sequence(ra: RallyActions) -> dict[int, str] | None:
+def compute_merged_team_identity(
+    rally_actions_list: list[RallyActions],
+) -> dict[str, Any]:
+    """Aggregate per-rally team labels into a single video-wide pid→team map.
+
+    Uses per-pid majority vote across rallies (rather than the legacy
+    last-rally-wins ``dict.update`` aggregation, which silently overrides 9
+    correct rallies with 1 noisy one). Validates a 2-and-2 partition (exactly
+    2 pids on team A and 2 on team B) — beach volleyball's structural
+    invariant. When the vote produces an invalid partition or low confidence,
+    sets ``valid=False`` so downstream consumers fall back to per-rally
+    labels rather than commit a poisoned identity.
+
+    The aggregation is partnership-implicit: per-pid majority votes converge
+    to the correct team labels even across side switches, because the
+    underlying physical-player→team binding is invariant while the per-rally
+    side-class can drift.
+
+    Returns dict with shape::
+
+        {
+            "version": 1,
+            "pidTeams": {1: "A", 2: "B", 3: "B", 4: "A"} | {},
+            "perPidConfidence": {1: 0.9, 2: 0.7, ...} | {},
+            "partition": [[1, 4], [2, 3]] | [],   # the two teams as lists
+            "valid": bool,                         # 2-and-2 sanity passed
+            "totalRalliesVoting": int,
+            "source": "majority_vote",
+        }
+
+    ``valid=True`` requires: (a) exactly 4 pids voted, (b) majority partition
+    splits 2-and-2, (c) every pid's per-pid confidence is ≥ 0.5 (otherwise
+    the underlying signal is noise-dominated and the commit would be unsafe).
+    """
+    # Collect per-pid team votes: pid -> {0: count_team_A, 1: count_team_B}.
+    # team_assignments stores team as int (0=A, 1=B); we keep the int form
+    # for counting and translate to "A"/"B" only at the end.
+    pid_votes: dict[int, dict[int, int]] = {}
+    for ra in rally_actions_list:
+        for pid, team_int in ra.team_assignments.items():
+            if team_int not in (0, 1):
+                continue
+            pid_votes.setdefault(int(pid), {0: 0, 1: 0})
+            pid_votes[int(pid)][int(team_int)] += 1
+
+    total_voting_rallies = len(rally_actions_list)
+
+    pid_teams: dict[int, str] = {}
+    per_pid_conf: dict[int, float] = {}
+    for pid, votes in pid_votes.items():
+        total = votes[0] + votes[1]
+        if total == 0:
+            continue
+        majority_team_int = 0 if votes[0] >= votes[1] else 1
+        confidence = max(votes[0], votes[1]) / total
+        pid_teams[pid] = "A" if majority_team_int == 0 else "B"
+        per_pid_conf[pid] = round(confidence, 3)
+
+    # 2-and-2 partition validity: exactly 4 pids voted AND majority splits 2-2.
+    team_a_pids = sorted(p for p, t in pid_teams.items() if t == "A")
+    team_b_pids = sorted(p for p, t in pid_teams.items() if t == "B")
+    has_four_pids = len(pid_teams) == 4
+    is_two_and_two = len(team_a_pids) == 2 and len(team_b_pids) == 2
+    all_confident = all(c >= 0.5 for c in per_pid_conf.values())
+    valid = has_four_pids and is_two_and_two and all_confident
+
+    return {
+        "version": 1,
+        "pidTeams": pid_teams if valid else {},
+        "perPidConfidence": per_pid_conf if valid else {},
+        "partition": [team_a_pids, team_b_pids] if valid else [],
+        "valid": valid,
+        "totalRalliesVoting": total_voting_rallies,
+        "source": "majority_vote",
+    }
+
+
+def _try_fix_contact_sequence(
+    ra: RallyActions,
+) -> tuple[dict[int, str], str] | None:
     """Try to fix an invalid contact sequence using layered strategies.
 
     Strategies are tried in order of confidence:
@@ -1452,13 +1550,24 @@ def _try_fix_contact_sequence(ra: RallyActions) -> dict[int, str] | None:
     3. Track swap — swap one cross-team track pair (original approach)
 
     Returns:
-        Corrected {track_id: team_label} mapping, or None if no fix found.
+        ``(team_map, strategy_name)`` where ``strategy_name`` identifies which
+        sub-fixer produced the result (``"serve_receive"``,
+        ``"consecutive_run"``, or ``"track_swap"``). Strategy provenance lets
+        downstream consumers gate persistence on confidence: only
+        ``serve_receive`` is rule-derived (math-certain), the other two are
+        heuristic guesses suitable for in-memory stats only. ``None`` when no
+        fix is found.
     """
-    return (
-        _try_fix_serve_receive(ra)
-        or _try_fix_consecutive_run(ra)
-        or _try_fix_track_swap(ra)
-    )
+    fix = _try_fix_serve_receive(ra)
+    if fix is not None:
+        return fix, "serve_receive"
+    fix = _try_fix_consecutive_run(ra)
+    if fix is not None:
+        return fix, "consecutive_run"
+    fix = _try_fix_track_swap(ra)
+    if fix is not None:
+        return fix, "track_swap"
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -1932,11 +2041,6 @@ def compute_match_stats(
         for player_id, _ in sorted_tracks[:4]:
             all_player_ids.add(player_id)
 
-    # Build a merged team_assignments from all rallies
-    merged_team_assignments: dict[int, int] = {}
-    for ra in rally_actions_list:
-        merged_team_assignments.update(ra.team_assignments)
-
     # Build per-rally assignment confidence from match_analysis
     rally_confidence: dict[str, float] = {}
     if match_analysis and isinstance(match_analysis.get("rallies"), list):
@@ -1953,27 +2057,82 @@ def compute_match_stats(
     # alternation, apply layered fix strategy (serve-receive flip →
     # consecutive-run flip → track swap). Only applies when exactly one
     # fix is unambiguous. Uses volleyball rules, not appearance.
+    #
+    # Strategy provenance: we record only ``serve_receive`` corrections in
+    # ``serve_receive_corrections`` (the high-confidence, math-rule-derived
+    # fixes — serve and receive must be on opposite teams, no exceptions).
+    # The CLI persists these back to ``player_tracks.actions_json`` as
+    # overlay fields so the web UI sees the corrected teams. Lower-confidence
+    # strategies (consecutive_run, track_swap) still apply in-memory for
+    # stats correctness but are NOT persisted — they are heuristic guesses
+    # that need separate validation before they become user-visible.
     corrections_applied = 0
+    serve_receive_corrections: dict[str, list[dict[str, Any]]] = {}
     for ra in rally_actions_list:
         if _validate_contact_sequence(ra) is False:
-            fix = _try_fix_contact_sequence(ra)
-            if fix is not None:
-                # Apply corrected team labels to actions
+            fix_result = _try_fix_contact_sequence(ra)
+            if fix_result is not None:
+                fix_map, strategy = fix_result
+
+                # Build the persistable overlay BEFORE mutating actions, so
+                # ``originalTeam`` reflects the raw model output.
+                if strategy == "serve_receive":
+                    rally_overlay: list[dict[str, Any]] = []
+                    for action in ra.actions:
+                        if action.player_track_id not in fix_map:
+                            continue
+                        new_team = fix_map[action.player_track_id]
+                        if new_team == action.team:
+                            continue
+                        rally_overlay.append({
+                            "frame": int(action.frame),
+                            "playerTrackId": int(action.player_track_id),
+                            "originalTeam": action.team,
+                            "correctedTeam": new_team,
+                            "strategy": strategy,
+                        })
+                    if rally_overlay:
+                        serve_receive_corrections[ra.rally_id] = rally_overlay
+
+                # Apply corrected team labels to actions (in-memory, all
+                # strategies — preserves existing stats-output behavior)
                 for action in ra.actions:
-                    if action.player_track_id in fix:
-                        action.team = fix[action.player_track_id]
+                    if action.player_track_id in fix_map:
+                        action.team = fix_map[action.player_track_id]
                 # Update team_assignments for this rally
-                for tid, team_label in fix.items():
+                for tid, team_label in fix_map.items():
                     ra.team_assignments[tid] = 0 if team_label == "A" else 1
                 corrections_applied += 1
 
     if corrections_applied:
-        # Rebuild merged team assignments after corrections
-        merged_team_assignments.clear()
+        logger.info(
+            "Contact sequence correction: fixed %d rallies (%d serve_receive persisted)",
+            corrections_applied, len(serve_receive_corrections),
+        )
+
+    # Compute video-wide team identity via per-pid majority vote across
+    # rallies (replaces the legacy last-rally-wins ``dict.update`` pattern,
+    # which let a single noisy rally override the consensus). When the vote
+    # is invalid (not 2-and-2, or low confidence on any pid), fall back to
+    # the legacy aggregation so stats labels still get computed — but the
+    # persisted ``mergedTeamIdentity`` payload signals ``valid=False`` so
+    # downstream consumers can choose to abstain rather than commit a
+    # poisoned identity.
+    merged_team_identity = compute_merged_team_identity(rally_actions_list)
+    merged_team_assignments: dict[int, int] = {}
+    if merged_team_identity["valid"]:
+        for pid, team_label in merged_team_identity["pidTeams"].items():
+            merged_team_assignments[int(pid)] = 0 if team_label == "A" else 1
+    else:
+        # Legacy fallback: last-rally-wins. Preserves prior behavior for
+        # stats-label rendering when the majority vote can't commit.
         for ra in rally_actions_list:
             merged_team_assignments.update(ra.team_assignments)
         logger.info(
-            "Contact sequence correction: fixed %d rallies", corrections_applied,
+            "Merged team identity invalid (partition=%s, conf=%s); "
+            "falling back to legacy last-rally-wins for stats labels",
+            merged_team_identity.get("partition"),
+            merged_team_identity.get("perPidConfidence"),
         )
 
     # Compute per-player stats
@@ -2513,6 +2672,11 @@ def compute_match_stats(
             rally_actions_list, stats.rally_stats,
             match_analysis, merged_team_assignments,
         )
+
+    # Surface the persistable corrections + merged identity for the CLI
+    # write-back path.
+    stats.serve_receive_corrections = serve_receive_corrections
+    stats.merged_team_identity = merged_team_identity
 
     logger.info(
         f"Match stats: {stats.total_rallies} rallies, "
