@@ -1882,11 +1882,23 @@ export interface ActionInfo {
   courtSide: string;
   confidence: number;
   team?: string;  // "A" or "B"
+  // High-confidence team correction overlay (rule-derived serve↔receive
+  // opposite-team fix). Read with `teamCorrected ?? team` — raw `team`
+  // is preserved untouched. See compute_match_stats.py for the source.
+  teamCorrected?: string;
   // Play annotations (populated on calibrated videos, may be absent on older rallies)
   actionZone?: number;  // 1-5, player's court-x zone, team-relative
   attackDirection?: 'line' | 'cross' | 'cut';  // on attack actions only
   setOriginZone?: number;  // 1-5, setter's zone at set contact
   setDestZone?: number;    // 1-5, attacker's zone at next attack contact
+}
+
+export interface CorrectionEntry {
+  frame: number;
+  playerTrackId: number;
+  originalTeam: string;
+  correctedTeam: string;
+  strategy: string;  // currently always "serve_receive"
 }
 
 export interface ActionsData {
@@ -1896,6 +1908,10 @@ export interface ActionsData {
   actions: ActionInfo[];
   teamAssignments?: Record<string, string>;  // playerId → "A"|"B"
   servingTeam?: string;
+  // Per-rally audit list of team corrections applied as overlay on
+  // `actions[].teamCorrected`. Only `serve_receive`-strategy fixes are
+  // persisted; lower-confidence strategies stay stats-only.
+  correctionsApplied?: CorrectionEntry[];
 }
 
 export interface QualityReport {
