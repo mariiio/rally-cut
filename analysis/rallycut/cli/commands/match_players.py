@@ -645,18 +645,48 @@ def match_players(
     # are back to original tracker IDs. remap-track-ids will apply fresh.
     rally_entries = []
     for rally, result in zip(rallies, results):
-        rally_entry = {
+        # Strip synthetic sub-track ids from trackToPlayer so old consumers
+        # (which only know real track ids) see a clean mapping. The full
+        # picture is the union of trackToPlayer (real tracks → pid) and
+        # subTracks (parent tid + frame range → pid). When no splits
+        # occurred, sub_tracks_for_rally is [] and the behavior is
+        # byte-identical to the pre-segmentation flow.
+        sub_tracks_for_rally = result.sub_tracks or []
+        sub_track_synth_ids = {s.synthetic_track_id for s in sub_tracks_for_rally}
+        real_track_to_player = {
+            str(k): v for k, v in result.track_to_player.items()
+            if k not in sub_track_synth_ids
+        }
+        rally_entry: dict[str, Any] = {
             "rallyId": rally.rally_id,
             "rallyIndex": result.rally_index,
             "startMs": rally.start_ms,
             "endMs": rally.end_ms,
-            "trackToPlayer": {
-                str(k): v for k, v in result.track_to_player.items()
-            },
+            "trackToPlayer": real_track_to_player,
             "assignmentConfidence": result.assignment_confidence,
             "sideSwitchDetected": result.side_switch_detected,
             "serverPlayerId": result.server_player_id,
         }
+        if sub_tracks_for_rally:
+            # Only emit subTracks for sub-track candidates that won their pid
+            # conflict in `_apply_subtrack_assignments` (synthetic id ended up
+            # in track_to_player). Losers are omitted — their frames will be
+            # written unlabeled by the remap-track-ids pass.
+            sub_track_entries = [
+                {
+                    "syntheticTrackId": s.synthetic_track_id,
+                    "parentTrackId": s.parent_track_id,
+                    "segmentIndex": s.segment_index,
+                    "fStart": s.f_start,
+                    "fEnd": s.f_end,
+                    "pid": result.track_to_player.get(s.synthetic_track_id),
+                    "margin": s.aggregated_margin,
+                }
+                for s in sub_tracks_for_rally
+                if s.synthetic_track_id in result.track_to_player
+            ]
+            if sub_track_entries:
+                rally_entry["subTracks"] = sub_track_entries
         rally_entries.append(rally_entry)
 
     # Serialize team templates

@@ -402,6 +402,14 @@ class RallyTrackingResult:
     server_player_id: int | None  # Player ID who served, if detected
     side_switch_detected: bool
     assignment_confidence: float  # Overall confidence in assignments
+    # Sub-tracks emitted by within-track appearance segmentation (Task 4).
+    # Empty when the track-split flag is off, no classifier is available, or
+    # no segmentation occurred. Used by the CLI to persist `subTracks` in
+    # match_analysis_json so remap-track-ids can apply frame-conditional pid
+    # resolution. Default-empty for backward compatibility — callers that
+    # don't construct sub-tracks (Pass 2 refinement, scratchpad replay) leave
+    # it unset and the field carries forward as `[]`.
+    sub_tracks: list[SubTrackCandidate] = field(default_factory=list)
 
 
 @dataclass
@@ -840,6 +848,7 @@ class MatchPlayerTracker:
             server_player_id=server_player_id,
             side_switch_detected=side_switch_detected,
             assignment_confidence=confidence,
+            sub_tracks=list(sub_tracks),
         )
 
     def _classify_track_sides(
@@ -2127,6 +2136,7 @@ class MatchPlayerTracker:
                         server_player_id=r.server_player_id,
                         side_switch_detected=True,
                         assignment_confidence=r.assignment_confidence,
+                        sub_tracks=r.sub_tracks,
                     )
 
         # Stage 1: Re-score ALL rallies (including rally 0) with final profiles.
@@ -2168,6 +2178,7 @@ class MatchPlayerTracker:
                 server_player_id=initial.server_player_id,
                 side_switch_detected=initial.side_switch_detected,
                 assignment_confidence=confidence,
+                sub_tracks=initial.sub_tracks,
             ))
 
         if changes:
@@ -2353,6 +2364,7 @@ class MatchPlayerTracker:
                         server_player_id=result.server_player_id,
                         side_switch_detected=result.side_switch_detected,
                         assignment_confidence=result.assignment_confidence,
+                        sub_tracks=result.sub_tracks,
                     )
                     swaps += 1
                     logger.info(
@@ -2632,6 +2644,7 @@ def replay_refine_from_scratchpad(
                 server_player_id=r.server_player_id,
                 side_switch_detected=True,
                 assignment_confidence=r.assignment_confidence,
+                sub_tracks=r.sub_tracks,
             )
 
     # Stage 1: re-score every rally with the supplied profiles.
@@ -2656,6 +2669,7 @@ def replay_refine_from_scratchpad(
             server_player_id=init.server_player_id,
             side_switch_detected=init.side_switch_detected,
             assignment_confidence=confidence,
+            sub_tracks=init.sub_tracks,
         ))
 
     # Stage 2: global within-team voting.

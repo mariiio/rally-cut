@@ -380,3 +380,164 @@ def test_per_frame_pid_map_lost_subtrack_leaves_frames_unlabeled():
     # Post-segment frames mapped to pid=1
     assert pf.get((2, 100)) == 1
     assert pf.get((2, 240)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Task 5b: remap-track-ids consumes subTracks from match_analysis_json
+# ---------------------------------------------------------------------------
+
+
+def test_remap_plan_consumes_subtracks_field():
+    """match_analysis rally entry with subTracks builds a plan with overrides."""
+    from rallycut.cli.commands.remap_track_ids import _build_remap_plan_for_rally
+
+    rally_entry = {
+        "trackToPlayer": {"3": 3, "4": 4},  # un-split tracks
+        "subTracks": [
+            {"syntheticTrackId": -1004, "parentTrackId": 2, "segmentIndex": 0,
+             "fStart": 0, "fEnd": 99, "pid": 2, "margin": 0.20},
+            {"syntheticTrackId": -2004, "parentTrackId": 2, "segmentIndex": 1,
+             "fStart": 100, "fEnd": 240, "pid": 1, "margin": 0.40},
+        ],
+    }
+    plan = _build_remap_plan_for_rally(rally_entry)
+    assert plan.flat_mapping == {3: 3, 4: 4}
+    assert len(plan.sub_track_overrides) == 2
+    assert plan.sub_track_overrides[0]["parent_track_id"] == 2
+    assert plan.sub_track_overrides[0]["f_start"] == 0
+    assert plan.sub_track_overrides[0]["f_end"] == 99
+    assert plan.sub_track_overrides[0]["pid"] == 2
+
+
+def test_remap_plan_without_subtracks_field_is_backward_compatible():
+    """Legacy rally entries without subTracks: plan has empty overrides."""
+    from rallycut.cli.commands.remap_track_ids import _build_remap_plan_for_rally
+
+    rally_entry = {"trackToPlayer": {"1": 1, "2": 2, "3": 3, "4": 4}}
+    plan = _build_remap_plan_for_rally(rally_entry)
+    assert plan.flat_mapping == {1: 1, 2: 2, 3: 3, 4: 4}
+    assert plan.sub_track_overrides == []
+
+
+def test_remap_positions_applies_frame_conditional_pid_for_split_track():
+    from rallycut.cli.commands.remap_track_ids import (
+        RallyRemapPlan,
+        _remap_positions,
+    )
+    plan = RallyRemapPlan(
+        flat_mapping={3: 3, 4: 4},
+        sub_track_overrides=[
+            {"parent_track_id": 2, "f_start": 0, "f_end": 99, "pid": 2},
+            {"parent_track_id": 2, "f_start": 100, "f_end": 240, "pid": 1},
+        ],
+    )
+    positions = [
+        {"trackId": 2, "frameNumber": 50},   # pre-segment → pid 2
+        {"trackId": 2, "frameNumber": 150},  # post-segment → pid 1
+        {"trackId": 3, "frameNumber": 0},    # un-split → flat → pid 3
+        {"trackId": 4, "frameNumber": 100},  # un-split → flat → pid 4
+    ]
+    count = _remap_positions(
+        positions, plan.flat_mapping, plan.sub_track_overrides,
+    )
+    assert positions[0]["trackId"] == 2
+    assert positions[1]["trackId"] == 1
+    assert positions[2]["trackId"] == 3
+    assert positions[3]["trackId"] == 4
+    # Position 0 stays at trackId=2 (no change), positions 1/2/3 already at
+    # their mapped pids in flat_mapping (3→3 and 4→4 are identity); only
+    # position 1 (split parent → 1) is a non-identity remap.
+    assert count == 1
+
+
+def test_remap_positions_marks_split_parent_outside_segments_as_unlabeled():
+    from rallycut.cli.commands.remap_track_ids import (
+        UNLABELED_TRACK_ID,
+        RallyRemapPlan,
+        _remap_positions,
+    )
+    plan = RallyRemapPlan(
+        flat_mapping={},
+        sub_track_overrides=[
+            # Only sub-track 1 (post) is in the plan; pre lost the conflict.
+            {"parent_track_id": 2, "f_start": 100, "f_end": 240, "pid": 1},
+        ],
+    )
+    positions = [
+        {"trackId": 2, "frameNumber": 50},   # pre-segment LOST → unlabeled
+        {"trackId": 2, "frameNumber": 150},  # post-segment → pid 1
+    ]
+    _remap_positions(positions, plan.flat_mapping, plan.sub_track_overrides)
+    assert positions[0]["trackId"] == UNLABELED_TRACK_ID
+    assert positions[1]["trackId"] == 1
+
+
+def test_remap_positions_no_overrides_matches_legacy_behavior():
+    """Backward compatibility: no sub_track_overrides → flat mapping only."""
+    from rallycut.cli.commands.remap_track_ids import _remap_positions
+
+    positions = [
+        {"trackId": 5, "frameNumber": 0},
+        {"trackId": 7, "frameNumber": 100},
+    ]
+    n = _remap_positions(positions, {5: 1, 7: 3}, sub_track_overrides=None)
+    assert positions[0]["trackId"] == 1
+    assert positions[1]["trackId"] == 3
+    assert n == 2
+
+
+def test_remap_contacts_applies_frame_conditional_for_split_parent():
+    from rallycut.cli.commands.remap_track_ids import (
+        UNLABELED_TRACK_ID,
+        _remap_contacts,
+    )
+    contacts = {
+        "contacts": [
+            {"frame": 50, "playerTrackId": 2, "playerCandidates": [[2, 0.9]]},
+            {"frame": 200, "playerTrackId": 2, "playerCandidates": [[2, 0.9]]},
+            # Split parent, but at a frame that no kept segment covers
+            {"frame": 999, "playerTrackId": 2, "playerCandidates": []},
+            # Un-split track
+            {"frame": 100, "playerTrackId": 3, "playerCandidates": [[3, 0.8]]},
+        ],
+    }
+    overrides = [
+        {"parent_track_id": 2, "f_start": 0, "f_end": 99, "pid": 2},
+        {"parent_track_id": 2, "f_start": 100, "f_end": 300, "pid": 1},
+    ]
+    _remap_contacts(contacts, mapping={3: 3}, sub_track_overrides=overrides)
+    assert contacts["contacts"][0]["playerTrackId"] == 2  # pre-segment
+    assert contacts["contacts"][1]["playerTrackId"] == 1  # post-segment
+    assert contacts["contacts"][2]["playerTrackId"] == UNLABELED_TRACK_ID
+    assert contacts["contacts"][3]["playerTrackId"] == 3
+    # Candidate at frame 50 with split-parent id=2 routes to pre-segment pid=2
+    assert contacts["contacts"][0]["playerCandidates"][0][0] == 2
+
+
+def test_remap_actions_applies_frame_conditional_and_drops_split_team_assignment():
+    from rallycut.cli.commands.remap_track_ids import (
+        UNLABELED_TRACK_ID,
+        _remap_actions,
+    )
+    actions = {
+        "actions": [
+            {"frame": 50, "playerTrackId": 2},
+            {"frame": 200, "playerTrackId": 2},
+            {"frame": 0, "playerTrackId": 3},
+        ],
+        "teamAssignments": {"2": "near", "3": "far"},
+    }
+    overrides = [
+        {"parent_track_id": 2, "f_start": 0, "f_end": 99, "pid": 2},
+        {"parent_track_id": 2, "f_start": 100, "f_end": 300, "pid": 1},
+    ]
+    _remap_actions(actions, mapping={3: 3}, sub_track_overrides=overrides)
+    assert actions["actions"][0]["playerTrackId"] == 2
+    assert actions["actions"][1]["playerTrackId"] == 1
+    assert actions["actions"][2]["playerTrackId"] == 3
+    # Split parent (2) is dropped from teamAssignments — its pid varies
+    # per-segment so a constant team label is meaningless.
+    assert "2" not in actions["teamAssignments"]
+    assert actions["teamAssignments"]["3"] == "far"
+    # Sanity: UNLABELED_TRACK_ID is the established sentinel
+    assert UNLABELED_TRACK_ID == -1
