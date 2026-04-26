@@ -167,6 +167,12 @@ interface PlayerTrackingState {
 
   // Match analysis loader (backs appliedFullMapping / trackToPlayer lookups).
   loadMatchAnalysis: (videoId: string, forceRefresh?: boolean) => Promise<MatchAnalysis | null>;
+
+  /** Drop cached PlayerTrack + actionGroundTruth entries for every rally
+   *  belonging to this video. Used after Retrack & analyze finishes so
+   *  per-rally overlays reload fresh data on next access. Lazy-evict only —
+   *  components refetch via loadPlayerTrack(rallyId, _, true) when rendered. */
+  clearPlayerTracksForVideo: (videoId: string, rallyIds: string[]) => void;
 }
 
 /**
@@ -895,6 +901,29 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
           },
         }));
         return fetchP;
+      },
+
+      clearPlayerTracksForVideo: (_videoId: string, rallyIds: string[]) => {
+        if (rallyIds.length === 0) return;
+        const idSet = new Set(rallyIds);
+        set((state) => {
+          const nextTracks = { ...state.playerTracks };
+          const nextGt = { ...state.actionGroundTruth };
+          const nextDirty = { ...state.actionGtDirty };
+          const nextErrors = { ...state.trackingErrors };
+          for (const id of idSet) {
+            delete nextTracks[id];
+            delete nextGt[id];
+            delete nextDirty[id];
+            delete nextErrors[id];
+          }
+          return {
+            playerTracks: nextTracks,
+            actionGroundTruth: nextGt,
+            actionGtDirty: nextDirty,
+            trackingErrors: nextErrors,
+          };
+        });
       },
 
       loadReferenceCrops: async (videoId: string) => {

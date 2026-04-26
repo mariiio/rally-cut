@@ -51,6 +51,16 @@ interface AnalysisState {
   // Actions
   getPipeline: (videoId: string) => AnalysisPipeline;
   startAnalysis: (videoId: string) => Promise<void>;
+  /** Heavy re-run: skip court detection + rally detection (rallies stay).
+   *  Re-tracks every confirmed rally, then runs the existing post-tracking
+   *  debounce → catch-up → match-analysis chain, then refreshes caches. */
+  startRetrack: (videoId: string) => Promise<void>;
+  /** Light re-run: match-analysis only (no re-tracking). Streams progress
+   *  and refreshes caches on completion. */
+  runReanalysis: (
+    videoId: string,
+    onProgress?: (step: string) => void,
+  ) => Promise<void>;
   dismissWarnings: (videoId: string) => void;
   cancelAnalysis: (videoId: string) => void;
   resumeIfNeeded: (videoId: string) => Promise<void>;
@@ -285,6 +295,20 @@ async function refreshMatchAnalysisCache(videoId: string): Promise<void> {
   try {
     const { usePlayerTrackingStore } = await import('@/stores/playerTrackingStore');
     await usePlayerTrackingStore.getState().loadMatchAnalysis(videoId, true);
+
+    // Drop per-rally PlayerTrack caches so overlays reload fresh data on
+    // next render. Resolve rally IDs from editorStore (active match's
+    // `state.rallies` is the live source; `session.matches` covers others).
+    const { useEditorStore } = await import('@/stores/editorStore');
+    const editor = useEditorStore.getState();
+    const rallyIds: string[] = [];
+    if (editor.activeMatchId === videoId) {
+      for (const r of editor.rallies) rallyIds.push(r.id);
+    } else {
+      const match = editor.session?.matches.find((m) => m.id === videoId);
+      if (match) for (const r of match.rallies) rallyIds.push(r.id);
+    }
+    usePlayerTrackingStore.getState().clearPlayerTracksForVideo(videoId, rallyIds);
   } catch (err) {
     console.warn('[ANALYSIS] Failed to refresh match-analysis cache:', err);
   }
@@ -372,6 +396,48 @@ export const useAnalysisStore = create<AnalysisState>()(
           });
           await startDetection(videoId, set, get);
         }
+      },
+
+      startRetrack: async (videoId: string) => {
+        // Re-enter the existing state machine at ready_tracking — skip
+        // preflight + rally-detection (rallies stay; manual edits preserved).
+        // Delegate the API call + UI batch-status + per-rally auto-load to
+        // playerTrackingStore so the Timeline's `isBatchActive` chip stays
+        // driven by the same source as the existing flow. analysisStore
+        // owns the post-tracking debounce → catch-up → triggerMatchAnalysis
+        // → refreshMatchAnalysisCache chain, kicked off by pollTracking.
+        clearPollTimer(videoId);
+        clearMatchAnalysisDebounce(videoId);
+        completingLock.delete(videoId);
+
+        const startedAt = Date.now();
+        set((state) => ({
+          pipelines: {
+            ...state.pipelines,
+            [videoId]: {
+              ...DEFAULT_PIPELINE,
+              phase: 'ready_tracking',
+              progress: 45,
+              stepMessage: 'Re-tracking players & ball...',
+              batchTrackingComplete: false,
+              startedAt,
+            },
+          },
+        }));
+
+        const { usePlayerTrackingStore } = await import('@/stores/playerTrackingStore');
+        await usePlayerTrackingStore.getState().trackAllRalliesForVideo(videoId);
+        pollTracking(videoId, set, get);
+      },
+
+      runReanalysis: async (videoId: string, onProgress?: (step: string) => void) => {
+        // Light path — match-analysis only, then refresh caches. Streams
+        // progress via the existing /run-match-analysis SSE endpoint.
+        const { runMatchAnalysis } = await import('@/services/api');
+        await runMatchAnalysis(videoId, (progress) => {
+          if (progress.step && progress.step !== 'done') onProgress?.(progress.step);
+        });
+        await refreshMatchAnalysisCache(videoId);
       },
 
       dismissWarnings: (videoId: string) => {

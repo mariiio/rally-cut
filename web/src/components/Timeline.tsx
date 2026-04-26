@@ -35,7 +35,6 @@ import { useCameraStore } from '@/stores/cameraStore';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { formatTimeShort, formatTime } from '@/utils/timeFormat';
 import { useAnalysisStore } from '@/stores/analysisStore';
-import { runMatchAnalysis } from '@/services/api';
 import { AnalysisPipeline } from './AnalysisPipeline';
 
 // Custom effect for rally segments
@@ -174,9 +173,10 @@ export function Timeline() {
   // Match-level tracking controls
   const {
     batchTracking,
-    trackAllRalliesForVideo,
     pollBatchTrackingStatus,
   } = usePlayerTrackingStore();
+  const startRetrack = useAnalysisStore((s) => s.startRetrack);
+  const runReanalysis = useAnalysisStore((s) => s.runReanalysis);
   const [isRunningAnalysis, setIsRunningAnalysis] = useState(false);
   const [analysisStep, setAnalysisStep] = useState('');
   const [analysisResult, setAnalysisResult] = useState<'success' | 'error' | null>(null);
@@ -1321,26 +1321,26 @@ export function Timeline() {
               {!isLocked && (rallies?.length ?? 0) > 0 && (
                 <>
                   <Divider orientation="vertical" flexItem />
-                  <Tooltip title="Track all rallies in this video">
+                  <Tooltip title="Retrack players & ball, then re-run all stats">
                     <span>
                       <Button
                         size="small"
                         variant={isBatchActive ? 'contained' : 'outlined'}
                         startIcon={isBatchActive ? <CircularProgress size={14} /> : <PlaylistPlayIcon sx={{ fontSize: 16 }} />}
-                        onClick={() => activeMatchId && trackAllRalliesForVideo(activeMatchId)}
-                        disabled={isBatchActive}
+                        onClick={() => activeMatchId && startRetrack(activeMatchId)}
+                        disabled={isBatchActive || isRunningAnalysis}
                         color={isBatchActive ? 'warning' : 'primary'}
                         sx={{ fontSize: 12, py: 0.25, textTransform: 'none' }}
                       >
                         {isBatchActive
                           ? `${batchStatus?.completedRallies ?? 0}/${batchStatus?.totalRallies ?? '?'}`
-                          : 'Track All'}
+                          : 'Retrack & analyze'}
                       </Button>
                     </span>
                   </Tooltip>
                   <Tooltip title={isRunningAnalysis && analysisStep
                     ? analysisStep
-                    : "Re-run player matching, actions, and stats (without re-tracking)"
+                    : "Re-run player matching, actions, and stats (no re-tracking)"
                   }>
                     <span>
                       <Button
@@ -1355,11 +1355,7 @@ export function Timeline() {
                           setAnalysisResult(null);
                           setAnalysisStep('Starting...');
                           try {
-                            await runMatchAnalysis(activeMatchId, (progress) => {
-                              if (progress.step !== 'done') {
-                                setAnalysisStep(progress.step);
-                              }
-                            });
+                            await runReanalysis(activeMatchId, (step) => setAnalysisStep(step));
                             setAnalysisResult('success');
                             setAnalysisStep('');
                             setTimeout(() => setAnalysisResult(null), 4000);
@@ -1375,12 +1371,12 @@ export function Timeline() {
                         sx={{ fontSize: 12, py: 0.25, textTransform: 'none' }}
                       >
                         {isRunningAnalysis
-                          ? analysisStep || 'Updating...'
+                          ? analysisStep || 'Re-analyzing...'
                           : analysisResult === 'success'
-                            ? 'Stats Updated'
+                            ? 'Done'
                             : analysisResult === 'error'
                               ? 'Failed'
-                              : 'Update Stats'}
+                              : 'Re-analyze'}
                       </Button>
                     </span>
                   </Tooltip>
