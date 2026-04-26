@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -29,6 +30,7 @@ import cv2
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
+from rallycut.tracking._subtrack import SubTrackCandidate
 from rallycut.tracking.ball_features import ServerDetectionResult, detect_server
 from rallycut.tracking.identity_anchor import (
     ServeAnchor,
@@ -111,6 +113,36 @@ GLOBAL_SEED_MAX_CENTROID_COS = 0.45
 # 30-frame serve-detection window — ensures we still have enough
 # positions to compute robust averages.
 FIRST_RALLY_INIT_WINDOW_FRAMES = 120
+
+# ---------------------------------------------------------------------------
+# Within-track appearance segmentation (Task 3-5, 2026-04-26)
+# ---------------------------------------------------------------------------
+
+# How many appearance windows to score per track. K=6 gives enough resolution
+# to localize a flip near either rally end while keeping classifier inference
+# cheap.
+SEGMENT_NUM_WINDOWS = 6
+
+# Minimum frames per window. Below this, the window is dropped (too noisy).
+SEGMENT_MIN_WINDOW_FRAMES = 12
+
+# Minimum per-segment aggregate margin (best-pid prob minus 2nd-best) required
+# on BOTH the pre and post segments before a split fires. The 2026-04-26
+# few-shot probe measured PRE/POST aggregate margins of +0.188/+0.442
+# (cuco r5), +0.228/+0.317 (cuco r3), +0.350/+0.305 (wawa r10) on real
+# splits, and +0.086/+0.004 (cuco r5 tid=2) / +0.352/+0.140 (wawa r10 tid=3)
+# on borderline cases that should abstain. 0.15 is the tightest gate that
+# fires all real splits and abstains on both borderline cases.
+SEGMENT_MIN_PER_SEGMENT_MARGIN = 0.15
+
+# Minimum number of consecutive confirming windows on each side of the flip
+# point. Prevents single-window noise from triggering a split.
+SEGMENT_MIN_CONFIRMING_WINDOWS = 2
+
+# Per-frame inference is expensive — sample at most this many frames per
+# window for classifier scoring.
+SEGMENT_FRAMES_PER_WINDOW = 4
+
 
 def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     na = float(np.linalg.norm(a))
@@ -1181,6 +1213,257 @@ class MatchPlayerTracker:
             ))
 
         return result
+
+    def _segment_tracks_by_appearance(
+        self,
+        track_ids: list[int],
+        track_stats: dict[int, TrackAppearanceStats],
+        positions: list[PlayerPosition],
+        classifier: Any,  # PlayerReIDClassifier (Any avoids circular import)
+        crop_extractor: Callable[[int, int], np.ndarray | None],
+    ) -> list[SubTrackCandidate]:
+        """Detect within-track appearance flips using the few-shot classifier.
+
+        For each track:
+        1. Sample SEGMENT_NUM_WINDOWS windows across the track's frame range.
+        2. Score each window via classifier on SEGMENT_FRAMES_PER_WINDOW crops.
+        3. Window argmax_pid + per-window margin.
+        4. Flip detected when:
+             - argmax_pid changes between adjacent windows AND
+             - both pre-flip and post-flip have >= SEGMENT_MIN_CONFIRMING_WINDOWS
+               windows agreeing on the same argmax pid AND
+             - aggregate per-segment margins >= SEGMENT_MIN_PER_SEGMENT_MARGIN.
+
+        Returns a flat list of SubTrackCandidates. Tracks that don't split
+        are absent from the returned list — caller falls back to using the
+        original track. Each emitted SubTrackCandidate has its
+        `aggregated_argmax_pid` populated, which Task 4 will use for direct
+        assignment (bypassing Hungarian).
+        """
+        if not classifier or not getattr(classifier, "is_trained", False):
+            return []
+
+        by_track: dict[int, list[PlayerPosition]] = {}
+        for p in positions:
+            if p.track_id in track_ids:
+                by_track.setdefault(p.track_id, []).append(p)
+        for tid in by_track:
+            by_track[tid].sort(key=lambda x: x.frame_number)
+
+        sub_tracks: list[SubTrackCandidate] = []
+
+        for tid in track_ids:
+            track_positions = by_track.get(tid, [])
+            if len(track_positions) < SEGMENT_NUM_WINDOWS * SEGMENT_MIN_WINDOW_FRAMES:
+                continue
+            f_first = track_positions[0].frame_number
+            f_last = track_positions[-1].frame_number
+            if f_last - f_first < SEGMENT_NUM_WINDOWS * SEGMENT_MIN_WINDOW_FRAMES:
+                continue
+
+            window_bounds = np.linspace(
+                f_first, f_last + 1, SEGMENT_NUM_WINDOWS + 1
+            ).astype(int)
+            window_argmax: list[int | None] = []
+            window_margin: list[float] = []
+            window_frame_ranges: list[tuple[int, int]] = []
+
+            for w in range(SEGMENT_NUM_WINDOWS):
+                w_start = int(window_bounds[w])
+                w_end = int(window_bounds[w + 1] - 1)
+                window_frame_ranges.append((w_start, w_end))
+                window_positions = [
+                    p for p in track_positions if w_start <= p.frame_number <= w_end
+                ]
+                if len(window_positions) < SEGMENT_MIN_WINDOW_FRAMES:
+                    window_argmax.append(None)
+                    window_margin.append(0.0)
+                    continue
+                idxs = np.linspace(
+                    0, len(window_positions) - 1, SEGMENT_FRAMES_PER_WINDOW
+                ).astype(int)
+                sample_positions = [window_positions[i] for i in idxs]
+                crops: list[np.ndarray] = []
+                for p in sample_positions:
+                    crop = crop_extractor(tid, p.frame_number)
+                    if crop is not None:
+                        crops.append(crop)
+                if not crops:
+                    window_argmax.append(None)
+                    window_margin.append(0.0)
+                    continue
+                probs_list = classifier.predict(crops)
+                avg = {
+                    pid: float(np.mean([p[pid] for p in probs_list]))
+                    for pid in probs_list[0]
+                }
+                sorted_pids = sorted(avg.items(), key=lambda x: x[1], reverse=True)
+                window_argmax.append(sorted_pids[0][0])
+                window_margin.append(sorted_pids[0][1] - sorted_pids[1][1])
+
+            split_at_window = self._find_segment_flip(window_argmax, window_margin)
+            if split_at_window is None:
+                continue
+
+            f_split = window_frame_ranges[split_at_window][0]
+
+            pre_positions = [
+                p for p in track_positions if p.frame_number < f_split
+            ]
+            post_positions = [
+                p for p in track_positions if p.frame_number >= f_split
+            ]
+            min_seg_frames = SEGMENT_MIN_WINDOW_FRAMES * SEGMENT_MIN_CONFIRMING_WINDOWS
+            if (
+                len(pre_positions) < min_seg_frames
+                or len(post_positions) < min_seg_frames
+            ):
+                continue
+
+            pre_argmax, pre_margin = self._aggregate_segment_classifier(
+                tid, pre_positions, classifier, crop_extractor,
+            )
+            post_argmax, post_margin = self._aggregate_segment_classifier(
+                tid, post_positions, classifier, crop_extractor,
+            )
+
+            if (
+                pre_argmax is None
+                or post_argmax is None
+                or pre_argmax == post_argmax
+                or pre_margin < SEGMENT_MIN_PER_SEGMENT_MARGIN
+                or post_margin < SEGMENT_MIN_PER_SEGMENT_MARGIN
+            ):
+                continue
+
+            parent_stats = track_stats.get(tid)
+            if parent_stats is None:
+                continue
+
+            pre_stats = self._stats_for_positions(parent_stats, pre_positions, tid)
+            post_stats = self._stats_for_positions(parent_stats, post_positions, tid)
+
+            sub_tracks.append(SubTrackCandidate(
+                parent_track_id=tid,
+                segment_index=0,
+                f_start=pre_positions[0].frame_number,
+                f_end=pre_positions[-1].frame_number,
+                appearance_stats=pre_stats,
+                aggregated_argmax_pid=pre_argmax,
+                aggregated_margin=pre_margin,
+            ))
+            sub_tracks.append(SubTrackCandidate(
+                parent_track_id=tid,
+                segment_index=1,
+                f_start=post_positions[0].frame_number,
+                f_end=post_positions[-1].frame_number,
+                appearance_stats=post_stats,
+                aggregated_argmax_pid=post_argmax,
+                aggregated_margin=post_margin,
+            ))
+
+            logger.info(
+                "Within-track split: tid=%d at frame %d  pre->pid%d "
+                "(margin %+.3f, %d frames)  post->pid%d "
+                "(margin %+.3f, %d frames)",
+                tid, f_split, pre_argmax, pre_margin, len(pre_positions),
+                post_argmax, post_margin, len(post_positions),
+            )
+
+        return sub_tracks
+
+    @staticmethod
+    def _find_segment_flip(
+        window_argmax: list[int | None],
+        window_margin: list[float],
+    ) -> int | None:
+        """Find first window index W where:
+           - argmax pid at W differs from argmax pid at W-1
+           - SEGMENT_MIN_CONFIRMING_WINDOWS windows BEFORE W agree on same pid
+           - SEGMENT_MIN_CONFIRMING_WINDOWS windows AT/AFTER W agree on same pid
+           - All confirming windows have margin >= SEGMENT_MIN_PER_SEGMENT_MARGIN
+
+        Returns the window index of the flip start, or None.
+        """
+        n = len(window_argmax)
+        if n < 2 * SEGMENT_MIN_CONFIRMING_WINDOWS:
+            return None
+        for w in range(
+            SEGMENT_MIN_CONFIRMING_WINDOWS, n - SEGMENT_MIN_CONFIRMING_WINDOWS + 1
+        ):
+            pre_pids = window_argmax[max(0, w - SEGMENT_MIN_CONFIRMING_WINDOWS):w]
+            post_pids = window_argmax[w:w + SEGMENT_MIN_CONFIRMING_WINDOWS]
+            pre_margins = window_margin[max(0, w - SEGMENT_MIN_CONFIRMING_WINDOWS):w]
+            post_margins = window_margin[w:w + SEGMENT_MIN_CONFIRMING_WINDOWS]
+            if any(p is None for p in pre_pids) or any(p is None for p in post_pids):
+                continue
+            if len(set(pre_pids)) != 1 or len(set(post_pids)) != 1:
+                continue
+            if pre_pids[0] == post_pids[0]:
+                continue
+            if min(pre_margins) < SEGMENT_MIN_PER_SEGMENT_MARGIN:
+                continue
+            if min(post_margins) < SEGMENT_MIN_PER_SEGMENT_MARGIN:
+                continue
+            return w
+        return None
+
+    @staticmethod
+    def _aggregate_segment_classifier(
+        track_id: int,
+        positions: list[PlayerPosition],
+        classifier: Any,
+        crop_extractor: Callable[[int, int], np.ndarray | None],
+    ) -> tuple[int | None, float]:
+        if not positions:
+            return None, 0.0
+        n_samples = min(8, len(positions))
+        idxs = np.linspace(0, len(positions) - 1, n_samples).astype(int)
+        crops: list[np.ndarray] = []
+        for i in idxs:
+            crop = crop_extractor(track_id, positions[i].frame_number)
+            if crop is not None:
+                crops.append(crop)
+        if not crops:
+            return None, 0.0
+        probs_list = classifier.predict(crops)
+        avg = {
+            pid: float(np.mean([p[pid] for p in probs_list]))
+            for pid in probs_list[0]
+        }
+        sorted_pids = sorted(avg.items(), key=lambda x: x[1], reverse=True)
+        return sorted_pids[0][0], sorted_pids[0][1] - sorted_pids[1][1]
+
+    @staticmethod
+    def _stats_for_positions(
+        parent_stats: TrackAppearanceStats,
+        positions: list[PlayerPosition],
+        track_id: int,
+    ) -> TrackAppearanceStats:
+        """Build a per-segment TrackAppearanceStats. Inherits the parent's
+        avg_* fields and reid_embedding verbatim. Filters the `features`
+        list to frames in this segment's range.
+
+        Verbatim inheritance is acceptable because Task 4 bypasses Hungarian
+        for sub-tracks (assigning them directly to their aggregated_argmax_pid),
+        so per-segment HSV/ReID re-extraction would be wasted work in v1.
+        """
+        seg_frames = {p.frame_number for p in positions}
+        seg_features = [
+            f for f in parent_stats.features if f.frame_number in seg_frames
+        ]
+        return TrackAppearanceStats(
+            track_id=track_id,
+            features=seg_features,
+            avg_skin_tone_hsv=parent_stats.avg_skin_tone_hsv,
+            avg_upper_hist=parent_stats.avg_upper_hist,
+            avg_lower_hist=parent_stats.avg_lower_hist,
+            avg_upper_v_hist=parent_stats.avg_upper_v_hist,
+            avg_lower_v_hist=parent_stats.avg_lower_v_hist,
+            avg_dominant_color_hsv=parent_stats.avg_dominant_color_hsv,
+            avg_head_hist=parent_stats.avg_head_hist,
+            reid_embedding=parent_stats.reid_embedding,
+        )
 
     def _refine_within_team(
         self,
