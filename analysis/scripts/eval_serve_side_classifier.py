@@ -63,24 +63,19 @@ class RallyBase:
 
 
 def _load_side_switches() -> dict[str, list[int]]:
-    """Load sideSwitches per video from player_matching_gt_json."""
+    """Load chronological side-switch indices per video.
+
+    Sourced from per-rally ``rallies.gt_side_switch``; the legacy
+    ``player_matching_gt_json["sideSwitches"]`` key is no longer used.
+    """
+    from rallycut.evaluation.gt_loader import load_side_switches_from_db
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""
-            SELECT id, player_matching_gt_json
-            FROM videos
-            WHERE id IN (
-                SELECT DISTINCT video_id FROM rallies WHERE gt_serving_team IS NOT NULL
-            )
+            SELECT DISTINCT video_id::text FROM rallies
+            WHERE gt_serving_team IS NOT NULL
         """)
-        result: dict[str, list[int]] = {}
-        for vid, gt in cur.fetchall():
-            if isinstance(gt, dict):
-                result[vid] = list(
-                    gt.get("sideSwitches", gt.get("side_switches", []))
-                )
-            else:
-                result[vid] = []
-    return result
+        video_ids = [row[0] for row in cur.fetchall()]
+        return load_side_switches_from_db(cur, video_ids)
 
 
 def _load_rallies_with_serving_team() -> list[dict]:

@@ -89,7 +89,6 @@ interface RallyEntry {
   endMs: number;
   trackToPlayer: Record<string, number>;
   assignmentConfidence: number;
-  sideSwitchDetected: boolean;
 }
 
 // IoU between two center-normalized bboxes (same convention as PlayerPosition).
@@ -203,7 +202,6 @@ function normalizeRallyEntry(raw: any): RallyEntry {
     endMs: raw.endMs ?? raw.end_ms ?? 0,
     trackToPlayer: raw.trackToPlayer ?? raw.track_to_player ?? {},
     assignmentConfidence: raw.assignmentConfidence ?? raw.assignment_confidence ?? 0,
-    sideSwitchDetected: raw.sideSwitchDetected ?? raw.side_switch_detected ?? false,
   };
 }
 
@@ -228,7 +226,6 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
   const [totalRallies, setTotalRallies] = useState(0);
   const [isDirty, setIsDirty] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [sideSwitches, setSideSwitches] = useState<number[]>([]);
   const [untrackedCount, setUntrackedCount] = useState(0);
   // True while a "Track missing rallies" job is running. We poll the batch
   // status until completion, then refresh crops by bumping `trackingNonce`.
@@ -281,12 +278,8 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
 
         // Build initial assignments from match analysis
         const initial: Record<string, Record<string, number>> = {};
-        const switches: number[] = [];
         for (const entry of entries) {
           initial[entry.rallyId] = { ...entry.trackToPlayer };
-          if (entry.sideSwitchDetected) {
-            switches.push(entry.rallyIndex);
-          }
         }
 
         // Override with existing GT if available. GT is bbox-keyed; we
@@ -311,12 +304,9 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
             const positions = rallyPositionsRef.current.get(rid) ?? [];
             initial[rid] = resolveLabelsToAssignment(entry.labels, positions);
           }
-          setSideSwitches(existingGt.sideSwitches);
           if (existingGt.excludedRallies) {
             setExcludedRallies(new Set(existingGt.excludedRallies));
           }
-        } else {
-          setSideSwitches(switches);
         }
 
         assignmentsRef.current = initial;
@@ -723,7 +713,6 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
 
       await savePlayerMatchingGtApi(videoId, {
         rallies: gtRallies,
-        sideSwitches,
         excludedRallies: [...excludedRallies],
       });
       setIsDirty(false);
@@ -732,14 +721,13 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
     } finally {
       setSaving(false);
     }
-  }, [videoId, assignments, sideSwitches, excludedRallies]);
+  }, [videoId, assignments, excludedRallies]);
 
   // Export JSON
   const handleExport = useCallback(() => {
     const data = {
       video_id: videoId,
       notes: '',
-      side_switches: sideSwitches,
       rallies: assignments,
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
@@ -749,7 +737,7 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
     a.download = `match_gt_${videoId.slice(0, 8)}.json`;
     a.click();
     URL.revokeObjectURL(url);
-  }, [videoId, assignments, sideSwitches]);
+  }, [videoId, assignments]);
 
   if (!normalizedRallies) {
     return (

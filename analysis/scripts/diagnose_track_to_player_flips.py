@@ -45,19 +45,22 @@ class VideoResult:
 
 
 def _load_gt_videos() -> dict[str, set[int]]:
-    """Load GT video IDs and their sideSwitches."""
+    """Load GT video IDs and their side-switch indices.
+
+    Switch indices are sourced from per-rally ``rallies.gt_side_switch``
+    (the Score-tracking UI's authoritative writer); the legacy
+    ``player_matching_gt_json["sideSwitches"]`` key is no longer used.
+    """
+    from rallycut.evaluation.gt_loader import load_side_switches_from_db
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""
-            SELECT id, player_matching_gt_json
+            SELECT id::text
             FROM videos
             WHERE player_matching_gt_json IS NOT NULL
         """)
-        result: dict[str, set[int]] = {}
-        for vid, gt_json in cur.fetchall():
-            if isinstance(gt_json, dict):
-                sw = gt_json.get("sideSwitches", gt_json.get("side_switches", []))
-                result[vid] = set(sw) if sw else set()
-        return result
+        video_ids = [row[0] for row in cur.fetchall()]
+        switches = load_side_switches_from_db(cur, video_ids)
+        return {vid: set(switches.get(vid, [])) for vid in video_ids}
 
 
 def _load_match_analysis(video_ids: set[str]) -> dict[str, list[dict]]:

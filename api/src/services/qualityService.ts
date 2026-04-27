@@ -173,7 +173,6 @@ export async function savePlayerMatchingGt(
   userId: string,
   gt: {
     rallies: Record<string, PlayerMatchingGtRally>;
-    sideSwitches: number[];
     excludedRallies?: string[];
   },
 ) {
@@ -200,6 +199,12 @@ export async function savePlayerMatchingGt(
 
 /**
  * Get player matching ground truth labels.
+ *
+ * Strips the legacy `sideSwitches` / `side_switches` keys on read so
+ * existing rows that haven't been swept by
+ * `analysis/scripts/migrate_drop_player_matching_side_switches.py` don't
+ * leak the duplicated state to the client. Side switches now live on
+ * each rally's `gtSideSwitch` column.
  */
 export async function getPlayerMatchingGt(videoId: string, userId: string) {
   const video = await prisma.video.findFirst({
@@ -210,7 +215,12 @@ export async function getPlayerMatchingGt(videoId: string, userId: string) {
     throw new NotFoundError('Video', videoId);
   }
 
-  return video.playerMatchingGtJson as Record<string, unknown> | null;
+  const stored = video.playerMatchingGtJson as Record<string, unknown> | null;
+  if (!stored) return stored;
+  const cleaned = { ...stored };
+  delete cleaned.sideSwitches;
+  delete cleaned.side_switches;
+  return cleaned;
 }
 
 // ============================================================================

@@ -1262,7 +1262,9 @@ router.put(
             .max(4),
         })
       ),
-      sideSwitches: z.array(z.number()),
+      // Side-switch state lives on each rally's `gtSideSwitch` column,
+      // written by the Score-tracking UI. The legacy `sideSwitches`
+      // array is no longer accepted here.
       excludedRallies: z.array(z.string()).optional(),
     }),
   }),

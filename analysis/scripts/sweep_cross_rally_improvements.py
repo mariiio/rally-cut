@@ -126,6 +126,7 @@ def _collect_data_impl(video_id_filter: str | None = None) -> list[VideoData]:
     from rallycut.evaluation.gt_loader import (
         build_positions_lookup_from_db,
         load_player_matching_gt,
+        load_side_switches_from_db,
     )
     from rallycut.evaluation.tracking.db import get_video_path, load_rallies_for_video
     from rallycut.tracking.match_tracker import extract_rally_appearances
@@ -144,11 +145,18 @@ def _collect_data_impl(video_id_filter: str | None = None) -> list[VideoData]:
             cur.execute(query, params)
             raw_rows = cur.fetchall()
             positions_lookup = build_positions_lookup_from_db(cur)
+            switches_by_video = load_side_switches_from_db(
+                cur, [str(r[0]) for r in raw_rows]
+            )
             # Normalize GT while cursor is still open (v2 lookups need it).
             rows = [
                 (
                     r[0],
-                    load_player_matching_gt(r[1], positions_lookup=positions_lookup),
+                    load_player_matching_gt(
+                        r[1],
+                        positions_lookup=positions_lookup,
+                        side_switch_indices=switches_by_video.get(str(r[0]), []),
+                    ),
                     r[2],
                 )
                 for r in raw_rows

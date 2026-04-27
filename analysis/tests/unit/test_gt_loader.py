@@ -41,26 +41,53 @@ def test_resolves_labels_to_tracks_by_iou() -> None:
                 ],
             },
         },
-        "sideSwitches": [3],
         "excludedRallies": ["rally-X"],
     }
-    gt = load_player_matching_gt(gt_json, positions_lookup=positions.get)
+    gt = load_player_matching_gt(
+        gt_json,
+        positions_lookup=positions.get,
+        side_switch_indices=[3],
+    )
     assert gt.rallies == {"rally-1": {"7": 1, "8": 2, "9": 3, "11": 4}}
     assert gt.side_switches == [3]
     assert gt.excluded_rallies == ["rally-X"]
     assert gt.warnings == []
 
 
-def test_snake_case_side_switches_accepted() -> None:
+def test_side_switch_indices_param_populates_field() -> None:
     positions = {"r": [_pos(0, 1, 0.5, 0.5)]}
-    gt = load_player_matching_gt({
-        "rallies": {"r": {"labels": [
-            {"playerId": 1, "frame": 0,
-             "cx": 0.5, "cy": 0.5, "w": 0.05, "h": 0.2},
-        ]}},
-        "side_switches": [7],
-    }, positions_lookup=positions.get)
+    gt = load_player_matching_gt(
+        {
+            "rallies": {"r": {"labels": [
+                {"playerId": 1, "frame": 0,
+                 "cx": 0.5, "cy": 0.5, "w": 0.05, "h": 0.2},
+            ]}},
+        },
+        positions_lookup=positions.get,
+        side_switch_indices=[7],
+    )
     assert gt.side_switches == [7]
+
+
+def test_legacy_sideSwitches_key_in_json_is_ignored() -> None:
+    """The loader no longer reads gt_json["sideSwitches"] / ["side_switches"].
+
+    Per-rally ``rallies.gt_side_switch`` is the source of truth; the legacy
+    key is left as dead data on disk until the migration drops it.
+    """
+    positions = {"r": [_pos(0, 1, 0.5, 0.5)]}
+    gt = load_player_matching_gt(
+        {
+            "rallies": {"r": {"labels": [
+                {"playerId": 1, "frame": 0,
+                 "cx": 0.5, "cy": 0.5, "w": 0.05, "h": 0.2},
+            ]}},
+            "sideSwitches": [99],  # stale legacy key — must be ignored
+            "side_switches": [99],
+        },
+        positions_lookup=positions.get,
+    )
+    assert gt.side_switches == []
 
 
 def test_drops_label_when_iou_below_threshold() -> None:

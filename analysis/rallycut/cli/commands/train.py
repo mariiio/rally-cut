@@ -1535,6 +1535,9 @@ def _export_player_matching_gt(
     We flatten to per-rally entries keyed by content_hash + timing so the
     backup survives re-detection (new rally IDs).
 
+    Side-switch state is exported separately by _export_score_ground_truth
+    (per-rally `gt_side_switch`).
+
     Args:
         video_content_hashes: Content hashes of videos in the dataset.
 
@@ -1581,16 +1584,13 @@ def _export_player_matching_gt(
 
     # Build rally ID → timing lookup
     rally_timing: dict[str, tuple[int, int]] = {}
-    rally_order: dict[str, list[str]] = {}  # video_id → [rally_ids ordered by start_ms]
-    for rid, vid, start_ms, end_ms in rally_rows:
+    for rid, _vid, start_ms, end_ms in rally_rows:
         rally_timing[str(rid)] = (cast(int, start_ms), cast(int, end_ms))
-        rally_order.setdefault(str(vid), []).append(str(rid))
 
     videos_exported: list[dict[str, Any]] = []
 
     for row in video_rows:
         content_hash = str(row[0])
-        video_id = str(row[1])
         gt_json = row[2]
 
         if content_hash not in video_content_hashes:
@@ -1598,7 +1598,6 @@ def _export_player_matching_gt(
 
         gt_data = gt_json if isinstance(gt_json, dict) else json.loads(str(gt_json))
         gt_rallies = gt_data.get("rallies", {})
-        side_switches = gt_data.get("sideSwitches", [])
 
         # Convert rally ID keys to timing-based keys
         rally_entries: list[dict[str, Any]] = []
@@ -1612,19 +1611,9 @@ def _export_player_matching_gt(
                 "track_to_player": mapping,
             })
 
-        # Convert side switch indices to timing-based
-        ordered_rids = rally_order.get(video_id, [])
-        side_switch_timings: list[list[int]] = []
-        for idx in side_switches:
-            if idx < len(ordered_rids):
-                timing = rally_timing.get(ordered_rids[idx])
-                if timing:
-                    side_switch_timings.append([timing[0], timing[1]])
-
         videos_exported.append({
             "video_content_hash": content_hash,
             "rallies": rally_entries,
-            "side_switch_timings": side_switch_timings,
         })
 
     if not videos_exported:

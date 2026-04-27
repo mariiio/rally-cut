@@ -17,7 +17,6 @@ Format on disk:
                 ]
             }
         },
-        "sideSwitches": [3, 11],
         "excludedRallies": []
     }
 
@@ -25,9 +24,17 @@ Runtime shape callers consume:
 
     NormalizedGt = {
         "rallies": {rally_id: {track_id_str: player_id_int}},
-        "sideSwitches": list[int],
-        "excludedRallies": list[str],
+        "side_switches": list[int],
+        "excluded_rallies": list[str],
     }
+
+`side_switches` is the chronological list of rally indices where the side
+switched.  The Score-tracking UI is the source of truth: each rally's
+`rallies.gt_side_switch` boolean is collapsed to its 0-based chronological
+index, and the resulting list is passed to `load_player_matching_gt` via
+`side_switch_indices` (or computed automatically by `load_all_from_db`
+through `load_side_switches_from_db`).  The legacy
+`videos.player_matching_gt_json["sideSwitches"]` key is no longer read.
 
 Each label is resolved to the current track id by finding the position at
 `frame` with the highest IoU against the label bbox. Labels whose bbox
@@ -119,6 +126,7 @@ def _resolve_label(
 def load_player_matching_gt(
     gt_json: Mapping[str, Any] | str | None,
     positions_lookup: PositionsLookup | None = None,
+    side_switch_indices: Sequence[int] | None = None,
 ) -> NormalizedGt:
     """Parse bbox-keyed GT into the normalized runtime shape.
 
@@ -127,16 +135,21 @@ def load_player_matching_gt(
         positions_lookup: required. Called with a rally_id; must return the
             PlayerPosition list (same shape as player_tracks.positions_json)
             or None if unavailable.
+        side_switch_indices: chronological 0-based rally indices where the
+            side switched, sourced from `rallies.gt_side_switch`. When
+            None, ``out.side_switches`` stays empty — the legacy
+            ``gt_json["sideSwitches"]`` key is intentionally ignored.
     """
     out = NormalizedGt()
     if gt_json is None:
+        if side_switch_indices is not None:
+            out.side_switches = list(side_switch_indices)
         return out
     if isinstance(gt_json, str):
         gt_json = cast(Mapping[str, Any], json.loads(gt_json))
 
-    out.side_switches = list(
-        gt_json.get("sideSwitches", gt_json.get("side_switches", []))
-    )
+    if side_switch_indices is not None:
+        out.side_switches = list(side_switch_indices)
     out.excluded_rallies = list(gt_json.get("excludedRallies", []))
 
     raw_rallies = cast(Mapping[str, Any], gt_json.get("rallies") or {})
@@ -255,6 +268,36 @@ def prefetch_positions(
     return lookup
 
 
+def load_side_switches_from_db(
+    cursor: Any,
+    video_ids: Sequence[str],
+) -> dict[str, list[int]]:
+    """Return chronological switch indices per video from rallies.gt_side_switch.
+
+    For each video_id, walks its rallies in start_ms order and emits the
+    0-based index of every rally where ``gt_side_switch`` is True.  Videos
+    with no rallies (or only NULL/False entries) appear in the output with
+    an empty list — the caller can `.get(video_id, [])` either way.
+    """
+    out: dict[str, list[int]] = {vid: [] for vid in video_ids}
+    if not video_ids:
+        return out
+    cursor.execute(
+        "SELECT video_id, gt_side_switch FROM rallies "
+        "WHERE video_id::text = ANY(%s) "
+        "ORDER BY video_id, start_ms",
+        (list(video_ids),),
+    )
+    counters: dict[str, int] = {vid: 0 for vid in video_ids}
+    for vid, gt_sw in cursor.fetchall():
+        vid_key = str(vid)
+        idx = counters.get(vid_key, 0)
+        if gt_sw is True:
+            out.setdefault(vid_key, []).append(idx)
+        counters[vid_key] = idx + 1
+    return out
+
+
 @dataclass
 class DbGtRow:
     video_id: str
@@ -299,8 +342,15 @@ def load_all_from_db(
         )
 
     lookup = prefetch_positions(cursor, rally_ids)
+    switches_by_video = load_side_switches_from_db(
+        cursor, [vid for vid, _ in parsed_rows]
+    )
     results: list[DbGtRow] = []
     for video_id, gt_json in parsed_rows:
-        gt = load_player_matching_gt(gt_json, positions_lookup=lookup)
+        gt = load_player_matching_gt(
+            gt_json,
+            positions_lookup=lookup,
+            side_switch_indices=switches_by_video.get(video_id, []),
+        )
         results.append(DbGtRow(video_id=video_id, gt=gt))
     return results

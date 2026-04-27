@@ -2915,7 +2915,6 @@ export interface PlayerMatchingGtRally {
 
 export interface PlayerMatchingGt {
   rallies: Record<string, PlayerMatchingGtRally>;
-  sideSwitches: number[];
   excludedRallies?: string[];
   savedAt?: string;
 }
@@ -2950,7 +2949,6 @@ export async function savePlayerMatchingGtApi(
     headers: getHeaders('application/json'),
     body: JSON.stringify({
       rallies: gt.rallies,
-      sideSwitches: gt.sideSwitches,
       excludedRallies: gt.excludedRallies,
     }),
   });

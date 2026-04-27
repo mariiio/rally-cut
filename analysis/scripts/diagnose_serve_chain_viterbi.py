@@ -60,28 +60,22 @@ class RallyObs:
 def _load_all() -> dict[str, list[RallyObs]]:
     """Load every rally in each of the 11 score-GT videos, ordered by start_ms.
 
-    Also loads per-video sideSwitches from videos.player_matching_gt_json and
-    computes side_flipped per rally. The side-switch-corrected courtSide→team
-    mapping (court_side_team_flipped) flips 'A' <-> 'B' on rallies where the
+    Also computes per-rally ``side_flipped`` from the chronological
+    ``rallies.gt_side_switch`` indices (the Score UI is the source of
+    truth). The side-switch-corrected courtSide→team mapping
+    (``court_side_team_flipped``) flips 'A' <-> 'B' on rallies where the
     running toggle is True.
     """
-    # Load side switches per video
+    from rallycut.evaluation.gt_loader import load_side_switches_from_db
+
+    # Load side switches per video from rallies.gt_side_switch
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""
-            SELECT id, player_matching_gt_json
-            FROM videos
-            WHERE id IN (
-                SELECT DISTINCT video_id FROM rallies WHERE gt_serving_team IS NOT NULL
-            )
+            SELECT DISTINCT video_id::text FROM rallies
+            WHERE gt_serving_team IS NOT NULL
         """)
-        video_switches: dict[str, list[int]] = {}
-        for vid, gt in cur.fetchall():
-            if isinstance(gt, dict):
-                video_switches[vid] = list(
-                    gt.get("sideSwitches", gt.get("side_switches", []))
-                )
-            else:
-                video_switches[vid] = []
+        video_ids = [row[0] for row in cur.fetchall()]
+        video_switches = load_side_switches_from_db(cur, video_ids)
 
     query = """
         SELECT r.id, r.video_id, r.start_ms, r.gt_serving_team, pt.actions_json

@@ -597,7 +597,6 @@ def _restore_player_matching_gt(
     for video_entry in videos:
         content_hash = video_entry["video_content_hash"]
         rally_entries = video_entry.get("rallies", [])
-        side_switch_timings = video_entry.get("side_switch_timings", [])
 
         # Find the video
         with conn.cursor() as cur:
@@ -615,7 +614,7 @@ def _restore_player_matching_gt(
 
         video_id = str(video_row[0])
 
-        # Load rally ordering for this video (for side switch index mapping)
+        # Load rally timing → id map (rally UUIDs change on re-insert).
         with conn.cursor() as cur:
             cur.execute(
                 "SELECT id, start_ms, end_ms FROM rallies WHERE video_id = %s "
@@ -625,10 +624,8 @@ def _restore_player_matching_gt(
             rally_rows = cur.fetchall()
 
         rally_by_timing: dict[tuple[int, int], str] = {}
-        rally_order: list[str] = []
         for rid, start_ms, end_ms in rally_rows:
             rally_by_timing[(start_ms, end_ms)] = str(rid)
-            rally_order.append(str(rid))
 
         # Rebuild rallies dict with current rally IDs
         gt_rallies: dict[str, Any] = {}
@@ -643,16 +640,11 @@ def _restore_player_matching_gt(
                 continue
             gt_rallies[rally_id] = entry["track_to_player"]
 
-        # Rebuild side switch indices from timings
-        side_switches: list[int] = []
-        rally_id_to_index = {rid: i for i, rid in enumerate(rally_order)}
-        for timing in side_switch_timings:
-            key = (timing[0], timing[1])
-            rally_id = rally_by_timing.get(key)
-            if rally_id and rally_id in rally_id_to_index:
-                side_switches.append(rally_id_to_index[rally_id])
-
-        gt_data = {"rallies": gt_rallies, "sideSwitches": sorted(side_switches)}
+        # Side-switch state lives on rallies.gt_side_switch and is restored
+        # by _restore_score_ground_truth from the sibling
+        # score_ground_truth.json file — no longer duplicated in
+        # videos.player_matching_gt_json.
+        gt_data = {"rallies": gt_rallies}
 
         with conn.cursor() as cur:
             cur.execute(
