@@ -2247,6 +2247,173 @@ class MatchPlayerTracker:
 
         return best_switches
 
+    def _select_seed_rally(self) -> int:
+        """Pick the rally to anchor the canonical within-team pid layout.
+
+        Rally 0's Y-sort seed is a single point of failure: a poorly-classified
+        rally 0 (compressed Y, missing calibration, near-tie within-team Y)
+        propagates the wrong pid layout to every subsequent rally. This picks
+        the highest-quality rally — one with strong, mutually-consistent side
+        classification signals — and uses its Y-sort as the canonical anchor.
+
+        Quality score per rally:
+          +1 if 4 distinct top tracks present
+          +2 if 2 near + 2 far (well-balanced 2v2 from track_court_sides)
+          +1 if sides_from_calibration is True
+          +1 if sides_by_bbox agrees with track_court_sides on every top track
+          +1 if early_positions populated (required for Y-sort recompute)
+          +(-1 if early_positions absent — we cannot recompute Y-sort there)
+
+        Returns:
+            Index of the seed rally. Falls back to 0 when:
+              - Fewer than 2 stored rallies.
+              - early_positions empty on every rally (scratchpad replay path).
+              - No non-zero rally clearly outscores rally 0 (margin < 1.0).
+        """
+        if len(self.stored_rally_data) < 2:
+            return 0
+        scores: list[float] = []
+        for d in self.stored_rally_data:
+            s = 0.0
+            top4 = list(d.top_tracks[:4])
+            if len(set(top4)) == 4:
+                s += 1.0
+            sides_top = [d.track_court_sides.get(t) for t in top4]
+            if sides_top.count(0) == 2 and sides_top.count(1) == 2:
+                s += 2.0
+            if d.sides_from_calibration:
+                s += 1.0
+            if d.sides_by_bbox and top4:
+                agreements = sum(
+                    1 for t in top4
+                    if t in d.sides_by_bbox
+                    and t in d.track_court_sides
+                    and d.sides_by_bbox[t] == d.track_court_sides[t]
+                )
+                if agreements == 4:
+                    s += 1.0
+            if d.early_positions:
+                s += 1.0
+            else:
+                # Recomputing Y-sort needs early_positions. Strongly disprefer.
+                s -= 1.0
+            scores.append(s)
+        best_idx = max(range(len(scores)), key=lambda i: scores[i])
+        if best_idx == 0:
+            return 0
+        # Require a meaningful margin over rally 0 to switch anchors.
+        if scores[best_idx] - scores[0] < 1.0:
+            return 0
+        return best_idx
+
+    def _within_team_permutation_from_seed(
+        self,
+        seed_idx: int,
+        seed_assignment: dict[int, int],
+    ) -> dict[int, int]:
+        """Compute the within-team pid permutation implied by re-anchoring.
+
+        Given the seed rally's current Pass-1 ``track_to_player`` mapping,
+        compute what the Y-sorted-within-side mapping WOULD be at that rally
+        if we re-ran ``_initialize_first_rally`` there. The permutation is
+        the relabeling that turns the current pids into the canonical (seed
+        Y-sort) pids. Only within-team swaps are permitted — team membership
+        is determined by side classification, not Y-sort.
+
+        Returns:
+            ``{old_pid: new_pid}`` over {1,2,3,4}. Identity when no relabel
+            is needed (seed's current mapping already matches Y-sort).
+        """
+        identity = {pid: pid for pid in range(1, 5)}
+        if not (0 <= seed_idx < len(self.stored_rally_data)):
+            return identity
+        data = self.stored_rally_data[seed_idx]
+        if not data.early_positions:
+            return identity
+        # Build pid → (side, y) at the seed using the CURRENT track→pid layout.
+        pid_to_side_y: dict[int, tuple[int, float]] = {}
+        for tid, pid in seed_assignment.items():
+            side = data.track_court_sides.get(tid)
+            xy = data.early_positions.get(tid)
+            if side is None or xy is None:
+                continue
+            pid_to_side_y[pid] = (side, float(xy[1]))
+        if len(pid_to_side_y) != 4:
+            return identity
+        perm: dict[int, int] = dict(identity)
+        for team in (0, 1):
+            team_pids = sorted(
+                pid for pid, (s, _) in pid_to_side_y.items() if s == team
+            )
+            if len(team_pids) != 2:
+                # Degenerate side classification at the seed — abandon.
+                return identity
+            # Y-sort: smaller y = upper in frame = first pid in sorted team.
+            y_sorted = sorted(team_pids, key=lambda p: pid_to_side_y[p][1])
+            # Map y_sorted[0] → team_pids[0]; y_sorted[1] → team_pids[1].
+            perm[y_sorted[0]] = team_pids[0]
+            perm[y_sorted[1]] = team_pids[1]
+        return perm
+
+    def _apply_within_team_permutation(
+        self,
+        perm: dict[int, int],
+        results: list[RallyTrackingResult],
+    ) -> list[RallyTrackingResult]:
+        """Apply ``{old_pid: new_pid}`` globally across state + results.
+
+        Permutes player profiles, current_side_assignment, current_assignments,
+        each rally's player_side_assignment snapshot, and each result's
+        track_to_player. Identity perm short-circuits.
+        """
+        if all(perm.get(pid, pid) == pid for pid in range(1, 5)):
+            return results
+        # Player profiles
+        new_players: dict[int, PlayerAppearanceProfile] = {}
+        for old_pid, profile in self.state.players.items():
+            new_pid = perm.get(old_pid, old_pid)
+            profile.player_id = new_pid
+            new_players[new_pid] = profile
+        self.state.players = new_players
+        # Frozen pid set follows the permutation too.
+        self.frozen_player_ids = {
+            perm.get(pid, pid) for pid in self.frozen_player_ids
+        }
+        # Live assignments
+        self.state.current_side_assignment = {
+            perm.get(pid, pid): team
+            for pid, team in self.state.current_side_assignment.items()
+        }
+        self.state.current_assignments = {
+            tid: perm.get(pid, pid)
+            for tid, pid in self.state.current_assignments.items()
+        }
+        # Per-rally side snapshots
+        for d in self.stored_rally_data:
+            d.player_side_assignment = {
+                perm.get(pid, pid): team
+                for pid, team in d.player_side_assignment.items()
+            }
+        # Pass-1 results
+        new_results = [
+            RallyTrackingResult(
+                rally_index=r.rally_index,
+                track_to_player={
+                    tid: perm.get(pid, pid)
+                    for tid, pid in r.track_to_player.items()
+                },
+                server_player_id=(
+                    perm.get(r.server_player_id, r.server_player_id)
+                    if r.server_player_id is not None else None
+                ),
+                side_switch_detected=r.side_switch_detected,
+                assignment_confidence=r.assignment_confidence,
+                sub_tracks=r.sub_tracks,
+            )
+            for r in results
+        ]
+        return new_results
+
     def refine_assignments(
         self,
         initial_results: list[RallyTrackingResult],
@@ -2301,6 +2468,26 @@ class MatchPlayerTracker:
                         side_switch_detected=True,
                         assignment_confidence=r.assignment_confidence,
                         sub_tracks=r.sub_tracks,
+                    )
+
+        # Re-anchor canonical pid layout from the highest-quality rally
+        # (Phase 1 step 2). Frozen profiles disable this — when reference
+        # crops anchor pids, the user's labels are authoritative and must
+        # not be permuted.
+        if not self.frozen_player_ids:
+            seed_idx = self._select_seed_rally()
+            if seed_idx > 0 and seed_idx < len(initial_results):
+                seed_perm = self._within_team_permutation_from_seed(
+                    seed_idx, initial_results[seed_idx].track_to_player,
+                )
+                if any(seed_perm.get(p, p) != p for p in range(1, 5)):
+                    logger.info(
+                        "Pass 2 re-anchoring canonical pid layout from "
+                        "rally %d (Y-sort seed): perm=%s",
+                        seed_idx, seed_perm,
+                    )
+                    initial_results = self._apply_within_team_permutation(
+                        seed_perm, initial_results,
                     )
 
         # Stage 1: Re-score ALL rallies (including rally 0) with final profiles.

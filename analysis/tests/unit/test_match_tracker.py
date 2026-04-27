@@ -1133,6 +1133,225 @@ class TestRefineAssignments:
         assert refined[0].track_to_player == result.track_to_player
 
 
+class TestSeedRallySelection:
+    """Phase 1 step 2: pick the highest-quality rally to anchor canonical
+    pid layout, instead of always trusting rally 0's Y-sort.
+
+    Quality combines: 4 distinct top tracks, 2v2 side balance, calibration,
+    bbox-side / y-side agreement, and presence of early_positions.
+    """
+
+    @staticmethod
+    def _make_rally(
+        *,
+        top_tracks: list[int],
+        track_court_sides: dict[int, int],
+        sides_by_bbox: dict[int, int] | None = None,
+        sides_from_calibration: bool = False,
+        early_positions: dict[int, tuple[float, float]] | None = None,
+    ) -> StoredRallyData:
+        return StoredRallyData(
+            track_stats={t: _make_stats(t) for t in top_tracks},
+            track_court_sides=dict(track_court_sides),
+            early_positions=early_positions or {},
+            top_tracks=list(top_tracks),
+            sides_by_bbox=sides_by_bbox or {},
+            sides_from_calibration=sides_from_calibration,
+        )
+
+    def test_falls_back_to_zero_when_only_one_rally(self) -> None:
+        tracker = MatchPlayerTracker()
+        tracker.stored_rally_data.append(self._make_rally(
+            top_tracks=[1, 2, 3, 4],
+            track_court_sides={1: 0, 2: 0, 3: 1, 4: 1},
+            early_positions={1: (0.5, 0.7), 2: (0.5, 0.8),
+                             3: (0.5, 0.3), 4: (0.5, 0.4)},
+        ))
+        assert tracker._select_seed_rally() == 0
+
+    def test_falls_back_to_zero_when_rally0_is_strongest(self) -> None:
+        tracker = MatchPlayerTracker()
+        # Rally 0: full quality (4 tracks + 2v2 + calibration + agreement + early_pos)
+        tracker.stored_rally_data.append(self._make_rally(
+            top_tracks=[1, 2, 3, 4],
+            track_court_sides={1: 0, 2: 0, 3: 1, 4: 1},
+            sides_by_bbox={1: 0, 2: 0, 3: 1, 4: 1},
+            sides_from_calibration=True,
+            early_positions={1: (0.5, 0.7), 2: (0.5, 0.8),
+                             3: (0.5, 0.3), 4: (0.5, 0.4)},
+        ))
+        # Rally 1: degenerate (3v1 split)
+        tracker.stored_rally_data.append(self._make_rally(
+            top_tracks=[5, 6, 7, 8],
+            track_court_sides={5: 0, 6: 0, 7: 0, 8: 1},
+            early_positions={5: (0.5, 0.7), 6: (0.5, 0.8),
+                             7: (0.5, 0.5), 8: (0.5, 0.3)},
+        ))
+        assert tracker._select_seed_rally() == 0
+
+    def test_picks_higher_quality_later_rally(self) -> None:
+        tracker = MatchPlayerTracker()
+        # Rally 0: minimal (compressed Y, 3v1 sides, no calibration)
+        tracker.stored_rally_data.append(self._make_rally(
+            top_tracks=[1, 2, 3, 4],
+            track_court_sides={1: 0, 2: 0, 3: 0, 4: 1},
+            early_positions={1: (0.5, 0.50), 2: (0.5, 0.51),
+                             3: (0.5, 0.49), 4: (0.5, 0.48)},
+        ))
+        # Rally 2: clean 2v2 + calibration + bbox-side agrees
+        tracker.stored_rally_data.append(self._make_rally(
+            top_tracks=[5, 6, 7, 8],
+            track_court_sides={5: 0, 6: 0, 7: 1, 8: 1},
+            early_positions={5: (0.5, 0.70), 6: (0.5, 0.80),
+                             7: (0.5, 0.30), 8: (0.5, 0.40)},
+            sides_by_bbox={5: 0, 6: 0, 7: 1, 8: 1},
+            sides_from_calibration=True,
+        ))
+        tracker.stored_rally_data.append(self._make_rally(
+            top_tracks=[9, 10, 11, 12],
+            track_court_sides={9: 0, 10: 0, 11: 1, 12: 1},
+            early_positions={9: (0.5, 0.70), 10: (0.5, 0.80),
+                             11: (0.5, 0.30), 12: (0.5, 0.40)},
+        ))
+        assert tracker._select_seed_rally() == 1
+
+    def test_falls_back_to_zero_when_no_early_positions_anywhere(self) -> None:
+        """Scratchpad replay path: early_positions empty on every rally —
+        we cannot recompute Y-sort, so Phase 1 step 2 must no-op (returns 0)."""
+        tracker = MatchPlayerTracker()
+        for _ in range(3):
+            tracker.stored_rally_data.append(self._make_rally(
+                top_tracks=[1, 2, 3, 4],
+                track_court_sides={1: 0, 2: 0, 3: 1, 4: 1},
+                sides_by_bbox={1: 0, 2: 0, 3: 1, 4: 1},
+                sides_from_calibration=True,
+                early_positions={},  # replay-from-scratchpad state
+            ))
+        assert tracker._select_seed_rally() == 0
+
+
+class TestWithinTeamPermutation:
+    """Phase 1 step 2: re-anchoring is cosmetic on team membership but flips
+    within-team pid pairs (1↔2 or 3↔4) when the seed's Y-sort disagrees with
+    rally-0's Pass-1 mapping. Cross-team relabel is forbidden by construction.
+    """
+
+    @staticmethod
+    def _seed_data(
+        seed_assignment: dict[int, int],
+        early_y: dict[int, float],
+    ) -> StoredRallyData:
+        return StoredRallyData(
+            track_stats={t: _make_stats(t) for t in seed_assignment},
+            track_court_sides={
+                t: 0 if seed_assignment[t] in (1, 2) else 1
+                for t in seed_assignment
+            },
+            early_positions={t: (0.5, early_y[t]) for t in seed_assignment},
+            top_tracks=list(seed_assignment.keys()),
+        )
+
+    def test_identity_when_seed_matches_y_sort(self) -> None:
+        tracker = MatchPlayerTracker()
+        # tid 10 is upper of near team, tid 11 is lower; tid 20/21 same on far.
+        seed_assignment = {10: 1, 11: 2, 20: 3, 21: 4}
+        early_y = {10: 0.70, 11: 0.80, 20: 0.30, 21: 0.40}
+        tracker.stored_rally_data.append(self._seed_data(seed_assignment, early_y))
+        perm = tracker._within_team_permutation_from_seed(0, seed_assignment)
+        assert perm == {1: 1, 2: 2, 3: 3, 4: 4}
+
+    def test_swaps_within_team_when_seed_disagrees(self) -> None:
+        tracker = MatchPlayerTracker()
+        # Pass-1 said tid 10 = pid 1 (upper near), but at the seed rally tid 11
+        # is actually upper-near (smaller y). Swap pid 1↔2.
+        seed_assignment = {10: 1, 11: 2, 20: 3, 21: 4}
+        early_y = {10: 0.80, 11: 0.70, 20: 0.30, 21: 0.40}  # 11 is upper-near
+        tracker.stored_rally_data.append(self._seed_data(seed_assignment, early_y))
+        perm = tracker._within_team_permutation_from_seed(0, seed_assignment)
+        # 11 is upper-near → maps to pid 1; 10 is lower-near → maps to pid 2.
+        # Permutation: {old_pid: new_pid} = {1: 2, 2: 1, 3: 3, 4: 4}.
+        assert perm == {1: 2, 2: 1, 3: 3, 4: 4}
+
+    def test_returns_identity_when_no_early_positions(self) -> None:
+        tracker = MatchPlayerTracker()
+        data = StoredRallyData(
+            track_stats={t: _make_stats(t) for t in [10, 11, 20, 21]},
+            track_court_sides={10: 0, 11: 0, 20: 1, 21: 1},
+            early_positions={},  # replay path
+            top_tracks=[10, 11, 20, 21],
+        )
+        tracker.stored_rally_data.append(data)
+        perm = tracker._within_team_permutation_from_seed(
+            0, {10: 1, 11: 2, 20: 3, 21: 4},
+        )
+        assert perm == {1: 1, 2: 2, 3: 3, 4: 4}
+
+    def test_apply_permutation_relabels_results_and_state(self) -> None:
+        tracker = MatchPlayerTracker()
+        tracker.state.initialize_players()
+        # Two rallies with simple track_to_player; we'll swap pid 1↔2.
+        results = [
+            RallyTrackingResult(
+                rally_index=0,
+                track_to_player={10: 1, 11: 2, 20: 3, 21: 4},
+                server_player_id=1,
+                side_switch_detected=False,
+                assignment_confidence=0.7,
+            ),
+            RallyTrackingResult(
+                rally_index=1,
+                track_to_player={30: 2, 31: 1, 40: 3, 41: 4},
+                server_player_id=2,
+                side_switch_detected=False,
+                assignment_confidence=0.8,
+            ),
+        ]
+        tracker.stored_rally_data = [
+            StoredRallyData(
+                track_stats={}, track_court_sides={}, early_positions={},
+                top_tracks=[],
+                player_side_assignment={1: 0, 2: 0, 3: 1, 4: 1},
+            ),
+            StoredRallyData(
+                track_stats={}, track_court_sides={}, early_positions={},
+                top_tracks=[],
+                player_side_assignment={1: 0, 2: 0, 3: 1, 4: 1},
+            ),
+        ]
+        new_results = tracker._apply_within_team_permutation(
+            {1: 2, 2: 1, 3: 3, 4: 4}, results,
+        )
+        # Rally 0: pid 1 → 2, pid 2 → 1; pid 3,4 untouched.
+        assert new_results[0].track_to_player == {10: 2, 11: 1, 20: 3, 21: 4}
+        assert new_results[0].server_player_id == 2
+        # Rally 1 server pid 2 → 1.
+        assert new_results[1].track_to_player == {30: 1, 31: 2, 40: 3, 41: 4}
+        assert new_results[1].server_player_id == 1
+        # State.players renamed; team partition preserved.
+        assert set(tracker.state.players.keys()) == {1, 2, 3, 4}
+        assert tracker.state.current_side_assignment == {1: 0, 2: 0, 3: 1, 4: 1}
+
+    def test_apply_identity_permutation_is_noop(self) -> None:
+        tracker = MatchPlayerTracker()
+        tracker.state.initialize_players()
+        results = [RallyTrackingResult(
+            rally_index=0,
+            track_to_player={10: 1, 11: 2, 20: 3, 21: 4},
+            server_player_id=1,
+            side_switch_detected=False,
+            assignment_confidence=0.7,
+        )]
+        tracker.stored_rally_data = [StoredRallyData(
+            track_stats={}, track_court_sides={}, early_positions={},
+            top_tracks=[],
+            player_side_assignment={1: 0, 2: 0, 3: 1, 4: 1},
+        )]
+        new_results = tracker._apply_within_team_permutation(
+            {1: 1, 2: 2, 3: 3, 4: 4}, results,
+        )
+        assert new_results is results  # short-circuit on identity
+
+
 class TestTrackAppearanceStatsSerialization:
     """Roundtrip serialization for the per-rally TrackAppearanceStats.
 
