@@ -212,6 +212,12 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
   const [normalizedRallies, setNormalizedRallies] = useState<RallyEntry[] | null>(null);
   const [assignments, setAssignments] = useState<Record<string, Record<string, number>>>({});
   const [crops, setCrops] = useState<Map<string, string>>(new Map());
+  // Parallel map of cellKey → underlying BoT-SORT track ID for the crop.
+  // Surfaced as a small badge on each cell so the user can spot when two
+  // cells in the same row visually look like the same physical player but
+  // come from different track IDs (= tracker bug, e.g. spurious primary
+  // track or mid-rally ID-switch).
+  const [cellTrackIds, setCellTrackIds] = useState<Map<string, number>>(new Map());
   const [selectedCell, setSelectedCellState] = useState<CellId | null>(null);
   // Ref twin avoids stale closures in handleCellClick during async crop loading
   const selectedCellRef = useRef<CellId | null>(null);
@@ -337,6 +343,7 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
     videoRef.current = video;
 
     const cropMap = new Map<string, string>();
+    const trackIdMap = new Map<string, number>();
     let untracked = 0;
 
     async function extractCrops() {
@@ -501,11 +508,14 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
           ctx.drawImage(video, sx, sy, sw, sh, 0, 0, CROP_WIDTH, CROP_HEIGHT);
 
           const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-          cropMap.set(cellKey(entry.rallyId, pid), dataUrl);
+          const ck = cellKey(entry.rallyId, pid);
+          cropMap.set(ck, dataUrl);
+          trackIdMap.set(ck, trackId);
         }
 
         setLoadingProgress(i + 1);
         setCrops(new Map(cropMap));
+        setCellTrackIds(new Map(trackIdMap));
       }
     }
 
@@ -920,6 +930,7 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
                 {[1, 2, 3, 4].map((pid) => {
                   const key = cellKey(entry.rallyId, pid);
                   const cropUrl = crops.get(key);
+                  const cellTid = cellTrackIds.get(key);
                   const isSelected = selectedCell?.rallyId === entry.rallyId && selectedCell?.pid === pid;
                   const hasAssignment = Object.values(rowAssignment).includes(pid);
 
@@ -928,6 +939,7 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
                       key={pid}
                       onClick={() => handleCellClick(entry.rallyId, pid)}
                       sx={{
+                        position: 'relative',
                         width: CROP_WIDTH + 8,
                         height: CROP_HEIGHT + 8,
                         border: isSelected
@@ -947,13 +959,39 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
                       }}
                     >
                       {cropUrl ? (
-                        /* eslint-disable-next-line @next/next/no-img-element -- data URLs from canvas */
-                        <img
-                          src={cropUrl}
-                          alt={`R${rallyIndex + 1} P${pid}`}
-                          draggable={false}
-                          style={{ width: CROP_WIDTH, height: CROP_HEIGHT, objectFit: 'cover', pointerEvents: 'none' }}
-                        />
+                        <>
+                          {/* eslint-disable-next-line @next/next/no-img-element -- data URLs from canvas */}
+                          <img
+                            src={cropUrl}
+                            alt={`R${rallyIndex + 1} P${pid}`}
+                            draggable={false}
+                            style={{ width: CROP_WIDTH, height: CROP_HEIGHT, objectFit: 'cover', pointerEvents: 'none' }}
+                          />
+                          {/* Track-ID badge — lets the user see when two
+                              cells in the same row share a physical player
+                              visually but come from distinct underlying
+                              track IDs (= tracker bug like a spurious
+                              primary track or a mid-rally ID switch). */}
+                          {cellTid !== undefined && (
+                            <Box
+                              sx={{
+                                position: 'absolute',
+                                top: 2,
+                                right: 2,
+                                bgcolor: 'rgba(0,0,0,0.7)',
+                                color: 'white',
+                                fontSize: '0.6rem',
+                                fontWeight: 'bold',
+                                px: 0.5,
+                                borderRadius: 0.5,
+                                lineHeight: 1.4,
+                                pointerEvents: 'none',
+                              }}
+                            >
+                              T{cellTid}
+                            </Box>
+                          )}
+                        </>
                       ) : isLoading ? (
                         <Skeleton
                           variant="rectangular"
