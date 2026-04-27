@@ -372,13 +372,19 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
 
         // Fetch tracking data from API
         let positions: ApiPlayerPosition[] = [];
+        let rawPositions: ApiPlayerPosition[] = [];
         let rallyFps = 30;
         let primaryTrackIds: number[] | undefined;
         try {
           const trackResp = await getPlayerTrack(entry.rallyId);
           positions = trackResp.positions ?? [];
-          // Cache positions so the save path can build v2 labels with bbox
-          // anchors without re-fetching.
+          // Raw positions cover non-primary detections (other people in
+          // frame: spectators, ball persons, the late-acquired tracks
+          // that didn't get promoted to primary). The crop selector uses
+          // these for occlusion scoring so a "best" frame doesn't end up
+          // capturing two bodies just because the second body wasn't a
+          // primary player.
+          rawPositions = trackResp.rawPositions ?? [];
           rallyPositionsRef.current.set(entry.rallyId, positions);
           if (trackResp.fps) rallyFps = trackResp.fps;
           primaryTrackIds = trackResp.primaryTrackIds;
@@ -422,11 +428,20 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
           }
         }
 
-        // Index positions by frame for O(1) IoU lookups against other
-        // primary tracks at the same frame (occlusion proxy).
+        // Index ALL detected persons (primary + raw) by frame for O(1)
+        // occlusion lookups. Including raw catches the case where a
+        // non-primary body (a referee, ball person, or a late-acquired
+        // track that didn't make it to primary) overlaps the player's
+        // bbox at the candidate frame — that previously slipped through
+        // the primary-only IoU check, producing crops with two visible
+        // people.
         const positionsByFrame = new Map<number, ApiPlayerPosition[]>();
         for (const pos of positions) {
-          if (!primarySet.has(pos.trackId)) continue;
+          const list = positionsByFrame.get(pos.frameNumber);
+          if (list) list.push(pos);
+          else positionsByFrame.set(pos.frameNumber, [pos]);
+        }
+        for (const pos of rawPositions) {
           const list = positionsByFrame.get(pos.frameNumber);
           if (list) list.push(pos);
           else positionsByFrame.set(pos.frameNumber, [pos]);
@@ -492,12 +507,18 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
           });
           if (cancelled) break;
 
-          // bbox coords are center-based normalized: x,y = center, width,height = full size
-          // Ensure minimum crop size so far-side players are visible in context
-          const MIN_CROP_W = 0.08; // ~100px on 1280w — enough to see a person
-          const MIN_CROP_H = 0.28; // ~200px on 720h
-          const bw = Math.max(bestPos.width * 1.15, MIN_CROP_W);
-          const bh = Math.max(bestPos.height * 1.15, MIN_CROP_H);
+          // Tight crop around the player's bbox with a small uniform
+          // padding (5%). The previous policy enforced large crop
+          // minimums (0.08 × 0.28 of the frame) so far-side players
+          // would be "visible in context", but on small bboxes that
+          // expansion routinely captured an adjacent player — making
+          // the user unable to tell which body the cell represented.
+          // The canvas already scales the source region up to
+          // CROP_WIDTH × CROP_HEIGHT, so a small bbox stays visible
+          // even without padding-out into surrounding court.
+          const PAD = 1.05;
+          const bw = bestPos.width * PAD;
+          const bh = bestPos.height * PAD;
           const sx = Math.max(0, (bestPos.x - bw / 2)) * vw;
           const sy = Math.max(0, (bestPos.y - bh / 2)) * vh;
           const sw = Math.min(bw * vw, vw - sx);
