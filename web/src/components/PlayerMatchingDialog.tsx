@@ -26,6 +26,8 @@ import {
   getPlayerMatchingGtApi,
   savePlayerMatchingGtApi,
   getPlayerTrack,
+  trackUntracked,
+  getBatchTrackingStatus,
   type PlayerPosition as ApiPlayerPosition,
 } from '@/services/api';
 import { useEditorStore } from '@/stores/editorStore';
@@ -51,6 +53,33 @@ interface CellId {
 
 function cellKey(rallyId: string, pid: number): string {
   return `${rallyId}_${pid}`;
+}
+
+/**
+ * Compute IoU between two normalized center-format bboxes. Used as an
+ * occlusion proxy when picking the best crop frame per track: a high IoU
+ * with a different player means visual overlap → bad crop candidate.
+ */
+function computeBboxIou(
+  a: ApiPlayerPosition,
+  b: ApiPlayerPosition,
+): number {
+  const ax1 = a.x - a.width / 2;
+  const ay1 = a.y - a.height / 2;
+  const ax2 = a.x + a.width / 2;
+  const ay2 = a.y + a.height / 2;
+  const bx1 = b.x - b.width / 2;
+  const by1 = b.y - b.height / 2;
+  const bx2 = b.x + b.width / 2;
+  const by2 = b.y + b.height / 2;
+  const interW = Math.max(0, Math.min(ax2, bx2) - Math.max(ax1, bx1));
+  const interH = Math.max(0, Math.min(ay2, by2) - Math.max(ay1, by1));
+  const inter = interW * interH;
+  if (inter <= 0) return 0;
+  const aArea = a.width * a.height;
+  const bArea = b.width * b.height;
+  const union = aArea + bArea - inter;
+  return union > 0 ? inter / union : 0;
 }
 
 // Match analysis JSON may use camelCase or snake_case keys depending on when it was written
@@ -196,6 +225,13 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
   const [saving, setSaving] = useState(false);
   const [sideSwitches, setSideSwitches] = useState<number[]>([]);
   const [untrackedCount, setUntrackedCount] = useState(0);
+  // True while a "Track missing rallies" job is running. We poll the batch
+  // status until completion, then refresh crops by bumping `trackingNonce`.
+  const [trackingMissing, setTrackingMissing] = useState(false);
+  const [trackingProgress, setTrackingProgress] = useState<string>('');
+  // Bump this to force the crop-extraction effect to re-run (after we've
+  // tracked previously-missing rallies and need to pick up their data).
+  const [trackingNonce, setTrackingNonce] = useState(0);
   const [excludedRallies, setExcludedRallies] = useState<Set<string>>(new Set());
   const videoRef = useRef<HTMLVideoElement | null>(null);
 
@@ -380,22 +416,63 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
           }
         }
 
+        // Index positions by frame for O(1) IoU lookups against other
+        // primary tracks at the same frame (occlusion proxy).
+        const positionsByFrame = new Map<number, ApiPlayerPosition[]>();
+        for (const pos of positions) {
+          if (!primarySet.has(pos.trackId)) continue;
+          const list = positionsByFrame.get(pos.frameNumber);
+          if (list) list.push(pos);
+          else positionsByFrame.set(pos.frameNumber, [pos]);
+        }
+
         for (const trackId of primarySet) {
           if (!trackIds.has(trackId)) continue;
           const pid = effectiveMapping[trackId];
           if (!pid) continue;
 
-          // Pick the frame where this player's bbox is largest (most visible).
-          // For near-side players this is similar to midpoint; for far-side
-          // players it finds the moment they're closest to the camera.
+          // Pick the frame that is BEST for visual identity: high detection
+          // confidence, large bbox, and minimal overlap with other primary
+          // tracks at the same frame. The previous heuristic only used bbox
+          // area which can pick frames where two players are stacked or
+          // a player is half-occluded by another.
           const trackPositions = positions.filter((p) => p.trackId === trackId);
-          let bestPos = trackPositions[0];
-          let bestArea = 0;
+          let bestPos: ApiPlayerPosition | undefined;
+          let bestScore = -Infinity;
           for (const pos of trackPositions) {
+            // Skip very low-confidence detections — they're likely partial
+            // visibility or a noisy bbox.
+            const conf = pos.confidence ?? 1.0;
+            if (conf < 0.4) continue;
+
             const area = pos.width * pos.height;
-            if (area > bestArea) {
-              bestArea = area;
+            const sameFrame = positionsByFrame.get(pos.frameNumber) ?? [];
+            let maxIou = 0;
+            for (const other of sameFrame) {
+              if (other.trackId === pos.trackId) continue;
+              const iou = computeBboxIou(pos, other);
+              if (iou > maxIou) maxIou = iou;
+            }
+            // Score combines confidence × area × (1 − occlusion). The
+            // (1 − maxIou) factor pushes the selector toward frames where
+            // the player is clearly separated from teammates / opponents.
+            const score = conf * area * (1 - maxIou);
+            if (score > bestScore) {
+              bestScore = score;
               bestPos = pos;
+            }
+          }
+
+          // Fallback: if every position was filtered (e.g., low-confidence
+          // rally), pick the largest-bbox position so the cell isn't blank.
+          if (!bestPos) {
+            let bestArea = 0;
+            for (const pos of trackPositions) {
+              const area = pos.width * pos.height;
+              if (area > bestArea) {
+                bestArea = area;
+                bestPos = pos;
+              }
             }
           }
 
@@ -439,7 +516,48 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
       video.src = '';
       videoRef.current = null;
     };
-  }, [normalizedRallies, effectiveVideoUrl, open]);
+  }, [normalizedRallies, effectiveVideoUrl, open, trackingNonce]);
+
+  // Trigger tracking for any rallies that don't have positions yet, then
+  // refresh the crop extraction once the job completes. The endpoint
+  // `/v1/videos/:id/track-untracked` is a no-op when nothing needs tracking.
+  const handleTrackMissingRallies = useCallback(async () => {
+    if (!videoId || trackingMissing) return;
+    setTrackingMissing(true);
+    setTrackingProgress('Starting...');
+    try {
+      const result = await trackUntracked(videoId);
+      if (!result.jobId) {
+        // Nothing was actually missing (maybe the dialog's count was stale).
+        setTrackingNonce((n) => n + 1);
+        return;
+      }
+      setTrackingProgress(`Tracking ${result.totalRallies} rallies...`);
+      // Poll until the batch job completes. Each iteration is ~2 seconds
+      // which keeps the UI responsive without spamming the API.
+      while (true) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        const status = await getBatchTrackingStatus(videoId);
+        if (status.completedRallies != null && status.totalRallies != null) {
+          setTrackingProgress(
+            `Tracking ${status.completedRallies}/${status.totalRallies}...`,
+          );
+        }
+        if (status.status === 'completed' || status.status === 'failed') {
+          break;
+        }
+      }
+      // Reset crops + counter so the extraction useEffect re-runs cleanly.
+      setCrops(new Map());
+      setUntrackedCount(0);
+      setTrackingNonce((n) => n + 1);
+    } catch (err) {
+      console.error('Failed to track missing rallies:', err);
+    } finally {
+      setTrackingMissing(false);
+      setTrackingProgress('');
+    }
+  }, [videoId, trackingMissing]);
 
   const handleCellClick = useCallback((rallyId: string, pid: number) => {
     const sel = selectedCellRef.current;
@@ -667,14 +785,29 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
           Click the side-switch chip to toggle.
         </Typography>
 
-        {/* Warning when tracking data is missing */}
+        {/* Warning when tracking data is missing — with a one-click action
+            to track them. The endpoint behind `Track missing rallies` calls
+            /v1/videos/:id/track-untracked which queues only the rallies
+            that are actually missing, then this component polls the batch
+            status and refreshes crops once tracking completes. */}
         {!isLoading && untrackedCount > 0 && (
-          <Box sx={{ mb: 2, p: 1.5, bgcolor: 'warning.dark', borderRadius: 1, opacity: 0.9 }}>
-            <Typography variant="body2" sx={{ color: 'white' }}>
-              {untrackedCount === totalRallies
-                ? 'No rallies have tracking data. Run "Track All" first to generate player crops.'
+          <Box sx={{ mb: 2, p: 1.5, bgcolor: 'warning.dark', borderRadius: 1, opacity: 0.95, display: 'flex', alignItems: 'center', gap: 2 }}>
+            <Typography variant="body2" sx={{ color: 'white', flex: 1 }}>
+              {trackingMissing
+                ? trackingProgress
+                : untrackedCount === totalRallies
+                ? `No rallies have tracking data. Track them now to generate player crops.`
                 : `${untrackedCount}/${totalRallies} rallies have no tracking data (no crops).`}
             </Typography>
+            <Button
+              variant="contained"
+              size="small"
+              onClick={handleTrackMissingRallies}
+              disabled={trackingMissing}
+              sx={{ bgcolor: 'rgba(255,255,255,0.15)', '&:hover': { bgcolor: 'rgba(255,255,255,0.25)' } }}
+            >
+              {trackingMissing ? 'Tracking...' : `Track ${untrackedCount} ${untrackedCount === 1 ? 'rally' : 'rallies'}`}
+            </Button>
           </Box>
         )}
 
