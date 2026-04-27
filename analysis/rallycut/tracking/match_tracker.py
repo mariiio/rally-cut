@@ -3085,6 +3085,18 @@ def match_players_across_rallies(
 # leak through.
 CANONICAL_PID_TIEBREAK_TAU = 0.01
 
+# When the per-rally canonical assignment for a track disagrees with the
+# cross-rally `match-players` assignment AND the per-rally signal is below
+# this gap, defer to match-players. Rationale: cross-rally Hungarian sees
+# evidence from N rallies; per-rally Hungarian sees only one. When the
+# per-rally signal isn't strongly different from match-players' answer,
+# the cross-rally answer is usually right (the user-visible white-tshirt
+# regression on cuco was a single-rally disagreement where canonical's
+# gap was 0.02 and match-players' answer matched the visual identity in
+# 6 other rallies). Above this threshold the ref-crop prototype is
+# strongly different and canonical wins.
+CANONICAL_PID_DEFER_TO_MATCH_PLAYERS_GAP = 0.05
+
 
 def compute_canonical_pid_map(
     video_path: Path,
@@ -3092,19 +3104,31 @@ def compute_canonical_pid_map(
     anchors: IdentityAnchors,
     *,
     num_samples: int = 12,
+    track_to_player_per_rally: dict[str, dict[int, int]] | None = None,
 ) -> dict[str, dict[int, int]]:
-    """Per-track crop scoring + per-rally Hungarian + ambiguity abstain.
+    """Per-track crop scoring + per-rally Hungarian + cross-rally deferral.
 
     For each rally:
       1. Sample evenly-spaced frames on each primary track.
       2. Extract DINOv2 ViT-S/14 features (same backbone as the anchors),
          L2-normalize, score against the P prototypes.
-      3. If any track's top-2 prototype-score gap is below
-         ``CANONICAL_PID_TIEBREAK_TAU``, **abstain** — drop the rally from
-         the result so consumers fall through to legacy
-         ``matchAnalysisJson.trackToPlayer``.
-      4. Otherwise, run per-rally Hungarian on the (T, P) similarity matrix
-         and emit a deterministic ``{raw track_id: pid}`` mapping.
+      3. Run per-rally Hungarian on the (T, P) similarity matrix.
+      4. **Per-track confidence gate (replaces all-or-nothing rally abstain):**
+         emit a canonical entry for a track only when its top-2 prototype
+         gap is ≥ ``CANONICAL_PID_TIEBREAK_TAU``. Tracks below the threshold
+         are dropped from this rally's mapping; the consumer falls back to
+         legacy ``matchAnalysisJson.trackToPlayer`` for those tracks. This
+         was the all-or-nothing abstain that rejected an entire rally if
+         even one track's signal was borderline — partial mapping preserves
+         high-coverage canonical pids while only handing the genuinely
+         ambiguous track over to legacy.
+      5. **Cross-rally consistency check:** when ``track_to_player_per_rally``
+         is provided (the cross-rally match-players output) and the per-rally
+         canonical assignment disagrees with match-players for a track AND
+         the canonical gap is below
+         ``CANONICAL_PID_DEFER_TO_MATCH_PLAYERS_GAP``, drop the canonical
+         entry for that track. Match-players sees evidence from every rally
+         and is usually right when canonical's per-rally signal is borderline.
 
     Determinism: cap.set+cap.read on a fixed video path is byte-deterministic;
     DINOv2 inference in eval mode has no stochastic ops; ``linear_sum_assignment``
@@ -3119,7 +3143,8 @@ def compute_canonical_pid_map(
     proto_mat = anchors.prototype_matrix  # (P, D), L2-normalized
 
     canonical_map: dict[str, dict[int, int]] = {}
-    n_abstained = 0
+    n_low_gap_dropped = 0
+    n_disagreement_dropped = 0
 
     for rally in rallies:
         if not rally.primary_track_ids or not rally.positions:
@@ -3152,50 +3177,64 @@ def compute_canonical_pid_map(
         embeddings = np.stack([emb for _, emb in valid_tracks], axis=0)  # (T, D)
         sims = embeddings @ proto_mat.T  # (T, P) cosine, both sides L2-normed
 
-        # No abstain on incomplete tracking. The first rally (and occasional
-        # short rallies later) commonly have fewer than 4 primary tracks
-        # because not all players are on court yet — abstaining the rally
-        # forces the editor to fall through to legacy `appliedFullMapping`,
-        # which for rally 0 is assigned by the Y-sort `_initialize_first_rally`
-        # heuristic that doesn't know the user's ref-crop pid labels. Result
-        # was visible drift on rally 0 even when crops were complete.
-        # Rectangular `linear_sum_assignment` on a T×4 cost matrix already
-        # handles the partial case correctly: it assigns each present track
-        # a unique pid via max-similarity, preserving 1:1 within the rally.
-        # Tracks not present in this rally can't be displayed anyway.
-
-        # Ambiguity abstain stays as the safety net — keeps the rally out of
-        # the canonical map when any present track's top-2 prototype gap is
-        # below the noise floor (signal too weak to lock identity).
+        # Per-track top-2 gap drives the per-track confidence gate below.
+        # When sims has fewer than 2 columns (degenerate single-pid prototype
+        # set) the gap concept doesn't apply — emit all assignments.
         if sims.shape[1] >= 2:
             sorted_sims = np.sort(sims, axis=1)[:, ::-1]
             top2_gap = sorted_sims[:, 0] - sorted_sims[:, 1]
-            min_gap = float(top2_gap.min())
-            if min_gap < CANONICAL_PID_TIEBREAK_TAU:
-                n_abstained += 1
-                worst_row = int(np.argmin(top2_gap))
-                worst_tid = valid_tracks[worst_row][0]
-                logger.info(
-                    "canonical_pid.abstain rally=%s reason=ambiguous track=%d gap=%.4f tau=%.4f",
-                    rally.rally_id, worst_tid, min_gap,
-                    CANONICAL_PID_TIEBREAK_TAU,
-                )
-                continue
+        else:
+            top2_gap = np.full(sims.shape[0], float("inf"))
 
         cost = -sims  # min-sum Hungarian → max-similarity
         row_idx, col_idx = linear_sum_assignment(cost)
 
+        rally_mp = (track_to_player_per_rally or {}).get(rally.rally_id, {})
+
         rally_map: dict[int, int] = {}
         for r_i, c_i in zip(row_idx, col_idx):
             tid = valid_tracks[int(r_i)][0]
-            rally_map[int(tid)] = int(pids[int(c_i)])
+            assigned_pid = int(pids[int(c_i)])
+            track_gap = float(top2_gap[int(r_i)])
 
-        canonical_map[rally.rally_id] = rally_map
+            if track_gap < CANONICAL_PID_TIEBREAK_TAU:
+                # Per-track confidence too low to commit a canonical pid.
+                # Fall through to legacy for this track only.
+                n_low_gap_dropped += 1
+                logger.info(
+                    "canonical_pid.drop_low_gap rally=%s track=%d gap=%.4f tau=%.4f",
+                    rally.rally_id, tid, track_gap, CANONICAL_PID_TIEBREAK_TAU,
+                )
+                continue
 
-    if n_abstained:
+            # Cross-rally deferral: if match-players (cross-rally Hungarian
+            # over all rallies' appearance data) disagrees with this
+            # per-rally Hungarian on the same track AND our per-rally gap is
+            # borderline, trust match-players.
+            mp_pid = rally_mp.get(int(tid))
+            if (
+                mp_pid is not None
+                and mp_pid != assigned_pid
+                and track_gap < CANONICAL_PID_DEFER_TO_MATCH_PLAYERS_GAP
+            ):
+                n_disagreement_dropped += 1
+                logger.info(
+                    "canonical_pid.defer_to_match_players rally=%s track=%d "
+                    "canonical=pid%d match_players=pid%d gap=%.4f",
+                    rally.rally_id, tid, assigned_pid, mp_pid, track_gap,
+                )
+                continue
+
+            rally_map[int(tid)] = assigned_pid
+
+        if rally_map:
+            canonical_map[rally.rally_id] = rally_map
+
+    if n_low_gap_dropped or n_disagreement_dropped:
         logger.info(
-            "canonical_pid.summary kept_rallies=%d abstained_rallies=%d",
-            len(canonical_map), n_abstained,
+            "canonical_pid.summary kept_rallies=%d "
+            "low_gap_drops=%d match_players_deferrals=%d",
+            len(canonical_map), n_low_gap_dropped, n_disagreement_dropped,
         )
 
     return canonical_map

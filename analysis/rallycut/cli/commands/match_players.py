@@ -744,10 +744,18 @@ def match_players(
 
         anchors = build_anchors_from_crops(canonical_bgr_crops, source="user")
         if anchors.prototypes and len(anchors.prototypes) == 4:
+            # Pass cross-rally match-players assignment so canonical can
+            # defer to it on borderline per-rally disagreements (see
+            # CANONICAL_PID_DEFER_TO_MATCH_PLAYERS_GAP in match_tracker).
+            track_to_player_per_rally = {
+                rally.rally_id: dict(result.track_to_player)
+                for rally, result in zip(rallies, results)
+            }
             canonical_map = compute_canonical_pid_map(
                 video_path=video_path,
                 rallies=rallies,
                 anchors=anchors,
+                track_to_player_per_rally=track_to_player_per_rally,
             )
             if canonical_map:
                 # Canonical pids = user's ref-crop labels, full stop. We
