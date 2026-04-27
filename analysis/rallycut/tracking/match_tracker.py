@@ -3213,22 +3213,39 @@ def compute_canonical_pid_map(
             # Cross-rally deferral: match-players sees every rally's
             # appearance evidence and uses ref-crop prototypes in its
             # Hungarian — its track-pid pairing is more informed than this
-            # per-rally Hungarian's. If they disagree on a track, defer to
-            # match-players unconditionally; the consumer falls through to
-            # legacy `trackToPlayer` for that track. This keeps canonical
-            # purely additive: it commits a pid only when its per-rally
-            # view confirms match-players' cross-rally answer.
+            # per-rally Hungarian's. When they disagree on a track, ADOPT
+            # match-players' pid for the canonical entry (rather than drop
+            # the entry). Reason: the consumer (web/editor) reads canonical
+            # first, then `appliedFullMapping`, then a positional fallback —
+            # it does NOT consult match-players' raw `trackToPlayer`
+            # directly. So dropping the entry would cause the consumer to
+            # fall through to positional for that track, producing per-rally
+            # drift for the same physical player. Adopting match-players'
+            # pid keeps canonical as a complete map for every primary track,
+            # with values that match the cross-rally identity.
             mp_pid = rally_mp.get(int(tid))
             if mp_pid is not None and mp_pid != assigned_pid:
                 n_disagreement_dropped += 1
                 logger.info(
-                    "canonical_pid.defer_to_match_players rally=%s track=%d "
-                    "canonical=pid%d match_players=pid%d gap=%.4f",
+                    "canonical_pid.adopt_match_players rally=%s track=%d "
+                    "canonical=pid%d→match_players=pid%d gap=%.4f",
                     rally.rally_id, tid, assigned_pid, mp_pid, track_gap,
                 )
+                rally_map[int(tid)] = mp_pid
                 continue
 
             rally_map[int(tid)] = assigned_pid
+
+        # Backfill: for any primary track that match-players has assigned
+        # but canonical didn't (e.g., dropped by the per-track confidence
+        # gate above), adopt match-players' pid. This keeps the canonical
+        # map complete for all tracks match-players considers primary, so
+        # the web's display lookup never falls through to positional for
+        # a primary track.
+        for tid_str, mp_pid in rally_mp.items():
+            tid_int = int(tid_str) if isinstance(tid_str, str) else int(tid_str)
+            if tid_int not in rally_map:
+                rally_map[tid_int] = int(mp_pid)
 
         if rally_map:
             canonical_map[rally.rally_id] = rally_map
