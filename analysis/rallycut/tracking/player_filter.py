@@ -2014,6 +2014,128 @@ def should_use_ball_filtering(
     return use_ball
 
 
+def merge_duplicate_primary_tracks(
+    all_positions: list[PlayerPosition],
+    primary_tracks: set[int],
+    track_stats: dict[int, TrackStats],
+    *,
+    min_iou: float = 0.5,
+    min_overlap_fraction: float = 0.5,
+) -> set[int]:
+    """Drop primary tracks that are duplicate detections on the same body.
+
+    YOLO + BoT-SORT can produce two simultaneous tracks on a single
+    physical player when:
+
+    - The detector momentarily fires two boxes on the same body (often
+      after a partial occlusion or fast motion).
+    - The tracker fails to merge them because their per-frame appearance
+      embeddings are dissimilar enough (lighting glints, partial bbox).
+
+    Both tracks survive primary selection (each looks "stable enough"),
+    so downstream stages (match-players, canonical-pid-map, the editor's
+    PlayerMatchingDialog) all see the same player twice and the
+    legitimate fourth player is squeezed out or mis-assigned. Concrete
+    case captured during diagnosis: wawa rally 9, T2 (835 frames) and
+    T5 (503 frames, all simultaneous with T2 at center distance 0.01
+    and IoU ≈ 1.0). Both kept as primary; the female ended up displayed
+    twice in the dialog.
+
+    The merge is conservative — only flags pairs that are BOTH:
+    1. The shorter track's frames are ≥ ``min_overlap_fraction`` inside
+       the longer track's frames (it's "subsumed").
+    2. Mean IoU on the overlapping frames is ≥ ``min_iou`` (their
+       bboxes consistently sit on top of each other, not just sometimes).
+
+    On match: the longer track wins (it has more evidence); the shorter
+    is dropped from the primary set. Its positions stay in
+    `raw_positions` for downstream re-promotion if needed.
+
+    Pairwise iteration over the primary set is O(P²) which is trivial
+    given P ≤ ~6 in practice.
+    """
+    if len(primary_tracks) < 2:
+        return primary_tracks
+
+    # Group primary track positions by frame for fast simultaneous-frame
+    # lookups. Indexed by trackId → {frame: PlayerPosition}.
+    by_track_frame: dict[int, dict[int, PlayerPosition]] = {}
+    for p in all_positions:
+        if p.track_id not in primary_tracks:
+            continue
+        track_frames = by_track_frame.setdefault(p.track_id, {})
+        # If the same track has multiple positions at the same frame
+        # (multi-detect), keep the highest-confidence one.
+        existing = track_frames.get(p.frame_number)
+        if existing is None or p.confidence > existing.confidence:
+            track_frames[p.frame_number] = p
+
+    # Sort tracks by frame count descending — longer tracks are kept
+    # preferentially when paired with shorter overlappers.
+    sorted_tracks = sorted(
+        primary_tracks,
+        key=lambda tid: len(by_track_frame.get(tid, {})),
+        reverse=True,
+    )
+
+    dropped: set[int] = set()
+
+    for i, tid_long in enumerate(sorted_tracks):
+        if tid_long in dropped:
+            continue
+        long_frames = by_track_frame.get(tid_long, {})
+        if not long_frames:
+            continue
+        long_frame_set = set(long_frames.keys())
+
+        for tid_short in sorted_tracks[i + 1:]:
+            if tid_short in dropped:
+                continue
+            short_frames = by_track_frame.get(tid_short, {})
+            if not short_frames:
+                continue
+            short_frame_set = set(short_frames.keys())
+
+            overlap = long_frame_set & short_frame_set
+            if not overlap:
+                continue
+            overlap_fraction = len(overlap) / len(short_frame_set)
+            if overlap_fraction < min_overlap_fraction:
+                continue
+
+            # Compute mean IoU on overlapping frames.
+            iou_sum = 0.0
+            for f in overlap:
+                a = long_frames[f]
+                b = short_frames[f]
+                ax1, ay1 = a.x - a.width / 2, a.y - a.height / 2
+                ax2, ay2 = a.x + a.width / 2, a.y + a.height / 2
+                bx1, by1 = b.x - b.width / 2, b.y - b.height / 2
+                bx2, by2 = b.x + b.width / 2, b.y + b.height / 2
+                iw = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+                ih = max(0.0, min(ay2, by2) - max(ay1, by1))
+                inter = iw * ih
+                if inter <= 0.0:
+                    continue
+                union = a.width * a.height + b.width * b.height - inter
+                if union > 0:
+                    iou_sum += inter / union
+            mean_iou = iou_sum / len(overlap)
+            if mean_iou < min_iou:
+                continue
+
+            dropped.add(tid_short)
+            logger.info(
+                "Primary-track duplicate dropped: T%d subsumed by T%d "
+                "(overlap=%d/%d=%.2f, mean_iou=%.2f)",
+                tid_short, tid_long,
+                len(overlap), len(short_frame_set),
+                overlap_fraction, mean_iou,
+            )
+
+    return primary_tracks - dropped
+
+
 def detect_distractor_tracks(
     all_positions: list[PlayerPosition],
     primary_tracks: set[int],
@@ -2260,6 +2382,18 @@ class PlayerFilter:
         # Identify primary tracks (excluding referees and with court-based hard filter)
         self.primary_tracks = identify_primary_tracks(
             self.track_stats, self.config, self.court_config, referee_tracks
+        )
+
+        # Merge duplicate primary tracks — drop tracks that are simultaneous
+        # bbox-overlapping detections on the same physical body. Without
+        # this, downstream consumers (match-players, canonical-pid-map, the
+        # editor's PlayerMatchingDialog) all see the same player twice and
+        # mis-assign the legitimate fourth player. Conservative thresholds
+        # (mean_iou ≥ 0.5, overlap_fraction ≥ 0.5 of the shorter track) keep
+        # this from over-merging legitimate close pairs (e.g. blocker +
+        # attacker at the net for a few frames).
+        self.primary_tracks = merge_duplicate_primary_tracks(
+            all_positions, self.primary_tracks, self.track_stats,
         )
 
         # Detect distractor tracks (non-players that coexist with all primary tracks)
