@@ -3085,17 +3085,20 @@ def match_players_across_rallies(
 # leak through.
 CANONICAL_PID_TIEBREAK_TAU = 0.01
 
-# When the per-rally canonical assignment for a track disagrees with the
-# cross-rally `match-players` assignment AND the per-rally signal is below
-# this gap, defer to match-players. Rationale: cross-rally Hungarian sees
-# evidence from N rallies; per-rally Hungarian sees only one. When the
-# per-rally signal isn't strongly different from match-players' answer,
-# the cross-rally answer is usually right (the user-visible white-tshirt
-# regression on cuco was a single-rally disagreement where canonical's
-# gap was 0.02 and match-players' answer matched the visual identity in
-# 6 other rallies). Above this threshold the ref-crop prototype is
-# strongly different and canonical wins.
-CANONICAL_PID_DEFER_TO_MATCH_PLAYERS_GAP = 0.05
+# Cross-rally `match-players` is the source of truth for track-pid pairing.
+# It already incorporates ref-crop prototypes via `reference_profiles` in
+# its Hungarian, AND aggregates appearance evidence across every rally —
+# strictly more information than the per-rally canonical Hungarian. When
+# canonical's per-rally signal disagrees with match-players on a track,
+# match-players wins regardless of canonical's gap. Canonical's role is
+# narrowed to per-rally verification: emit the pid for tracks where
+# canonical's per-rally Hungarian AGREES with match-players' cross-rally
+# assignment, so consumers can read a single source. Disagreements are
+# always deferred — the consumer falls through to legacy
+# `matchAnalysisJson.trackToPlayer` which preserves match-players' cross-
+# rally consistency. Rationale recorded in this session's investigation
+# of wawa rally 21d4cdf6 (canonical confidently said T1=P2; match-players
+# correctly said T1=P4 based on 9 other rallies of evidence).
 
 
 def compute_canonical_pid_map(
@@ -3207,16 +3210,16 @@ def compute_canonical_pid_map(
                 )
                 continue
 
-            # Cross-rally deferral: if match-players (cross-rally Hungarian
-            # over all rallies' appearance data) disagrees with this
-            # per-rally Hungarian on the same track AND our per-rally gap is
-            # borderline, trust match-players.
+            # Cross-rally deferral: match-players sees every rally's
+            # appearance evidence and uses ref-crop prototypes in its
+            # Hungarian — its track-pid pairing is more informed than this
+            # per-rally Hungarian's. If they disagree on a track, defer to
+            # match-players unconditionally; the consumer falls through to
+            # legacy `trackToPlayer` for that track. This keeps canonical
+            # purely additive: it commits a pid only when its per-rally
+            # view confirms match-players' cross-rally answer.
             mp_pid = rally_mp.get(int(tid))
-            if (
-                mp_pid is not None
-                and mp_pid != assigned_pid
-                and track_gap < CANONICAL_PID_DEFER_TO_MATCH_PLAYERS_GAP
-            ):
+            if mp_pid is not None and mp_pid != assigned_pid:
                 n_disagreement_dropped += 1
                 logger.info(
                     "canonical_pid.defer_to_match_players rally=%s track=%d "
