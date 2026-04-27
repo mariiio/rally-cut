@@ -1431,8 +1431,10 @@ class MatchPlayerTracker:
                 window_margin.append(sorted_pids[0][1] - sorted_pids[1][1])
 
             # Per-track diagnostic — surface what the splitter sees so users
-            # can debug why a track did/didn't split.
-            logger.info(
+            # can debug why a track did/didn't split. WARNING level so the
+            # default rallycut CLI logging config (which is WARNING) prints
+            # these without needing --verbose.
+            logger.warning(
                 "Track-split window scan: tid=%d  windows=%s",
                 tid,
                 [
@@ -1522,7 +1524,7 @@ class MatchPlayerTracker:
                         best = (f_split_candidate, pa, qa, pm, qm)
                 if best is not None:
                     f_split, pre_argmax, post_argmax, pre_margin, post_margin = best
-                    logger.info(
+                    logger.warning(
                         "Track-split fallback boundary scan: tid=%d split@frame=%d "
                         "pre->pid%d (margin %+.3f)  post->pid%d (margin %+.3f)",
                         tid, f_split, pre_argmax, pre_margin,
@@ -1530,7 +1532,7 @@ class MatchPlayerTracker:
                     )
 
             if f_split is None:
-                logger.info(
+                logger.warning(
                     "Track-split: tid=%d no split detected "
                     "(strict walk + boundary scan both abstained)",
                     tid,
@@ -1570,7 +1572,7 @@ class MatchPlayerTracker:
                 aggregated_margin=post_margin,
             ))
 
-            logger.info(
+            logger.warning(
                 "Within-track split: tid=%d at frame %d  pre->pid%d "
                 "(margin %+.3f, %d frames)  post->pid%d "
                 "(margin %+.3f, %d frames)",
@@ -2235,12 +2237,38 @@ class MatchPlayerTracker:
 
             # No position continuity in Pass 2 — rebuilding the position
             # chain from scratch can propagate errors.
-            track_to_player = self._assign_tracks_to_players_global(
-                data.top_tracks,
-                data.track_stats,
-                data.track_court_sides,
-                use_side_penalty=not self.frozen_player_ids,
-            )
+            #
+            # Sub-track-aware path: when Pass 1 detected within-track splits
+            # (`initial.sub_tracks` non-empty), apply their direct pid claims
+            # before running Hungarian on the remaining real tracks. Without
+            # this, Stage 1 silently drops sub-tracks (they're not in the
+            # rebuilt track_to_player) and downstream `remap-track-ids` loses
+            # the frame-conditional remap.
+            if initial.sub_tracks:
+                all_pids = sorted(self.state.players.keys())
+                direct, remaining_tracks, remaining_pids = (
+                    self._apply_subtrack_assignments(
+                        initial.sub_tracks, data.top_tracks, all_pids,
+                    )
+                )
+                if remaining_tracks and remaining_pids:
+                    hungarian_result = self._assign_tracks_to_players_global(
+                        remaining_tracks,
+                        data.track_stats,
+                        data.track_court_sides,
+                        use_side_penalty=not self.frozen_player_ids,
+                        restrict_to_pids=remaining_pids,
+                    )
+                else:
+                    hungarian_result = {}
+                track_to_player = {**direct, **hungarian_result}
+            else:
+                track_to_player = self._assign_tracks_to_players_global(
+                    data.top_tracks,
+                    data.track_stats,
+                    data.track_court_sides,
+                    use_side_penalty=not self.frozen_player_ids,
+                )
 
             self.state.current_side_assignment = saved_side
 
@@ -2936,7 +2964,7 @@ def match_players_across_rallies(
             )
             tracker._few_shot_classifier = clf  # type: ignore[attr-defined]
             track_split_active = True
-            logger.info(
+            logger.warning(
                 "Track-split classifier trained on %d pids (sizes: %s)",
                 len(pids_with_crops),
                 {pid: len(crops_by_pid_for_classifier[pid]) for pid in pids_with_crops},
@@ -2948,7 +2976,7 @@ def match_players_across_rallies(
                 rally_split_fps = cap_probe.get(cv2.CAP_PROP_FPS) or 30.0
                 cap_probe.release()
         else:
-            logger.info(
+            logger.warning(
                 "Track-split requested but only %d pids have crops "
                 "(need ≥2) — splitter inert.",
                 len(pids_with_crops),

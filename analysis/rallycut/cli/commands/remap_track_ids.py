@@ -144,14 +144,25 @@ def _should_reverse(
 def _build_full_mapping(
     track_to_player: dict[int, int],
     all_track_ids: set[int],
+    sub_track_pids: set[int] | None = None,
 ) -> dict[int, int]:
     """Build collision-safe mapping for ALL track IDs in a rally.
 
     Mapped tracks get their player IDs (1-4).
     Unmapped tracks keep their ID if no collision, otherwise shift to 101+.
+
+    `sub_track_pids` carries pids claimed by sub-tracks (from within-track
+    segmentation). When provided, an unmapped track whose ID equals one of
+    those pids would render as a phantom duplicate label alongside the
+    sub-track's bbox at the same frame, so we treat its ID as colliding
+    and shift it (or, more practically, the caller passes
+    `unmapped_to_unlabeled=True` to `_resolve_with_overrides` which writes
+    `UNLABELED_TRACK_ID` for them — see below). To make that path fire,
+    such tracks must NOT be added to `mapping` here. We exclude them.
     """
     mapping: dict[int, int] = {}
     used_ids = set(track_to_player.values())
+    sub_track_pids = sub_track_pids or set()
 
     # First, add the explicit track→player mappings
     for tid, pid in track_to_player.items():
@@ -162,6 +173,13 @@ def _build_full_mapping(
     for tid in sorted(all_track_ids):
         if tid in mapping:
             continue  # Already mapped
+        if tid in sub_track_pids:
+            # Pid claimed by a sub-track. Don't map this real track to its
+            # identity (or anything) — leave it absent from `mapping` so
+            # `_resolve_with_overrides` falls through to `unmapped_to_unlabeled`
+            # and writes UNLABELED_TRACK_ID for these positions. Otherwise
+            # they'd render as a duplicate pid label at the same frames.
+            continue
         if tid in used_ids:
             # Collision: this track ID conflicts with a mapped player ID
             while next_shifted in all_track_ids or next_shifted in used_ids:
@@ -190,6 +208,7 @@ def _resolve_with_overrides(
     frame: int | None,
     mapping: dict[int, int],
     overrides_by_parent: dict[int, list[dict[str, int]]],
+    unmapped_to_unlabeled: bool = False,
 ) -> int | None:
     """Resolve a track id to its post-remap value.
 
@@ -199,7 +218,12 @@ def _resolve_with_overrides(
        the segment's pid on hit; returns `UNLABELED_TRACK_ID` when frame
        falls outside every kept segment.
     2. Otherwise, look up the flat mapping. Returns the new id, or `None`
-       when the id is absent from the mapping (caller leaves it untouched).
+       when the id is absent from the mapping AND `unmapped_to_unlabeled`
+       is False (caller leaves it untouched). When `unmapped_to_unlabeled`
+       is True (set by remap_positions when sub-tracks exist), absent
+       tracks resolve to `UNLABELED_TRACK_ID` — this prevents real tracks
+       whose pid was claimed by a sub-track from rendering as a phantom
+       duplicate label in positions_json.
 
     A `None` `frame` for a split-parent id is treated as "frame unknown" →
     returns `UNLABELED_TRACK_ID` (we can't resolve sub-tracks without a
@@ -212,7 +236,11 @@ def _resolve_with_overrides(
             if ov["f_start"] <= frame <= ov["f_end"]:
                 return ov["pid"]
         return UNLABELED_TRACK_ID
-    return mapping.get(old_id_int)
+    if old_id_int in mapping:
+        return mapping[old_id_int]
+    if unmapped_to_unlabeled:
+        return UNLABELED_TRACK_ID
+    return None
 
 
 def _remap_positions(
@@ -228,6 +256,11 @@ def _remap_positions(
     sub-track segment are written as `UNLABELED_TRACK_ID`.
     """
     overrides_by_parent = _index_overrides_by_parent(sub_track_overrides or [])
+    # When sub-tracks are present, an unmapped real track means its pid was
+    # claimed by a sub-track and Hungarian had no remaining pid to assign it.
+    # Mark those positions as unlabeled so they don't render as a phantom
+    # duplicate label alongside the sub-track's bbox at the same frame.
+    unmapped_to_unlabeled = bool(overrides_by_parent)
     count = 0
     for p in positions:
         old_id = p.get("trackId")
@@ -237,7 +270,8 @@ def _remap_positions(
         frame = p.get("frameNumber")
         frame_int = int(frame) if frame is not None else None
         new_id = _resolve_with_overrides(
-            old_id_int, frame_int, mapping, overrides_by_parent
+            old_id_int, frame_int, mapping, overrides_by_parent,
+            unmapped_to_unlabeled=unmapped_to_unlabeled,
         )
         if new_id is None:
             continue
@@ -543,7 +577,15 @@ def remap_track_ids_cmd(
                 all_track_ids.add(pid)
 
         # --- Step 3: Build and apply new mapping ---
-        mapping = _build_full_mapping(raw_mapping, all_track_ids)
+        # Sub-track-claimed pids must NOT identity-map other real tracks
+        # to the same number, or we'd get duplicate pid labels rendered at
+        # the same frame. See `_build_full_mapping` docstring.
+        sub_track_pids: set[int] = {
+            int(ov["pid"]) for ov in sub_track_overrides
+        }
+        mapping = _build_full_mapping(
+            raw_mapping, all_track_ids, sub_track_pids=sub_track_pids,
+        )
 
         # Check if mapping is all identity AND there are no sub-track
         # overrides (which always force a remap). Clear stale
