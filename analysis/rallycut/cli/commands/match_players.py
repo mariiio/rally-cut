@@ -275,6 +275,15 @@ def match_players(
             "established profiles from previous full match-players run."
         ),
     ),
+    no_ref_crops: bool = typer.Option(
+        False,
+        "--no-ref-crops",
+        help=(
+            "Force the blind path even when DB has reference crops. Used to "
+            "validate the global solver on fixtures that would otherwise hit "
+            "the ref-crop bypass (Q6=3 in the cross-rally identity rewrite)."
+        ),
+    ),
 ) -> None:
     """Match players across rallies for consistent player IDs (1-4).
 
@@ -406,11 +415,14 @@ def match_players(
     canonical_crop_rows: list[tuple[Any, ...]] = []
     canonical_bgr_crops: dict[int, list[Any]] = {}
 
-    # Try DB reference crops first (unless JSON file is explicitly provided)
-    if reference_crops_json is None:
+    # Try DB reference crops first (unless JSON file is explicitly provided
+    # or --no-ref-crops forces the blind path).
+    if reference_crops_json is None and not no_ref_crops:
         canonical_crop_rows, reference_profiles, canonical_bgr_crops = (
             _load_db_reference_crops(video_id, video_path, quiet)
         )
+    elif no_ref_crops and not quiet:
+        console.print("  [yellow]--no-ref-crops:[/yellow] forcing blind path")
 
     if reference_crops_json is not None:
         import cv2

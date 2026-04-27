@@ -493,6 +493,11 @@ class StoredRallyData:
     # where this disagrees with `track_court_sides` are treated as
     # low-confidence votes for team membership.
     sides_by_bbox: dict[int, int] = field(default_factory=dict)
+    # Late-rally positions per top track (avg over last 30 frames). Used
+    # by ``MatchSolver`` for cross-rally position continuity. Not
+    # persisted by ``to_dict`` — solver runs in-memory only on the blind
+    # path; relabel-with-crops replay never sees this field.
+    late_positions: dict[int, tuple[float, float]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the replay-relevant subset to a JSON-compatible dict.
@@ -790,6 +795,11 @@ class MatchPlayerTracker:
         early_positions = _compute_track_positions(
             player_positions, top_tracks, window=30, from_start=True
         )
+        # Late-rally positions feed MatchSolver's cross-rally position
+        # continuity term (Day 2 task 8). In-memory only.
+        late_positions = _compute_track_positions(
+            player_positions, top_tracks, window=30, from_start=False
+        )
 
         # Step 4: Assign tracks to players
         # Side switch detection runs in Pass 2 (combinatorial search)
@@ -886,6 +896,7 @@ class MatchPlayerTracker:
             end_ms=end_ms,
             sides_from_calibration=self._sides_from_calibration,
             sides_by_bbox=sides_by_bbox,
+            late_positions=late_positions,
         ))
 
         return RallyTrackingResult(
@@ -2471,6 +2482,7 @@ class MatchPlayerTracker:
     def refine_assignments(
         self,
         initial_results: list[RallyTrackingResult],
+        skip_stages_1_and_2: bool = False,
     ) -> list[RallyTrackingResult]:
         """Re-score all rallies using final profiles + global within-team voting.
 
@@ -2481,6 +2493,11 @@ class MatchPlayerTracker:
 
         Args:
             initial_results: Results from Pass 1 forward pass.
+            skip_stages_1_and_2: When True (blind path under
+                ``MatchSolver``), run only Stage 0 (side-switch detection)
+                and the canonical re-anchor; skip the profile-based
+                re-Hungarian (Stage 1) and the global within-team voting
+                (Stage 2) since the solver already produced them.
 
         Returns:
             Refined results with potentially corrected assignments.
@@ -2543,6 +2560,10 @@ class MatchPlayerTracker:
                     initial_results = self._apply_within_team_permutation(
                         seed_perm, initial_results,
                     )
+
+        # Blind-path short-circuit: solver replaces Stages 1 and 2.
+        if skip_stages_1_and_2:
+            return initial_results
 
         # Stage 1: Re-score ALL rallies (including rally 0) with final profiles.
         # Rally 0 was initialized by Y-sort only; re-scoring with accumulated
@@ -3367,8 +3388,64 @@ def match_players_across_rallies(
             f"assignments={result.track_to_player}"
         )
 
-    # Pass 2: Re-score all rallies with final profiles
-    results = tracker.refine_assignments(results)
+    # Pass 2: Re-score all rallies with final profiles.
+    #
+    # Two paths:
+    #   - Frozen profiles (ref-crop bypass, plan Q6=3): keep today's
+    #     forward-Hungarian + Pass-2 stages 1+2 path. Day-4's 95.22%
+    #     direct-accuracy result on click-GT lives on this path.
+    #   - Blind path: a global ``MatchSolver`` replaces Pass-1 forward
+    #     Hungarian + Pass-2 stages 1+2. ``refine_assignments`` runs
+    #     Stage 0 (side-switch) + the canonical re-anchor only.
+    if tracker.frozen_player_ids:
+        results = tracker.refine_assignments(results)
+    else:
+        from rallycut.tracking.match_solver import MatchSolver
+
+        solver = MatchSolver(reid_blend=REID_BLEND)
+        solved = solver.solve(tracker.stored_rally_data)
+
+        # Splice solver assignments into the per-rally results. server_player_id
+        # is re-derived from the solver's track_to_player using the original
+        # server-track identity recovered from the Pass-1 mapping (track_id
+        # itself is stable across passes; only its pid label changes).
+        spliced: list[RallyTrackingResult] = []
+        for i, r in enumerate(results):
+            new_t2p = solved[i] if i < len(solved) else r.track_to_player
+
+            server_track_id: int | None = None
+            if r.server_player_id is not None:
+                for tid, pid in r.track_to_player.items():
+                    if pid == r.server_player_id:
+                        server_track_id = tid
+                        break
+            new_server_pid = (
+                new_t2p.get(server_track_id)
+                if server_track_id is not None
+                else r.server_player_id
+            )
+
+            spliced.append(RallyTrackingResult(
+                rally_index=r.rally_index,
+                track_to_player=new_t2p,
+                server_player_id=new_server_pid,
+                side_switch_detected=False,  # Stage 0 sets this below.
+                assignment_confidence=r.assignment_confidence,
+                sub_tracks=r.sub_tracks,
+            ))
+        results = spliced
+
+        # Rebuild profiles from solver assignments so downstream consumers
+        # (team_templates, scratchpad replay) see solver truth, not the
+        # discarded Pass-1 forward Hungarian. Reset first since Pass 1 may
+        # have populated some pids and skipped others under the 0.80 gate.
+        tracker.state.players.clear()
+        tracker.state.initialize_players()
+        for i, data in enumerate(tracker.stored_rally_data):
+            if i < len(solved) and solved[i]:
+                tracker._update_profiles(data.track_stats, solved[i])
+
+        results = tracker.refine_assignments(results, skip_stages_1_and_2=True)
 
     # Build team templates from canonical-aware positional team membership.
     # Each diagnostic carries the per-rally `track_court_sides` produced by
