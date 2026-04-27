@@ -12,7 +12,6 @@ import {
   Skeleton,
   Chip,
   Tooltip,
-  Divider,
   CircularProgress,
 } from '@mui/material';
 import CloseIcon from '@mui/icons-material/Close';
@@ -619,17 +618,6 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
     setSelectedCell(null);
   }, [setSelectedCell]);
 
-  // Toggle side switch
-  const handleToggleSideSwitch = useCallback((rallyIndex: number) => {
-    setSideSwitches((prev) => {
-      const next = prev.includes(rallyIndex)
-        ? prev.filter((i) => i !== rallyIndex)
-        : [...prev, rallyIndex].sort((a, b) => a - b);
-      setIsDirty(true);
-      return next;
-    });
-  }, []);
-
   // Exclude/include rally from GT
   const handleToggleExclude = useCallback((rallyId: string) => {
     setExcludedRallies((prev) => {
@@ -848,24 +836,11 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
               const overlap = Math.min(r.end_time, endSec) - Math.max(r.start_time, startSec);
               return overlap > 0.5;
             });
-          const isSideSwitch = sideSwitches.includes(entry.rallyIndex);
           const rowAssignment = assignments[entry.rallyId] || {};
           const isExcluded = excludedRallies.has(entry.rallyId);
 
           return (
             <Box key={entry.rallyId}>
-              {/* Side switch divider */}
-              {isSideSwitch && (
-                <Divider sx={{ my: 1, borderColor: '#ff9800' }}>
-                  <Chip
-                    label="Side Switch"
-                    size="small"
-                    sx={{ bgcolor: '#ff9800', color: 'white', cursor: 'pointer' }}
-                    onClick={() => handleToggleSideSwitch(entry.rallyIndex)}
-                  />
-                </Divider>
-              )}
-
               <Box
                 sx={{
                   display: 'grid',
@@ -909,7 +884,7 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
                       {formatTime(rally?.start_time ?? entry.startMs / 1000)} - {formatTime(rally?.end_time ?? entry.endMs / 1000)}
                     </Typography>
                   </Box>
-                  <Tooltip title="Toggle side switch before this rally">
+                  <Tooltip title="Match-players assignment confidence for this rally">
                     <Chip
                       label={`${Math.round(entry.assignmentConfidence * 100)}%`}
                       size="small"
@@ -919,9 +894,7 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
                         color: 'white',
                         fontSize: '0.65rem',
                         height: 20,
-                        cursor: 'pointer',
                       }}
-                      onClick={() => handleToggleSideSwitch(entry.rallyIndex)}
                     />
                   </Tooltip>
                 </Box>
