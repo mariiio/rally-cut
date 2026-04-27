@@ -1430,11 +1430,112 @@ class MatchPlayerTracker:
                 window_argmax.append(sorted_pids[0][0])
                 window_margin.append(sorted_pids[0][1] - sorted_pids[1][1])
 
-            split_at_window = self._find_segment_flip(window_argmax, window_margin)
-            if split_at_window is None:
-                continue
+            # Per-track diagnostic — surface what the splitter sees so users
+            # can debug why a track did/didn't split.
+            logger.info(
+                "Track-split window scan: tid=%d  windows=%s",
+                tid,
+                [
+                    (window_frame_ranges[i], window_argmax[i],
+                     round(window_margin[i], 3))
+                    for i in range(SEGMENT_NUM_WINDOWS)
+                ],
+            )
 
-            f_split = window_frame_ranges[split_at_window][0]
+            # Try the strict per-window walk first (cheap, exact).
+            split_at_window = self._find_segment_flip(window_argmax, window_margin)
+
+            # Fallback: if the strict walk found no flip, try every window
+            # boundary as a candidate split and accept the one where BOTH
+            # per-segment aggregates clear the margin gate. This handles the
+            # common case where the transition window itself has weak/mixed
+            # signal (which the strict walk rejects) but pre and post
+            # aggregates are clean.
+            f_split: int | None = None
+            pre_argmax: int | None = None
+            post_argmax: int | None = None
+            pre_margin: float = 0.0
+            post_margin: float = 0.0
+
+            min_seg_frames = SEGMENT_MIN_WINDOW_FRAMES * SEGMENT_MIN_CONFIRMING_WINDOWS
+
+            if split_at_window is not None:
+                f_split_candidate = window_frame_ranges[split_at_window][0]
+                pre_positions_c = [
+                    p for p in track_positions if p.frame_number < f_split_candidate
+                ]
+                post_positions_c = [
+                    p for p in track_positions if p.frame_number >= f_split_candidate
+                ]
+                if (
+                    len(pre_positions_c) >= min_seg_frames
+                    and len(post_positions_c) >= min_seg_frames
+                ):
+                    pa, pm = self._aggregate_segment_classifier(
+                        tid, pre_positions_c, classifier, crop_extractor,
+                    )
+                    qa, qm = self._aggregate_segment_classifier(
+                        tid, post_positions_c, classifier, crop_extractor,
+                    )
+                    if (
+                        pa is not None and qa is not None
+                        and pa != qa
+                        and pm >= SEGMENT_MIN_PER_SEGMENT_MARGIN
+                        and qm >= SEGMENT_MIN_PER_SEGMENT_MARGIN
+                    ):
+                        f_split = f_split_candidate
+                        pre_argmax, pre_margin = pa, pm
+                        post_argmax, post_margin = qa, qm
+
+            if f_split is None:
+                # Fallback: scan every window boundary, pick the boundary
+                # where pre+post aggregates are confidently different.
+                best: tuple[int, int, int, float, float] | None = None
+                for w in range(1, SEGMENT_NUM_WINDOWS):
+                    f_split_candidate = window_frame_ranges[w][0]
+                    pre_positions_c = [
+                        p for p in track_positions if p.frame_number < f_split_candidate
+                    ]
+                    post_positions_c = [
+                        p for p in track_positions if p.frame_number >= f_split_candidate
+                    ]
+                    if (
+                        len(pre_positions_c) < min_seg_frames
+                        or len(post_positions_c) < min_seg_frames
+                    ):
+                        continue
+                    pa, pm = self._aggregate_segment_classifier(
+                        tid, pre_positions_c, classifier, crop_extractor,
+                    )
+                    qa, qm = self._aggregate_segment_classifier(
+                        tid, post_positions_c, classifier, crop_extractor,
+                    )
+                    if (
+                        pa is None or qa is None
+                        or pa == qa
+                        or pm < SEGMENT_MIN_PER_SEGMENT_MARGIN
+                        or qm < SEGMENT_MIN_PER_SEGMENT_MARGIN
+                    ):
+                        continue
+                    score = pm + qm
+                    if best is None or score > best[3] + best[4]:
+                        best = (f_split_candidate, pa, qa, pm, qm)
+                if best is not None:
+                    f_split, pre_argmax, post_argmax, pre_margin, post_margin = best
+                    logger.info(
+                        "Track-split fallback boundary scan: tid=%d split@frame=%d "
+                        "pre->pid%d (margin %+.3f)  post->pid%d (margin %+.3f)",
+                        tid, f_split, pre_argmax, pre_margin,
+                        post_argmax, post_margin,
+                    )
+
+            if f_split is None:
+                logger.info(
+                    "Track-split: tid=%d no split detected "
+                    "(strict walk + boundary scan both abstained)",
+                    tid,
+                )
+                continue
 
             pre_positions = [
                 p for p in track_positions if p.frame_number < f_split
@@ -1442,28 +1543,6 @@ class MatchPlayerTracker:
             post_positions = [
                 p for p in track_positions if p.frame_number >= f_split
             ]
-            min_seg_frames = SEGMENT_MIN_WINDOW_FRAMES * SEGMENT_MIN_CONFIRMING_WINDOWS
-            if (
-                len(pre_positions) < min_seg_frames
-                or len(post_positions) < min_seg_frames
-            ):
-                continue
-
-            pre_argmax, pre_margin = self._aggregate_segment_classifier(
-                tid, pre_positions, classifier, crop_extractor,
-            )
-            post_argmax, post_margin = self._aggregate_segment_classifier(
-                tid, post_positions, classifier, crop_extractor,
-            )
-
-            if (
-                pre_argmax is None
-                or post_argmax is None
-                or pre_argmax == post_argmax
-                or pre_margin < SEGMENT_MIN_PER_SEGMENT_MARGIN
-                or post_margin < SEGMENT_MIN_PER_SEGMENT_MARGIN
-            ):
-                continue
 
             parent_stats = track_stats.get(tid)
             if parent_stats is None:
