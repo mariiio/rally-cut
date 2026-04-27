@@ -452,90 +452,49 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
           const pid = effectiveMapping[trackId];
           if (!pid) continue;
 
-          // Pick the frame that is BEST for visual identity. Three-tier
-          // filter chain (strict → relaxed) so we always end up with a
-          // best-effort crop rather than a degenerate one (zoomed sand,
-          // ball, or partial limb). Each tier adds a constraint:
-          //
-          //   tier 1 (strict): conf ≥ 0.5 + aspect ratio ≥ 1.4 (human
-          //     body shape: taller than wide) + bbox area ≥ 0.005 (filter
-          //     out tiny partial detections that won't show a recognizable
-          //     player even after canvas upscaling).
-          //   tier 2 (medium): conf ≥ 0.4, drop the aspect & area gates.
-          //   tier 3 (loose): no confidence floor; anything goes — better
-          //     to render *something* than leave the cell blank.
-          //
-          // Within each tier we score by `confidence × area × (1 − occlusion)`
-          // and pick the highest. The aspect gate is what catches "zoomed
-          // sand or ball" — non-player detections from YOLO false-positives
-          // typically have aspect ratios near 1 (sand patches are squarish,
-          // ball detections are square), while volleyball players have
-          // height/width 1.4–4.0 even at far-side perspective.
+          // Pick the frame that is BEST for visual identity: high detection
+          // confidence, large bbox, and minimal overlap with other primary
+          // tracks at the same frame. The previous heuristic only used bbox
+          // area which can pick frames where two players are stacked or
+          // a player is half-occluded by another.
           const trackPositions = positions.filter((p) => p.trackId === trackId);
+          let bestPos: ApiPlayerPosition | undefined;
+          let bestScore = -Infinity;
+          for (const pos of trackPositions) {
+            // Skip very low-confidence detections — they're likely partial
+            // visibility or a noisy bbox.
+            const conf = pos.confidence ?? 1.0;
+            if (conf < 0.4) continue;
 
-          // The CROP region for this position is the bbox padded by
-          // CROP_PAD (matching the canvas-draw step below). Any other
-          // tracked person whose CENTER falls inside that crop region
-          // will visibly appear inside the rendered cell — even if their
-          // bboxes don't overlap (IoU = 0). Centre-in-crop is a much
-          // tighter occlusion signal than IoU for the "another player
-          // visible in the crop" failure mode the user reported.
-          const CROP_PAD = 1.05;
-          const intrusionPenalty = (pos: ApiPlayerPosition): number => {
+            const area = pos.width * pos.height;
             const sameFrame = positionsByFrame.get(pos.frameNumber) ?? [];
-            const halfW = (pos.width * CROP_PAD) / 2;
-            const halfH = (pos.height * CROP_PAD) / 2;
-            const xMin = pos.x - halfW;
-            const xMax = pos.x + halfW;
-            const yMin = pos.y - halfH;
-            const yMax = pos.y + halfH;
-            let intrusionCount = 0;
             let maxIou = 0;
             for (const other of sameFrame) {
               if (other.trackId === pos.trackId) continue;
               const iou = computeBboxIou(pos, other);
               if (iou > maxIou) maxIou = iou;
-              if (
-                other.x >= xMin && other.x <= xMax &&
-                other.y >= yMin && other.y <= yMax
-              ) {
-                intrusionCount += 1;
-              }
             }
-            // Hard penalty for each intruding centre — every body in the
-            // crop region scales the score down sharply. A single intruder
-            // multiplies by 0.2; two intruders by 0.04. Combined with the
-            // softer IoU penalty for partial overlap.
-            return Math.pow(0.2, intrusionCount) * (1 - maxIou);
-          };
+            // Score combines confidence × area × (1 − occlusion). The
+            // (1 − maxIou) factor pushes the selector toward frames where
+            // the player is clearly separated from teammates / opponents.
+            const score = conf * area * (1 - maxIou);
+            if (score > bestScore) {
+              bestScore = score;
+              bestPos = pos;
+            }
+          }
 
-          const scoreOne = (pos: ApiPlayerPosition): number => {
-            const conf = pos.confidence ?? 1.0;
-            const area = pos.width * pos.height;
-            return conf * area * intrusionPenalty(pos);
-          };
-
-          const tier1 = trackPositions.filter((p) => {
-            const conf = p.confidence ?? 1.0;
-            const aspect = p.width > 0 ? p.height / p.width : 0;
-            const area = p.width * p.height;
-            return conf >= 0.5 && aspect >= 1.4 && area >= 0.005;
-          });
-          const tier2 = trackPositions.filter((p) => (p.confidence ?? 1.0) >= 0.4);
-          const tier3 = trackPositions;
-
-          let bestPos: ApiPlayerPosition | undefined;
-          for (const tier of [tier1, tier2, tier3]) {
-            if (tier.length === 0) continue;
-            let bestScore = -Infinity;
-            for (const pos of tier) {
-              const score = scoreOne(pos);
-              if (score > bestScore) {
-                bestScore = score;
+          // Fallback: if every position was filtered (e.g., low-confidence
+          // rally), pick the largest-bbox position so the cell isn't blank.
+          if (!bestPos) {
+            let bestArea = 0;
+            for (const pos of trackPositions) {
+              const area = pos.width * pos.height;
+              if (area > bestArea) {
+                bestArea = area;
                 bestPos = pos;
               }
             }
-            if (bestPos) break;
           }
 
           if (!bestPos) continue;
