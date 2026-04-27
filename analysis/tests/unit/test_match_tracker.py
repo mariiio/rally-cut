@@ -569,6 +569,74 @@ class TestClassifyTrackSides:
         assert far_pids == {3, 4}
 
 
+class TestClassifySidesByBboxHeight:
+    """Independent perspective-based side signal: near tracks have larger
+    bbox heights than far tracks under a fixed-camera baseline-behind setup.
+    Used as a cross-check vs the y-coordinate side classifier; large
+    disagreements flag tracks where neither signal is trustworthy.
+    """
+
+    @staticmethod
+    def _positions_with_height(
+        track_heights: dict[int, float],
+        num_frames: int = 30,
+    ) -> list[PlayerPosition]:
+        out: list[PlayerPosition] = []
+        for frame in range(num_frames):
+            for tid, h in track_heights.items():
+                out.append(
+                    PlayerPosition(
+                        frame_number=frame,
+                        track_id=tid,
+                        x=0.5,
+                        y=0.5,
+                        width=0.05,
+                        height=h,
+                        confidence=0.9,
+                    )
+                )
+        return out
+
+    def test_clear_2v2_split_by_height(self) -> None:
+        tracker = MatchPlayerTracker()
+        positions = self._positions_with_height(
+            {1: 0.30, 2: 0.28, 3: 0.12, 4: 0.10}
+        )
+        sides = tracker._classify_sides_by_bbox_height(positions)
+        # Top 2 by median height = near (0), bottom 2 = far (1).
+        assert sides[1] == 0
+        assert sides[2] == 0
+        assert sides[3] == 1
+        assert sides[4] == 1
+
+    def test_skips_negative_track_ids(self) -> None:
+        tracker = MatchPlayerTracker()
+        positions = self._positions_with_height({-1: 0.30, 1: 0.20, 2: 0.10})
+        sides = tracker._classify_sides_by_bbox_height(positions)
+        assert -1 not in sides
+        assert set(sides.keys()) == {1, 2}
+
+    def test_returns_empty_when_fewer_than_two_tracks(self) -> None:
+        tracker = MatchPlayerTracker()
+        assert tracker._classify_sides_by_bbox_height([]) == {}
+        positions = self._positions_with_height({7: 0.20})
+        assert tracker._classify_sides_by_bbox_height(positions) == {}
+
+    def test_uses_median_so_outlier_frames_dont_flip_side(self) -> None:
+        """A handful of distorted frames (e.g., partial occlusion shrinking
+        the bbox) must not flip a track's side classification."""
+        tracker = MatchPlayerTracker()
+        # Track 1 is consistently near (height ~0.30) but has 3 noisy frames.
+        out = self._positions_with_height({1: 0.30, 2: 0.10}, num_frames=30)
+        # Replace 3 frames of track 1 with tiny bboxes
+        for p in out[:6:2]:  # 3 frame-0/2/4 entries for track 1
+            if p.track_id == 1:
+                p.height = 0.05
+        sides = tracker._classify_sides_by_bbox_height(out)
+        assert sides[1] == 0  # still near despite outliers
+        assert sides[2] == 1
+
+
 def _make_positions_xy(
     track_ids: list[int],
     xy_values: list[tuple[float, float]],
@@ -1160,6 +1228,7 @@ class TestStoredRallyDataSerialization:
             start_ms=1000,
             end_ms=15000,
             sides_from_calibration=True,
+            sides_by_bbox={10: 0, 11: 0, 20: 1, 21: 1},
         )
 
     def test_roundtrip_preserves_replay_inputs(self) -> None:
@@ -1171,6 +1240,7 @@ class TestStoredRallyDataSerialization:
         assert restored.track_court_sides == original.track_court_sides
         assert restored.player_side_assignment == original.player_side_assignment
         assert restored.sides_from_calibration is True
+        assert restored.sides_by_bbox == original.sides_by_bbox
         assert sorted(restored.track_stats.keys()) == sorted(original.track_stats.keys())
         for tid in original.track_stats:
             orig_stats = original.track_stats[tid]
@@ -1212,6 +1282,7 @@ class TestStoredRallyDataSerialization:
         assert restored.top_tracks == []
         assert restored.player_side_assignment == {}
         assert restored.sides_from_calibration is False
+        assert restored.sides_by_bbox == {}
 
 
 class TestMatchScratchpadSerialization:

@@ -476,6 +476,12 @@ class StoredRallyData:
     end_ms: int = 0
     # Whether side classification used court calibration (authoritative)
     sides_from_calibration: bool = False
+    # Independent bbox-height-based side classification (Phase 1 step 1).
+    # Empty dict when fewer than 2 distinct tracks were available. Used by
+    # the team-pair inference (Phase 1 step 3) as a cross-check; tracks
+    # where this disagrees with `track_court_sides` are treated as
+    # low-confidence votes for team membership.
+    sides_by_bbox: dict[int, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the replay-relevant subset to a JSON-compatible dict.
@@ -497,6 +503,9 @@ class StoredRallyData:
                 str(pid): int(team) for pid, team in self.player_side_assignment.items()
             },
             "sides_from_calibration": bool(self.sides_from_calibration),
+            "sides_by_bbox": {
+                str(tid): int(side) for tid, side in self.sides_by_bbox.items()
+            },
         }
 
     @classmethod
@@ -518,6 +527,10 @@ class StoredRallyData:
                 for pid, team in d.get("player_side_assignment", {}).items()
             },
             sides_from_calibration=bool(d.get("sides_from_calibration", False)),
+            sides_by_bbox={
+                int(tid): int(side)
+                for tid, side in d.get("sides_by_bbox", {}).items()
+            },
         )
 
 
@@ -737,6 +750,27 @@ class MatchPlayerTracker:
             track_stats, classification_positions, court_split_y, team_assignments
         )
 
+        # Bbox-height side signal (Phase 1 step 1). Independent of the
+        # y-coordinate path above. Stored on the rally for downstream
+        # team-pair inference (Phase 1 step 3) to cross-check, and logged
+        # at WARNING when it disagrees with the y-based classification on
+        # any track — a disagreement is diagnostic of an unreliable
+        # side signal for that track and the team-pair voter should treat
+        # it as low-confidence.
+        sides_by_bbox = self._classify_sides_by_bbox_height(classification_positions)
+        if sides_by_bbox and track_court_sides:
+            disagreements = [
+                tid for tid, side in sides_by_bbox.items()
+                if tid in track_court_sides and track_court_sides[tid] != side
+            ]
+            if disagreements:
+                logger.warning(
+                    "Side signal disagreement (rally %d): tracks %s — y-side "
+                    "vs bbox-height-side disagree. Team-pair inference will "
+                    "treat these as low-confidence.",
+                    self.rally_count, disagreements,
+                )
+
         # Step 3: Select top 4 tracks globally by feature count
         all_track_ids = list(track_court_sides.keys())
         top_tracks = self._top_tracks_by_frames(all_track_ids, track_stats, 4)
@@ -840,6 +874,7 @@ class MatchPlayerTracker:
             start_ms=start_ms,
             end_ms=end_ms,
             sides_from_calibration=self._sides_from_calibration,
+            sides_by_bbox=sides_by_bbox,
         ))
 
         return RallyTrackingResult(
@@ -850,6 +885,54 @@ class MatchPlayerTracker:
             assignment_confidence=confidence,
             sub_tracks=list(sub_tracks),
         )
+
+    def _classify_sides_by_bbox_height(
+        self,
+        player_positions: list[PlayerPosition],
+    ) -> dict[int, int]:
+        """Classify tracks by median bbox height (a perspective signal).
+
+        In a fixed-camera beach-volleyball setup the camera sits behind one
+        baseline. Players closer to the camera have larger bboxes (near
+        side, side=0); players on the far side appear smaller (side=1).
+        The 2v2 structure means 2 tracks should fall in each cluster.
+
+        Returns:
+            ``{track_id: side}`` where ``side ∈ {0 (near), 1 (far)}``,
+            or empty when fewer than 2 distinct tracks are available.
+
+        This signal is computed alongside the existing y-coordinate +
+        calibrator path so the team-pair inference (Phase 1 step 3) can
+        cross-check with it. Within a single rally, near-side and
+        far-side bbox heights typically differ by 2-3× — a much stronger
+        per-track signal than the y-coordinate gradient when court_split_y
+        is noisy or absent.
+        """
+        per_track_heights: dict[int, list[float]] = {}
+        for p in player_positions:
+            if p.track_id < 0:
+                continue
+            per_track_heights.setdefault(p.track_id, []).append(p.height)
+
+        if len(per_track_heights) < 2:
+            return {}
+
+        median_h: dict[int, float] = {
+            tid: float(np.median(hs))
+            for tid, hs in per_track_heights.items()
+            if hs
+        }
+        if len(median_h) < 2:
+            return {}
+
+        # 2v2 invariant: rank tracks by height descending; top half = near.
+        # Median split is robust to detection noise on individual frames.
+        sorted_tracks = sorted(median_h.keys(), key=lambda t: -median_h[t])
+        mid = len(sorted_tracks) // 2
+        sides: dict[int, int] = {}
+        for idx, tid in enumerate(sorted_tracks):
+            sides[tid] = 0 if idx < mid else 1
+        return sides
 
     def _classify_track_sides(
         self,
