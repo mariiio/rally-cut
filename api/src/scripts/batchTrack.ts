@@ -107,29 +107,24 @@ async function main() {
       console.log(`[BATCH_WORKER] Reset ${resetCount} zombie PROCESSING player_track(s)`);
     }
 
-    // Check which rallies are already completed (skip re-tracking)
-    const completedTracks = await prisma.playerTrack.findMany({
-      where: {
-        rallyId: { in: rallies.map((r) => r.id) },
-        status: 'COMPLETED',
-      },
-      select: { rallyId: true },
-    });
-    const alreadyCompleted = new Set(completedTracks.map((t) => t.rallyId));
-
-    let completedCount = alreadyCompleted.size;
+    // Track every rally the API handed us. Filtering "already-tracked"
+    // rallies is the API layer's job:
+    //   - `trackAllRallies(opts={})` (UI's "Retrack & analyze") selects ALL
+    //     CONFIRMED rallies — user intent is to refresh tracking even when
+    //     existing data is COMPLETED.
+    //   - `trackAllRallies({skipTracked:true})` (catch-up path) selects only
+    //     rallies with no PlayerTrack or `needsRetrack=true` — already-
+    //     tracked rallies are not in the queue.
+    // The previous defensive worker-side skip-on-COMPLETED short-circuited
+    // the "Retrack & analyze" path entirely: every rally with prior tracking
+    // was silently skipped and only post-processing (match-analysis) ran on
+    // top of stale positions. Real-world result: corrupted primary_track_ids
+    // accumulated and could never self-heal because tracking never re-ran.
+    let completedCount = 0;
     let failedCount = 0;
-
-    if (alreadyCompleted.size > 0) {
-      console.log(`[BATCH_WORKER] Skipping ${alreadyCompleted.size} already-completed rallies`);
-    }
 
     // Process each rally sequentially
     for (const rally of rallies) {
-      if (alreadyCompleted.has(rally.id)) {
-        continue;
-      }
-
       // Check if job was cancelled (e.g. user re-analyzed with different rallies)
       const currentJob = await prisma.batchTrackingJob.findUnique({
         where: { id: jobId },
@@ -179,7 +174,7 @@ async function main() {
     }
 
     // Mark batch job as complete
-    const attemptedCount = rallies.length - alreadyCompleted.size;
+    const attemptedCount = rallies.length;
     await prisma.batchTrackingJob.update({
       where: { id: jobId },
       data: {
