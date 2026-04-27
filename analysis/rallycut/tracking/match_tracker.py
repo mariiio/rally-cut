@@ -69,6 +69,17 @@ SIDE_PENALTY = 0.15
 # the wrong side of the net.
 SIDE_PENALTY_CALIBRATED = 1.0
 
+# Hard team-pair constraint cost (Phase 1 step 3). Applied in Pass 2 Stage 1
+# only — after combinatorial side-switch detection has run, so the player→
+# side mapping reflects the rally's post-switch state. A track is considered
+# "high-confidence side" when the y-coord and bbox-height classifiers AGREE,
+# AND the high-confidence agreement set forms a clean 2v2 split. In those
+# cases, cross-team Hungarian assignments are made structurally infeasible
+# by setting the cell cost to this value (>> max soft cost ~1.5). When the
+# partition is degenerate (3v1, 1v3, or fewer than 2 confident per side),
+# the constraint is skipped and the soft side penalty governs.
+HARD_TEAM_PAIR_COST = 100.0
+
 # Position continuity weight in the cost matrix. When last positions are known,
 # the distance between early-rally track position and previous rally's late position
 # is blended into the cost. This is critical for within-team discrimination where
@@ -1153,6 +1164,33 @@ class MatchPlayerTracker:
 
         return assignments
 
+    def _high_confidence_sides_for_team_pair(
+        self,
+        track_court_sides: dict[int, int],
+        sides_by_bbox: dict[int, int],
+    ) -> dict[int, int]:
+        """Tracks where y-side and bbox-side AGREE → high-confidence side
+        label, suitable for hard team-pair constraint (Phase 1 step 3).
+
+        Only returns the agreement set when it forms a clean 2v2 split.
+        Degenerate partitions (3v1, 1v3, 0v2, 2v0) are too risky to
+        constrain — Hungarian would either be infeasible or forced into
+        nonsense — so we return ``{}`` and let the caller fall through to
+        the soft side penalty.
+        """
+        if not sides_by_bbox or not track_court_sides:
+            return {}
+        agreed: dict[int, int] = {}
+        for tid, y_side in track_court_sides.items():
+            bb_side = sides_by_bbox.get(tid)
+            if bb_side is not None and bb_side == y_side:
+                agreed[tid] = y_side
+        near = sum(1 for s in agreed.values() if s == 0)
+        far = sum(1 for s in agreed.values() if s == 1)
+        if near != 2 or far != 2:
+            return {}
+        return agreed
+
     def _assign_tracks_to_players_global(
         self,
         track_ids: list[int],
@@ -1162,6 +1200,7 @@ class MatchPlayerTracker:
         use_side_penalty: bool = True,
         early_positions: dict[int, tuple[float, float]] | None = None,
         restrict_to_pids: list[int] | None = None,
+        track_team_constraint: dict[int, int] | None = None,
     ) -> dict[int, int]:
         """Global 4x4 Hungarian assignment with side + position costs.
 
@@ -1182,6 +1221,12 @@ class MatchPlayerTracker:
                 pre-Task-4 behaviour). When provided (Task 4 dispatch
                 after sub-track direct assignment), only these pids
                 participate in Hungarian.
+            track_team_constraint: Optional ``{track_id: side}`` for
+                hard team-pair constraint (Phase 1 step 3). For each
+                track in this dict, cross-team cells (track_side !=
+                player_side) get cost ``HARD_TEAM_PAIR_COST``,
+                structurally forbidding cross-team assignment. Tracks
+                NOT in the dict use the soft ``SIDE_PENALTY`` instead.
 
         Returns:
             track_id -> player_id mapping.
@@ -1286,8 +1331,17 @@ class MatchPlayerTracker:
                     # Normalize: 0.3 distance ≈ half the court, cap at 1.0
                     pos_cost = min(d / 0.3, 1.0)
 
-                # Side penalty (player_side already computed above)
-                if use_side_penalty:
+                # Side penalty (player_side already computed above).
+                # Hard team-pair constraint (Phase 1 step 3) overrides the
+                # soft penalty when the track has a high-confidence side
+                # label — cross-team cells become structurally infeasible.
+                if (
+                    track_team_constraint is not None
+                    and tid in track_team_constraint
+                    and track_team_constraint[tid] != player_side
+                ):
+                    side_pen = HARD_TEAM_PAIR_COST
+                elif use_side_penalty:
                     side_pen = active_side_penalty if track_side != player_side else 0.0
                 else:
                     side_pen = 0.0
@@ -2508,6 +2562,14 @@ class MatchPlayerTracker:
             # No position continuity in Pass 2 — rebuilding the position
             # chain from scratch can propagate errors.
             #
+            # Hard team-pair constraint (Phase 1 step 3): forbid cross-team
+            # assignments for tracks whose y-side and bbox-side agree AND
+            # the agreement set forms a clean 2v2. Empty when partition is
+            # degenerate; soft side penalty governs in that case.
+            team_constraint = self._high_confidence_sides_for_team_pair(
+                data.track_court_sides, data.sides_by_bbox,
+            )
+
             # Sub-track-aware path: when Pass 1 detected within-track splits
             # (`initial.sub_tracks` non-empty), apply their direct pid claims
             # before running Hungarian on the remaining real tracks. Without
@@ -2528,6 +2590,7 @@ class MatchPlayerTracker:
                         data.track_court_sides,
                         use_side_penalty=not self.frozen_player_ids,
                         restrict_to_pids=remaining_pids,
+                        track_team_constraint=team_constraint or None,
                     )
                 else:
                     hungarian_result = {}
@@ -2538,6 +2601,7 @@ class MatchPlayerTracker:
                     data.track_stats,
                     data.track_court_sides,
                     use_side_penalty=not self.frozen_player_ids,
+                    track_team_constraint=team_constraint or None,
                 )
 
             self.state.current_side_assignment = saved_side
@@ -3030,11 +3094,15 @@ def replay_refine_from_scratchpad(
         saved_side = tracker.state.current_side_assignment
         tracker.state.current_side_assignment = data.player_side_assignment
         tracker._sides_from_calibration = data.sides_from_calibration
+        team_constraint = tracker._high_confidence_sides_for_team_pair(
+            data.track_court_sides, data.sides_by_bbox,
+        )
         track_to_player = tracker._assign_tracks_to_players_global(
             data.top_tracks,
             data.track_stats,
             data.track_court_sides,
             use_side_penalty=not tracker.frozen_player_ids,
+            track_team_constraint=team_constraint or None,
         )
         tracker.state.current_side_assignment = saved_side
         confidence = tracker._compute_assignment_confidence(

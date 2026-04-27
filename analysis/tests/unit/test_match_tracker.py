@@ -20,6 +20,7 @@ from rallycut.tracking.player_features import (
     V_BINS,
     V_RANGES,
     PlayerAppearanceFeatures,
+    PlayerAppearanceProfile,
     TrackAppearanceStats,
 )
 from rallycut.tracking.player_tracker import PlayerPosition
@@ -1350,6 +1351,152 @@ class TestWithinTeamPermutation:
             {1: 1, 2: 2, 3: 3, 4: 4}, results,
         )
         assert new_results is results  # short-circuit on identity
+
+
+class TestHighConfidenceSidesForTeamPair:
+    """Phase 1 step 3 helper: agreement of y-side and bbox-side gives a
+    high-confidence side label per track. Returned only when the agreement
+    set forms a clean 2v2 (otherwise hard constraint can't be applied).
+    """
+
+    def test_returns_full_2v2_when_all_agree(self) -> None:
+        tracker = MatchPlayerTracker()
+        result = tracker._high_confidence_sides_for_team_pair(
+            track_court_sides={1: 0, 2: 0, 3: 1, 4: 1},
+            sides_by_bbox={1: 0, 2: 0, 3: 1, 4: 1},
+        )
+        assert result == {1: 0, 2: 0, 3: 1, 4: 1}
+
+    def test_returns_empty_when_one_track_disagrees(self) -> None:
+        """3 agree (1 near, 2 far) — partition is 1v2, not 2v2 — skip."""
+        tracker = MatchPlayerTracker()
+        result = tracker._high_confidence_sides_for_team_pair(
+            track_court_sides={1: 0, 2: 0, 3: 1, 4: 1},
+            sides_by_bbox={1: 0, 2: 1, 3: 1, 4: 1},  # tid 2 disagrees
+        )
+        assert result == {}
+
+    def test_returns_empty_when_3v1_partition(self) -> None:
+        tracker = MatchPlayerTracker()
+        result = tracker._high_confidence_sides_for_team_pair(
+            track_court_sides={1: 0, 2: 0, 3: 0, 4: 1},
+            sides_by_bbox={1: 0, 2: 0, 3: 0, 4: 1},  # 3v1
+        )
+        assert result == {}
+
+    def test_returns_empty_when_bbox_dict_empty(self) -> None:
+        tracker = MatchPlayerTracker()
+        result = tracker._high_confidence_sides_for_team_pair(
+            track_court_sides={1: 0, 2: 0, 3: 1, 4: 1},
+            sides_by_bbox={},
+        )
+        assert result == {}
+
+    def test_returns_empty_when_y_side_dict_empty(self) -> None:
+        tracker = MatchPlayerTracker()
+        result = tracker._high_confidence_sides_for_team_pair(
+            track_court_sides={},
+            sides_by_bbox={1: 0, 2: 0, 3: 1, 4: 1},
+        )
+        assert result == {}
+
+    def test_returns_empty_when_one_track_missing_from_bbox(self) -> None:
+        """One track has no bbox-side (e.g., negative track_id filtered)."""
+        tracker = MatchPlayerTracker()
+        result = tracker._high_confidence_sides_for_team_pair(
+            track_court_sides={1: 0, 2: 0, 3: 1, 4: 1},
+            sides_by_bbox={1: 0, 2: 0, 3: 1},  # tid 4 missing
+        )
+        # 3 agreements (1v2 split) — degenerate, skip.
+        assert result == {}
+
+
+class TestHardTeamPairConstraintInHungarian:
+    """Phase 1 step 3 wired into _assign_tracks_to_players_global.
+
+    When `track_team_constraint` makes a track high-confidence-near, the
+    Hungarian must NEVER assign it to a far-team pid even when appearance
+    cost would otherwise pull it that way.
+    """
+
+    def test_constraint_blocks_cross_team_assignment(self) -> None:
+        tracker = MatchPlayerTracker()
+        # Two near + two far players, all with same default appearance.
+        # Without the constraint, appearance ties + soft side penalty
+        # might still assign cross-team in degenerate cases — with the
+        # constraint, cross-team is structurally impossible.
+        from rallycut.tracking.match_tracker import HARD_TEAM_PAIR_COST
+        for pid in range(1, 5):
+            tracker.state.players[pid] = PlayerAppearanceProfile(
+                player_id=pid, team=0 if pid <= 2 else 1,
+            )
+        tracker.state.current_side_assignment = {1: 0, 2: 0, 3: 1, 4: 1}
+        # All tracks have identical appearance — no signal in HSV at all.
+        stats = {tid: _make_stats(tid) for tid in [10, 11, 20, 21]}
+        track_court_sides = {10: 0, 11: 0, 20: 1, 21: 1}
+        # All four tracks are high-confidence (agree with bbox).
+        constraint = {10: 0, 11: 0, 20: 1, 21: 1}
+
+        result = tracker._assign_tracks_to_players_global(
+            [10, 11, 20, 21], stats, track_court_sides,
+            use_side_penalty=True,
+            track_team_constraint=constraint,
+        )
+
+        # Every track must land on its own team's pid.
+        assert result[10] in {1, 2}
+        assert result[11] in {1, 2}
+        assert result[20] in {3, 4}
+        assert result[21] in {3, 4}
+        # And HARD_TEAM_PAIR_COST is large enough that the assignment is
+        # uniquely determined by the constraint.
+        assert HARD_TEAM_PAIR_COST > 1.0  # sanity
+
+    def test_constraint_none_falls_back_to_soft_penalty(self) -> None:
+        """When no constraint is provided the function behaves as before."""
+        tracker = MatchPlayerTracker()
+        for pid in range(1, 5):
+            tracker.state.players[pid] = PlayerAppearanceProfile(
+                player_id=pid, team=0 if pid <= 2 else 1,
+            )
+        tracker.state.current_side_assignment = {1: 0, 2: 0, 3: 1, 4: 1}
+        stats = {tid: _make_stats(tid) for tid in [10, 11, 20, 21]}
+        track_court_sides = {10: 0, 11: 0, 20: 1, 21: 1}
+
+        result = tracker._assign_tracks_to_players_global(
+            [10, 11, 20, 21], stats, track_court_sides,
+            use_side_penalty=True,
+            track_team_constraint=None,
+        )
+
+        # Without any constraint, all 4 still land somewhere on the team
+        # because the soft side penalty + identical appearance still
+        # prefer same-team — but the cost matrix is qualitatively different
+        # (no HARD_TEAM_PAIR_COST cells). Sanity-check the assignment
+        # covers all 4 pids.
+        assert set(result.values()) == {1, 2, 3, 4}
+
+    def test_constraint_applies_per_track_partial_set(self) -> None:
+        """When only a subset of tracks have a constraint, those are
+        cross-team-blocked while the rest fall back to soft penalty."""
+        tracker = MatchPlayerTracker()
+        for pid in range(1, 5):
+            tracker.state.players[pid] = PlayerAppearanceProfile(
+                player_id=pid, team=0 if pid <= 2 else 1,
+            )
+        tracker.state.current_side_assignment = {1: 0, 2: 0, 3: 1, 4: 1}
+        stats = {tid: _make_stats(tid) for tid in [10, 11, 20, 21]}
+        track_court_sides = {10: 0, 11: 0, 20: 1, 21: 1}
+        # Only tids 10 and 20 are constrained.
+        constraint = {10: 0, 20: 1}
+
+        result = tracker._assign_tracks_to_players_global(
+            [10, 11, 20, 21], stats, track_court_sides,
+            use_side_penalty=True,
+            track_team_constraint=constraint,
+        )
+        assert result[10] in {1, 2}
+        assert result[20] in {3, 4}
 
 
 class TestTrackAppearanceStatsSerialization:
