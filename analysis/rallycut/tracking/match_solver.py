@@ -187,16 +187,29 @@ class MatchSolver:
     ) -> int:
         """Pick the rally with the most top_tracks for initialization.
 
-        Returns the first rally with ``len(top_tracks) >= NUM_CLUSTERS``;
-        otherwise the rally with the highest ``len(top_tracks)``. Index 0
-        on ties.
+        Counts only REAL track ids (>= 0). Synthetic sub-track ids
+        (negative, from ``blind_track_split``) are excluded so the seed
+        choice is invariant under whether/where the rescue fires —
+        without this, splits cascade into a match-wide pid permutation.
+        Prefers a rally with NO synthetic tids (clean anchor); falls back
+        to first rally with ≥4 real tids; falls back to highest real-tid
+        count.
         """
+        # Pass 1: first rally with ≥ NUM_CLUSTERS real tids AND zero synth.
+        for i, r in enumerate(rallies):
+            real = sum(1 for t in r.top_tracks if t >= 0)
+            synth = sum(1 for t in r.top_tracks if t < 0)
+            if real >= NUM_CLUSTERS and synth == 0:
+                return i
+        # Pass 2: first rally with ≥ NUM_CLUSTERS real tids (may include synths).
+        for i, r in enumerate(rallies):
+            if sum(1 for t in r.top_tracks if t >= 0) >= NUM_CLUSTERS:
+                return i
+        # Pass 3: highest real-tid count, ties broken by lowest index.
         best_idx = 0
         best_count = -1
         for i, r in enumerate(rallies):
-            n = len(r.top_tracks)
-            if n >= NUM_CLUSTERS:
-                return i
+            n = sum(1 for t in r.top_tracks if t >= 0)
             if n > best_count:
                 best_count = n
                 best_idx = i
@@ -206,22 +219,28 @@ class MatchSolver:
         self,
         rally: StoredRallyData,
     ) -> dict[int, int]:
-        """Y-sort the seed rally's top_tracks into cluster ids 1..N.
+        """Y-sort the seed rally's REAL top_tracks into cluster ids 1..N.
+
+        Synthetic sub-track ids in the seed rally (negative) are skipped
+        so the seed pid layout matches the baseline (no-split) convention
+        verbatim. Synth ids in the seed get assigned by the iterative
+        Hungarian in subsequent passes once cluster members are populated.
 
         Falls back to track_id order when ``early_positions`` is missing.
         Cluster ids start at 1 to match the existing player_id convention
         used downstream (Stage C, ``_apply_within_team_permutation``).
         """
-        if not rally.top_tracks:
+        real_tracks = [t for t in rally.top_tracks if t >= 0]
+        if not real_tracks:
             return {}
 
         if rally.early_positions:
             sorted_tracks = sorted(
-                rally.top_tracks,
+                real_tracks,
                 key=lambda t: rally.early_positions.get(t, (0.0, 0.0))[1],
             )
         else:
-            sorted_tracks = sorted(rally.top_tracks)
+            sorted_tracks = sorted(real_tracks)
 
         return {tid: i + 1 for i, tid in enumerate(sorted_tracks)}
 
