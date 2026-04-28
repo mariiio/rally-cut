@@ -167,16 +167,16 @@ export function VideoPlayer() {
     return findRallyAtTime(sortedRallies, currentTime);
   }, [rallies, sortedRallies, currentTime, selectedRallyId]);
 
-  // Compute player number mapping (trackId → display number 1-4) for labeling mode
+  // Compute player number mapping (trackId → display number 1-4) for primary tracks
   const labelingPlayerNumbers = useMemo(() => {
-    if (!isLabelingActions || !currentRally?._backendId) return undefined;
+    if (!currentRally?._backendId) return undefined;
     const trackData = playerTracks[currentRally._backendId]?.tracksJson;
     if (!trackData?.tracks?.length) return undefined;
     const sorted = [...trackData.tracks].sort((a, b) => a.trackId - b.trackId);
     const map = new Map<number, number>();
     sorted.forEach((t, i) => map.set(t.trackId, i + 1));
     return map;
-  }, [isLabelingActions, currentRally, playerTracks]);
+  }, [currentRally, playerTracks]);
 
   // Match stats for landing overlay. Refreshes on activeMatchId change AND
   // on `match-analysis-updated` events so the landing-zone overlay reflects

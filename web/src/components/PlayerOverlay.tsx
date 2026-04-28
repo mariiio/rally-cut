@@ -301,6 +301,25 @@ export function PlayerOverlay({
             display: none;
           `;
           trackEl.appendChild(courtLabel);
+
+          // Track ID auxiliary label (primary tracks only, visible when "All" is on)
+          const trackIdLabel = document.createElement('div');
+          trackIdLabel.className = 'track-id-aux';
+          trackIdLabel.textContent = `#${trackId}`;
+          trackIdLabel.style.cssText = `
+            position: absolute;
+            bottom: 2px;
+            left: 4px;
+            background-color: rgba(0,0,0,0.6);
+            color: white;
+            padding: 1px 4px;
+            border-radius: 2px;
+            font-size: 9px;
+            font-family: monospace;
+            font-weight: 600;
+            display: ${showRawTracks ? 'block' : 'none'};
+          `;
+          trackEl.appendChild(trackIdLabel);
         }
 
         overlay.appendChild(trackEl);
@@ -311,6 +330,25 @@ export function PlayerOverlay({
         trackEl.style.borderColor = color;
         trackEl.style.borderStyle = isRaw ? 'dashed' : 'solid';
         trackEl.style.opacity = isRaw ? '0.65' : '1';
+        if (!isRaw) {
+          const trackIdLabel = trackEl.querySelector('.track-id-aux') as HTMLDivElement | null;
+          if (trackIdLabel) {
+            trackIdLabel.textContent = `#${trackId}`;
+            trackIdLabel.style.cssText = `
+              position: absolute;
+              bottom: 2px;
+              left: 4px;
+              background-color: rgba(0,0,0,0.6);
+              color: white;
+              padding: 1px 4px;
+              border-radius: 2px;
+              font-size: 9px;
+              font-family: monospace;
+              font-weight: 600;
+              display: ${showRawTracks ? 'block' : 'none'};
+            `;
+          }
+        }
         const label = trackEl.querySelector('.track-label') as HTMLDivElement;
         if (label) {
           label.textContent = labelText;
@@ -363,7 +401,7 @@ export function PlayerOverlay({
       }
       trackIndex++;
     }
-  }, [allTrackPositions, rawTrackIds, teamAssignments, labelingPlayerNumbers]);
+  }, [allTrackPositions, rawTrackIds, teamAssignments, labelingPlayerNumbers, showRawTracks]);
 
   // Update dimensions on resize
   useEffect(() => {
