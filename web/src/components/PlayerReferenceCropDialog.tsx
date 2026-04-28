@@ -269,9 +269,17 @@ export function PlayerReferenceCropDialog({ open, videoId, onClose }: PlayerRefe
     setRerunning(true);
     setRerunStep('Starting...');
     try {
-      await runMatchAnalysis(videoId, (progress) => {
-        setRerunStep(progress.step || `Step ${progress.index}/${progress.total}`);
-      });
+      // `useRefCrops: true` is the ONLY trigger that runs the
+      // ref-crop-anchored matching path; all other flows (fresh-upload /
+      // re-analyze / retrack-analyze / post-batch-tracking catch-up)
+      // run the blind solver regardless of whether DB has crops.
+      await runMatchAnalysis(
+        videoId,
+        (progress) => {
+          setRerunStep(progress.step || `Step ${progress.index}/${progress.total}`);
+        },
+        { useRefCrops: true },
+      );
       // Force-refresh the cached MatchAnalysis snapshot in the store —
       // without this the editor keeps rendering from the pre-rerun cache
       // and shows stale `appliedFullMapping` / `canonicalPidMap`. That's

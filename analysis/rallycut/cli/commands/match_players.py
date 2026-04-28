@@ -279,9 +279,12 @@ def match_players(
         False,
         "--no-ref-crops",
         help=(
-            "Force the blind path even when DB has reference crops. Used to "
-            "validate the global solver on fixtures that would otherwise hit "
-            "the ref-crop bypass (Q6=3 in the cross-rally identity rewrite)."
+            "Force the blind path even when DB has reference crops. The "
+            "production-default for fresh-upload / re-analyze / "
+            "retrack-analyze flows; ref-crop matching only runs from the "
+            "PlayerReferenceCropDialog 're-run matching' trigger. "
+            "Preserves the existing canonical_pid_map_json so a later "
+            "ref-crop run from the modal can pick it up unchanged."
         ),
     ),
 ) -> None:
@@ -790,25 +793,27 @@ def match_players(
                         f"sha={canonical_payload['sourceRefCropsSha'][:12]}..."
                     )
 
-    # Both columns are written in a single UPDATE so a re-run after
-    # crop deletion atomically clears canonical_pid_map_json alongside the
-    # fresh match_analysis_json — no window where the legacy and canonical
-    # maps disagree. Phase 5 adds the API hook for crop-edit invalidation;
-    # this CLI write is the second arm of that contract.
+    # Both columns are normally written in a single UPDATE so a re-run
+    # after crop deletion atomically clears canonical_pid_map_json
+    # alongside the fresh match_analysis_json — no window where the
+    # legacy and canonical maps disagree. Phase 5 adds the API hook for
+    # crop-edit invalidation; this CLI write is the second arm of that
+    # contract.
     #
-    # `--no-ref-crops` is a validation-only flag: skip the DB write so a
-    # blind probe doesn't clobber a fixture's ref-crop-anchored
-    # canonical_pid_map_json. The JSON output (-o) still gets written for
-    # off-line inspection.
-    if no_ref_crops:
-        if not quiet:
-            console.print(
-                "  [yellow]--no-ref-crops:[/yellow] skipping DB write "
-                "(validation-only run)"
-            )
-    else:
-        with get_connection() as conn:
-            with conn.cursor() as cur:
+    # `--no-ref-crops` is the production-blind flag: it forces the
+    # solver path even when DB has ref crops. To preserve the
+    # ref-crop-anchored canonical map (it stays valid for a future
+    # ref-crop run from the modal "re-run matching" trigger), this
+    # branch writes only `match_analysis_json` and leaves
+    # `canonical_pid_map_json` untouched.
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            if no_ref_crops:
+                cur.execute(
+                    "UPDATE videos SET match_analysis_json = %s WHERE id = %s",
+                    [json.dumps(result_json), video_id],
+                )
+            else:
                 cur.execute(
                     "UPDATE videos "
                     "SET match_analysis_json = %s, canonical_pid_map_json = %s "
@@ -819,10 +824,10 @@ def match_players(
                         video_id,
                     ],
                 )
-            conn.commit()
+        conn.commit()
 
-        if not quiet:
-            console.print("  Saved to DB")
+    if not quiet:
+        console.print("  Saved to DB")
 
     # Write JSON file output
     if output:

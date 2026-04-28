@@ -2640,8 +2640,17 @@ export interface MatchAnalysisProgress {
 export async function runMatchAnalysis(
   videoId: string,
   onProgress?: (progress: MatchAnalysisProgress) => void,
+  options?: { useRefCrops?: boolean },
 ): Promise<void> {
-  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/run-match-analysis`, {
+  // `useRefCrops=true` is set only by the PlayerReferenceCropDialog
+  // "re-run matching" trigger. Default flows (fresh-upload /
+  // re-analyze / retrack-analyze) run the blind solver path even when
+  // DB has reference crops, so the solver-vs-ref-crop comparison is an
+  // explicit user choice.
+  const url = options?.useRefCrops
+    ? `${API_BASE_URL}/v1/videos/${videoId}/run-match-analysis?useRefCrops=true`
+    : `${API_BASE_URL}/v1/videos/${videoId}/run-match-analysis`;
+  const response = await fetch(url, {
     method: 'POST',
     headers: getHeaders(),
   });

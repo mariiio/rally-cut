@@ -1054,7 +1054,11 @@ router.post(
         res.write(`data: ${JSON.stringify({ step, index, total })}\n\n`);
       };
 
-      const result = await runMatchAnalysis(req.params.id, onProgress);
+      // `useRefCrops=true` is set only by the PlayerReferenceCropDialog
+      // "re-run matching" trigger; default flows (fresh-upload /
+      // re-analyze / retrack-analyze) run the blind solver.
+      const useRefCrops = req.query.useRefCrops === 'true';
+      const result = await runMatchAnalysis(req.params.id, onProgress, useRefCrops);
       res.write(`data: ${JSON.stringify({ step: 'done', index: 6, total: 6, result })}\n\n`);
       res.end();
     } catch (error) {
