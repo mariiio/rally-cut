@@ -795,22 +795,34 @@ def match_players(
     # fresh match_analysis_json — no window where the legacy and canonical
     # maps disagree. Phase 5 adds the API hook for crop-edit invalidation;
     # this CLI write is the second arm of that contract.
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE videos "
-                "SET match_analysis_json = %s, canonical_pid_map_json = %s "
-                "WHERE id = %s",
-                [
-                    json.dumps(result_json),
-                    json.dumps(canonical_payload) if canonical_payload else None,
-                    video_id,
-                ],
+    #
+    # `--no-ref-crops` is a validation-only flag: skip the DB write so a
+    # blind probe doesn't clobber a fixture's ref-crop-anchored
+    # canonical_pid_map_json. The JSON output (-o) still gets written for
+    # off-line inspection.
+    if no_ref_crops:
+        if not quiet:
+            console.print(
+                "  [yellow]--no-ref-crops:[/yellow] skipping DB write "
+                "(validation-only run)"
             )
-        conn.commit()
+    else:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE videos "
+                    "SET match_analysis_json = %s, canonical_pid_map_json = %s "
+                    "WHERE id = %s",
+                    [
+                        json.dumps(result_json),
+                        json.dumps(canonical_payload) if canonical_payload else None,
+                        video_id,
+                    ],
+                )
+            conn.commit()
 
-    if not quiet:
-        console.print("  Saved to DB")
+        if not quiet:
+            console.print("  Saved to DB")
 
     # Write JSON file output
     if output:
