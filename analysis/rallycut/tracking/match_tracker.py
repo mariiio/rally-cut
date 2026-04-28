@@ -762,6 +762,24 @@ class MatchPlayerTracker:
             if len(windowed) >= 4 * 10:  # ≥10 frames per player
                 classification_positions = windowed
 
+        # Restrict side-classification positions to primary-track samples.
+        # The upstream `_filter_player_positions` pipeline is supposed to
+        # drop spectator / referee tracks but sometimes leaks them into
+        # `positions_json` (90266c1d rallies 5+6 have T9/T15/T101/T28/T6
+        # with 1-100+ samples each despite primary_track_ids = [1,2,3,4]).
+        # `track_stats` is already correctly restricted to primary tracks
+        # by `extract_rally_appearances`, so its keys are the trusted
+        # primary set. Without this filter, `_classify_track_sides` and
+        # `_classify_sides_by_bbox_height` count those leaked tracks
+        # toward their 2v2 partition checks, which can break the
+        # high-confidence team-pair constraint.
+        if track_stats:
+            primary_tids = set(track_stats.keys())
+            classification_positions = [
+                p for p in classification_positions
+                if p.track_id < 0 or p.track_id in primary_tids
+            ]
+
         track_avg_y, track_court_sides = self._classify_track_sides(
             track_stats, classification_positions, court_split_y, team_assignments
         )
