@@ -824,6 +824,52 @@ class MatchPlayerTracker:
         side_switch_detected = False
 
         sub_tracks: list[SubTrackCandidate] = []
+
+        # W4: bbox-overlap within-rally swap detection (2026-04-29). Detects
+        # mirror-swap events between primary track pairs and emits sub-tracks
+        # for both halves of each affected parent. argmax_pid is left None so
+        # the sub-tracks flow through Hungarian (vs the classifier path's
+        # direct argmax assignment). Default ON; ENABLE_BBOX_SWAP_DETECTION=0
+        # to roll back. Inline import keeps the dependency local to this branch.
+        from rallycut.tracking.swap_event_detector import build_subtracks_from_events as _w4_build_subtracks  # noqa: I001
+        from rallycut.tracking.swap_event_detector import detect_swap_events as _w4_detect
+        from rallycut.tracking.swap_event_detector import is_enabled as _w4_is_enabled
+        w4_sub_tracks: list[SubTrackCandidate] = []
+        if _w4_is_enabled():
+            try:
+                events = _w4_detect(
+                    primary_track_ids=top_tracks,
+                    positions=player_positions,
+                    track_stats=track_stats,
+                )
+                if events:
+                    w4_sub_tracks = _w4_build_subtracks(
+                        events=events,
+                        primary_track_ids=top_tracks,
+                        positions=player_positions,
+                        track_stats=track_stats,
+                    )
+                    if w4_sub_tracks:
+                        # Inject sub-tracks into track_stats + top_tracks so
+                        # downstream Hungarian sees them. Parents are removed.
+                        for s in w4_sub_tracks:
+                            track_stats[s.synthetic_track_id] = s.appearance_stats
+                        w4_parents = {s.parent_track_id for s in w4_sub_tracks}
+                        top_tracks = [t for t in top_tracks if t not in w4_parents]
+                        top_tracks.extend(
+                            s.synthetic_track_id for s in w4_sub_tracks
+                        )
+                        logger.info(
+                            "W4 swap-event detector emitted %d sub-tracks "
+                            "from %d events",
+                            len(w4_sub_tracks), len(events),
+                        )
+            except Exception:  # noqa: BLE001
+                logger.warning(
+                    "W4 swap-event detector failed; falling back to baseline",
+                    exc_info=True,
+                )
+
         if self.rally_count <= 1 and not self.frozen_player_ids:
             # Phase 3: seeded profiles enrich the per-match prior, but the
             # first-rally track->pid mapping still goes through the baseline
@@ -863,6 +909,10 @@ class MatchPlayerTracker:
                     early_positions=early_positions,
                 )
 
+        # Combine classifier-based sub-tracks (existing) with W4 sub-tracks (new).
+        # Both flow through the same per-frame writer (`_build_per_frame_pid_map`)
+        # in match_players.py which keys on `(parent_track_id, frame) -> pid`.
+        sub_tracks = list(sub_tracks) + list(w4_sub_tracks)
         # Stash for downstream per-frame writer (Task 5).
         self._last_rally_sub_tracks = sub_tracks
 
@@ -2987,6 +3037,33 @@ def extract_rally_appearances(
     # Collect BGR crops per track for ReID embedding extraction
     reid_crops: dict[int, list[np.ndarray]] = {} if extract_reid else {}
 
+    # Pose-anchored mode: feature flag dispatches to pose-keypoint polygon masks
+    # + body-proportion ratios (Workstream 1+2, 2026-04-29). Default: off.
+    from rallycut.tracking.pose_anchored_features import (
+        extract_pose_anchored_features,
+        is_pose_anchored_enabled,
+        populate_track_body_proportions,
+        run_pose_on_frame,
+    )
+    pose_anchored = is_pose_anchored_enabled()
+    pose_model = None
+    if pose_anchored:
+        try:
+            from rallycut.tracking.pose_anchored_features import get_pose_model
+            pose_model = get_pose_model()
+            logger.info("extract_rally_appearances: pose-anchored mode ON")
+        except Exception:  # noqa: BLE001
+            logger.warning(
+                "extract_rally_appearances: pose model load failed, "
+                "falling back to legacy extraction", exc_info=True,
+            )
+            pose_anchored = False
+
+    # Per-track per-frame body-proportion samples (only populated under pose mode).
+    body_props_per_track: dict[int, list[dict[str, float] | None]] = {
+        tid: [] for tid in track_positions
+    }
+
     try:
         for fn in sorted_frames:
             abs_frame = start_frame + fn
@@ -2997,11 +3074,36 @@ def extract_rally_appearances(
 
             frame_arr = np.asarray(frame, dtype=np.uint8)
 
+            # Pose-anchored: run YOLO-pose ONCE per frame for all tracks at that frame.
+            pose_for_frame = None
+            if pose_anchored:
+                bboxes_norm_by_tid: dict[
+                    int, tuple[float, float, float, float],
+                ] = {}
+                for tid, p in frame_requests[fn]:
+                    cx, cy = float(p.x), float(p.y)
+                    w, h = float(p.width), float(p.height)
+                    bboxes_norm_by_tid[tid] = (
+                        cx - w / 2, cy - h / 2,
+                        cx + w / 2, cy + h / 2,
+                    )
+                pose_for_frame = run_pose_on_frame(
+                    frame_arr, bboxes_norm_by_tid, pose_model,
+                )
+
             for tid, p in frame_requests[fn]:
                 bbox = (p.x, p.y, p.width, p.height)
-                features = extract_appearance_features(
-                    frame_arr, tid, fn, bbox, frame_width, frame_height,
-                )
+                if pose_anchored and pose_for_frame is not None:
+                    pose_data = pose_for_frame.by_track.get(tid)
+                    features, body_props = extract_pose_anchored_features(
+                        frame_arr, tid, fn, bbox, frame_width, frame_height,
+                        pose_data,
+                    )
+                    body_props_per_track[tid].append(body_props)
+                else:
+                    features = extract_appearance_features(
+                        frame_arr, tid, fn, bbox, frame_width, frame_height,
+                    )
                 stats[tid].features.append(features)
 
                 # Extract BGR crop for ReID
@@ -3017,6 +3119,12 @@ def extract_rally_appearances(
     # Compute averages
     for s in stats.values():
         s.compute_averages()
+
+    # Aggregate per-track body-proportion medians (pose-anchored mode only).
+    if pose_anchored:
+        for tid, samples in body_props_per_track.items():
+            if tid in stats:
+                populate_track_body_proportions(stats[tid], samples)
 
     # Compute per-track ReID embeddings from collected crops.
     # Wrapped in try-catch: DINOv2 failure falls back to HSV-only silently.

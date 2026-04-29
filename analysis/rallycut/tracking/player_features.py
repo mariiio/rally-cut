@@ -10,6 +10,7 @@ Extracts visual features from player detections for consistent ID assignment:
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -329,6 +330,15 @@ class TrackAppearanceStats:
     # DINOv2 ReID embedding (384-dim, L2-normalized) — set externally
     reid_embedding: np.ndarray | None = None
 
+    # Body-proportion ratios (Workstream 2, 2026-04-29). Per-track median of
+    # scale-invariant pose-keypoint ratios. Populated only by the pose-anchored
+    # extractor (USE_POSE_ANCHORED_FEATURES=1); None on the legacy code path.
+    # Consumed by compute_track_similarity when both stats have it set.
+    # Ratio keys: shoulder_to_hip, torso_to_thigh, torso_to_full_leg,
+    # shoulder_to_height, head_to_shoulder. Subset of these may be present
+    # depending on pose visibility per frame.
+    body_proportions: dict[str, float] | None = None
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a JSON-compatible dict.
 
@@ -353,6 +363,10 @@ class TrackAppearanceStats:
             d["avg_head_hist"] = self.avg_head_hist.flatten().tolist()
         if self.reid_embedding is not None:
             d["reid_embedding"] = self.reid_embedding.flatten().tolist()
+        if self.body_proportions is not None:
+            d["body_proportions"] = {
+                k: float(v) for k, v in self.body_proportions.items()
+            }
         return d
 
     @classmethod
@@ -387,6 +401,10 @@ class TrackAppearanceStats:
             ).reshape(HS_BINS)
         if d.get("reid_embedding") is not None:
             stats.reid_embedding = np.array(d["reid_embedding"], dtype=np.float32)
+        if d.get("body_proportions") is not None:
+            stats.body_proportions = {
+                k: float(v) for k, v in d["body_proportions"].items()
+            }
         return stats
 
     def compute_averages(self) -> None:
@@ -793,6 +811,45 @@ _WEIGHT_DOMINANT_COLOR = 0.15
 _WEIGHT_HEAD_HIST = 0.25
 
 
+# Body-proportion blend infrastructure (Workstream 2, 2026-04-29).
+#     cost = (1 - α) · hsv_cost + α · proportion_cost (when both stats have body_proportions)
+# α=0.3 is the panel-best from a 7-rally probe, but variant D@α=0.3 was
+# explicitly NOT shipped — end-to-end A/B on jojo r03 regressed. The blend
+# is therefore dormant: body_proportions is None on the legacy code path, so
+# this branch is dead unless USE_POSE_ANCHORED_FEATURES=1 is set explicitly.
+# Re-evaluate before activating in production. Override α via BODY_PROP_ALPHA.
+_BODY_PROP_ALPHA_DEFAULT = 0.3
+
+# Population-typical inter-person ranges, used to scale per-pair ratio diffs
+# into [0, 1]. Picked from beach-VB sample inspection; not tuned.
+_BODY_PROP_SCALES: dict[str, float] = {
+    "shoulder_to_hip":     0.30,
+    "torso_to_thigh":      0.40,
+    "torso_to_full_leg":   0.20,
+    "shoulder_to_height":  0.05,
+    "head_to_shoulder":    0.30,
+}
+
+
+def _body_proportion_cost(
+    props_a: dict[str, float] | None,
+    props_b: dict[str, float] | None,
+) -> float | None:
+    """Pair-wise body-proportion cost in [0, 1]. None if no shared ratios."""
+    if not props_a or not props_b:
+        return None
+    diffs: list[float] = []
+    for k, va in props_a.items():
+        if k not in props_b:
+            continue
+        scale = _BODY_PROP_SCALES.get(k, 0.5)
+        d = abs(va - props_b[k]) / scale
+        diffs.append(min(1.0, d))
+    if not diffs:
+        return None
+    return float(np.mean(diffs))
+
+
 def compute_appearance_similarity(
     profile: PlayerAppearanceProfile,
     features: TrackAppearanceStats,
@@ -954,6 +1011,21 @@ def compute_track_similarity(
     ):
         reid_cost = 1.0 - float(np.dot(stats_a.reid_embedding, stats_b.reid_embedding))
         return reid_cost * reid_blend + hsv_cost * (1 - reid_blend)
+
+    # Body-proportion blend (W2 infrastructure; dormant unless pose mode on).
+    # body_proportions is None on the legacy extraction path so the if-block
+    # below is a no-op for production. See note at _BODY_PROP_ALPHA_DEFAULT.
+    prop_cost = _body_proportion_cost(
+        stats_a.body_proportions, stats_b.body_proportions,
+    )
+    if prop_cost is not None:
+        try:
+            alpha = float(os.environ.get("BODY_PROP_ALPHA", _BODY_PROP_ALPHA_DEFAULT))
+        except ValueError:
+            alpha = _BODY_PROP_ALPHA_DEFAULT
+        alpha = max(0.0, min(1.0, alpha))
+        if alpha > 0.0:
+            return (1.0 - alpha) * hsv_cost + alpha * prop_cost
 
     return hsv_cost
 
