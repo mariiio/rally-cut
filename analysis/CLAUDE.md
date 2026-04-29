@@ -10,6 +10,8 @@ Volleyball video analysis CLI. Uses ML (VideoMAE) to detect game states and remo
 
 ## Commands
 
+> All shell commands in this file assume you are in the `analysis/` directory (`cd analysis` from repo root). Paths like `scripts/...`, `weights/...`, and `reports/...` are relative to `analysis/`.
+
 ```bash
 # Core commands (TemporalMaxer is default when model+features exist)
 uv run rallycut cut <video.mp4>                 # Auto-selects best pipeline
@@ -158,45 +160,48 @@ uv run ruff check rallycut/            # Lint
 
 ## Structure
 
+Tree below is rooted at `analysis/`:
+
 ```
-rallycut/
-├── cli/commands/    # Typer commands (cut, profile, train, evaluate)
-├── core/            # Config, models, Video wrapper, caching, profiler
-├── analysis/        # GameStateAnalyzer (VideoMAE ML classifier)
-├── processing/      # VideoCutter, FFmpegExporter
-├── temporal/        # TemporalMaxer rally detection pipeline
-│   ├── temporal_maxer/       # TemporalMaxer TAS model
-│   │   ├── model.py          # Multi-scale temporal pyramid architecture
-│   │   ├── training.py       # Sequence-level training loop
-│   │   └── inference.py      # Inference and segment extraction
-│   ├── features.py           # VideoMAE feature extraction and caching
-│   └── inference.py          # Segment extraction and anti-overmerge
-├── tracking/        # Ball and player tracking
-│   ├── ball_tracker.py       # Ball tracker factory and data types
-│   ├── ball_filter.py        # Temporal filter for ball tracking post-processing
-│   ├── ball_features.py      # Ball features, server ID, reactivity scoring
-│   ├── player_tracker.py     # YOLO + BoT-SORT player tracking
-│   ├── player_filter.py      # Multi-stage player filtering with court/ball scoring
-│   ├── player_features.py    # Appearance extraction (skin tone, jersey, proportions)
-│   └── match_tracker.py      # Cross-rally player ID consistency
-├── court/           # Court calibration
-│   └── calibration.py        # Homography for image→court projection
-├── statistics/      # Match statistics aggregation
-│   └── aggregator.py         # Rally grouping, action counts
-├── labeling/        # Ground truth labeling with Label Studio
-│   ├── ground_truth.py      # GroundTruthPosition/Result data structures
-│   └── studio_client.py     # Label Studio API client
-├── evaluation/      # Ground truth loading, metrics, parameter tuning
-├── service/         # Cloud services (Modal deployment)
-│   ├── platforms/modal_app.py       # Modal GPU detection function
-│   ├── platforms/modal_tracking.py  # Modal GPU batch tracking function
-│   └── player_tracking_runner.py    # Local player tracking subprocess
-training/
-└── within_team_reid/  # Within-team ReID head (Session 3, 2026-04-16) — SupCon-trained OSNet over player crops for occlusion-time identity recovery
-lib/volleyball_ml/   # ML model wrappers (VideoMAE)
-tests/
-├── unit/            # Fast tests with mocked ML
-└── integration/     # Full pipeline tests
+analysis/
+├── rallycut/
+│   ├── cli/commands/    # Typer commands (cut, profile, train, evaluate)
+│   ├── core/            # Config, models, Video wrapper, caching, profiler
+│   ├── analysis/        # GameStateAnalyzer (VideoMAE ML classifier)
+│   ├── processing/      # VideoCutter, FFmpegExporter
+│   ├── temporal/        # TemporalMaxer rally detection pipeline
+│   │   ├── temporal_maxer/       # TemporalMaxer TAS model
+│   │   │   ├── model.py          # Multi-scale temporal pyramid architecture
+│   │   │   ├── training.py       # Sequence-level training loop
+│   │   │   └── inference.py      # Inference and segment extraction
+│   │   ├── features.py           # VideoMAE feature extraction and caching
+│   │   └── inference.py          # Segment extraction and anti-overmerge
+│   ├── tracking/        # Ball and player tracking
+│   │   ├── ball_tracker.py       # Ball tracker factory and data types
+│   │   ├── ball_filter.py        # Temporal filter for ball tracking post-processing
+│   │   ├── ball_features.py      # Ball features, server ID, reactivity scoring
+│   │   ├── player_tracker.py     # YOLO + BoT-SORT player tracking
+│   │   ├── player_filter.py      # Multi-stage player filtering with court/ball scoring
+│   │   ├── player_features.py    # Appearance extraction (skin tone, jersey, proportions)
+│   │   └── match_tracker.py      # Cross-rally player ID consistency
+│   ├── court/           # Court calibration
+│   │   └── calibration.py        # Homography for image→court projection
+│   ├── statistics/      # Match statistics aggregation
+│   │   └── aggregator.py         # Rally grouping, action counts
+│   ├── labeling/        # Ground truth labeling with Label Studio
+│   │   ├── ground_truth.py      # GroundTruthPosition/Result data structures
+│   │   └── studio_client.py     # Label Studio API client
+│   ├── evaluation/      # Ground truth loading, metrics, parameter tuning
+│   └── service/         # Cloud services (Modal deployment)
+│       ├── platforms/modal_app.py       # Modal GPU detection function
+│       ├── platforms/modal_tracking.py  # Modal GPU batch tracking function
+│       └── player_tracking_runner.py    # Local player tracking subprocess
+├── training/
+│   └── within_team_reid/  # SupCon-trained OSNet over player crops (Session 3, 2026-04-16)
+├── lib/volleyball_ml/    # ML model wrappers (VideoMAE)
+└── tests/
+    ├── unit/             # Fast tests with mocked ML
+    └── integration/      # Full pipeline tests
 ```
 
 ## Configuration

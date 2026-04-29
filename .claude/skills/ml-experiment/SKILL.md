@@ -1,6 +1,6 @@
 ---
 name: ml-experiment
-description: Run ML experiments - ball tracking evaluation, filter tuning, rally detection, player tracking. Provides eval scripts, GT loading, and baseline metrics.
+description: Canonical command reference for RallyCut ML experiments — ball tracking eval, filter tuning, rally detection, player tracking. Use when YOU need to run an eval inline. For long-running parallel evals that would dump huge logs into the main context, dispatch the `ml-experimenter` subagent instead and pass it the relevant commands from this skill. (project)
 allowed-tools: Bash, Read, Grep, Glob
 ---
 

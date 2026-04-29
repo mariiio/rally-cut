@@ -1,6 +1,6 @@
 ---
 name: tracking-diagnosis
-description: Debug ball and player tracking issues - filter pipeline reference, diagnostic scripts, known problem rallies, stage-by-stage comparison methodology.
+description: Debug RallyCut ball/player tracking issues - filter pipeline, diagnostic scripts, problem rallies, stage-by-stage comparison. Use when investigating tracking accuracy regressions, ID switches, ball gaps, or filter parameter changes. Distinct from `ml-experiment` (which is for general eval/training runs). (project)
 allowed-tools: Bash, Read, Grep, Glob, Edit
 ---
 
@@ -35,9 +35,9 @@ Read `analysis/baselines.json` for current per-rally baselines, tuned filter con
 ## Ball Tracking Diagnostics
 
 Ball tracking is currently at **96.91% keyframe match on 43 GT rallies**
-(2026-04-15). Closed as non-priority — see
-`~/.claude/projects/-Users-mario-Personal-Projects-RallyCut/memory/ball_gap_diagnosis_2026_04_15.md`
-before opening a new investigation.
+(2026-04-15). Closed as non-priority — consult the
+`ball_gap_diagnosis_2026_04_15` project memory entry (auto-loaded via
+`MEMORY.md`'s topic-files section) before opening a new investigation.
 
 ```bash
 cd analysis
