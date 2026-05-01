@@ -171,13 +171,20 @@ def _detect_slow_drift_pid(
     return drift_pid, parent_track_id, max_shift
 
 
-def _extract_half_lower_hist(
+def _extract_half_region_hists(
     video_path: Any,
     rally_start_ms: int,
     samples: list[PlayerPosition],
     max_frames: int = MAX_FRAMES_PER_HALF,
-) -> np.ndarray | None:
-    """Average lower-body HS histogram across `samples`'s frames."""
+) -> dict[str, np.ndarray] | None:
+    """Average HS histograms by region (lower/upper/head) across frames.
+
+    Returns a dict {"lower": np.ndarray, "upper": np.ndarray | None,
+    "head": np.ndarray | None}. Caller takes the MAX chi² across
+    available regions as the inter-half distinguishability signal —
+    catches both shorts-distinct (lower) and shirts-distinct (upper)
+    identity differences without diluting the signal by averaging.
+    """
     if not samples:
         return None
     sorted_samples = sorted(samples, key=lambda q: q.frame_number)
@@ -191,7 +198,9 @@ def _extract_half_lower_hist(
     fw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     fh = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-    accum: np.ndarray | None = None
+    accum_lower: np.ndarray | None = None
+    accum_upper: np.ndarray | None = None
+    accum_head: np.ndarray | None = None
     count = 0
     for p in chosen:
         ms = rally_start_ms + (int(p.frame_number) * 1000 / fps)
@@ -212,13 +221,46 @@ def _extract_half_lower_hist(
             continue
         if features.lower_body_hist is None:
             continue
-        h = features.lower_body_hist.astype(np.float32)
-        accum = h if accum is None else (accum + h)
+        accum_lower = (
+            features.lower_body_hist.astype(np.float32) if accum_lower is None
+            else accum_lower + features.lower_body_hist
+        )
+        if features.upper_body_hist is not None:
+            accum_upper = (
+                features.upper_body_hist.astype(np.float32) if accum_upper is None
+                else accum_upper + features.upper_body_hist
+            )
+        if features.head_hist is not None:
+            accum_head = (
+                features.head_hist.astype(np.float32) if accum_head is None
+                else accum_head + features.head_hist
+            )
         count += 1
     cap.release()
-    if accum is None or count == 0:
+    if accum_lower is None or count == 0:
         return None
-    return accum / count
+
+    out: dict[str, np.ndarray] = {"lower": accum_lower / count}
+    if accum_upper is not None:
+        out["upper"] = accum_upper / count
+    if accum_head is not None:
+        out["head"] = accum_head / count
+    return out
+
+
+def _best_region_chi2(
+    a: dict[str, np.ndarray], b: dict[str, np.ndarray],
+) -> tuple[float, str]:
+    """MAX chi² across shared regions, with the region name."""
+    best_d = 0.0
+    best_region = "lower"
+    for region in ("lower", "upper", "head"):
+        if region in a and region in b:
+            d = _hist_chi2(a[region], b[region])
+            if d > best_d:
+                best_d = d
+                best_region = region
+    return best_d, best_region
 
 
 def maybe_emit_slow_drift_split(
@@ -265,8 +307,8 @@ def maybe_emit_slow_drift_split(
     first_half = sorted_pos[:half]
     second_half = sorted_pos[half:]
 
-    h_first = _extract_half_lower_hist(video_path, rally_start_ms, first_half)
-    h_second = _extract_half_lower_hist(video_path, rally_start_ms, second_half)
+    h_first = _extract_half_region_hists(video_path, rally_start_ms, first_half)
+    h_second = _extract_half_region_hists(video_path, rally_start_ms, second_half)
     if h_first is None or h_second is None:
         logger.warning(
             "slow_drift_split %s: PID%d feature extraction failed; skip",
@@ -274,18 +316,20 @@ def maybe_emit_slow_drift_split(
         )
         return None
 
-    inter_half = _hist_chi2(h_first, h_second)
+    inter_half, best_region = _best_region_chi2(h_first, h_second)
     if inter_half < MIN_INTER_HALF_CHI2:
         logger.warning(
             "slow_drift_split %s: PID%d halves indistinguishable "
-            "(chi2=%.4f < %.2f); skip — sensing limit, needs pose-anchored signal",
-            rally_id[:8] if rally_id else "?", drift_pid, inter_half, MIN_INTER_HALF_CHI2,
+            "(chi2=%.4f best_region=%s < %.2f); skip — sensing limit",
+            rally_id[:8] if rally_id else "?", drift_pid, inter_half,
+            best_region, MIN_INTER_HALF_CHI2,
         )
         return None
 
-    # Compare each half against OTHER PIDs' first-half profiles.
+    # Compare each half against OTHER PIDs' first-half profiles, using
+    # the SAME region that drove inter-half discriminability.
     track_id_to_pid = {int(k): int(v) for k, v in track_to_player.items() if int(k) > 0}
-    other_profiles: dict[int, np.ndarray] = {}
+    other_profiles: dict[int, dict[str, np.ndarray]] = {}
     for tid, other_pid in track_id_to_pid.items():
         if other_pid == drift_pid:
             continue
@@ -297,7 +341,7 @@ def maybe_emit_slow_drift_split(
             continue
         # Use this PID's first half as its representative (its own
         # second half may be drift-contaminated symmetrically).
-        oh = _extract_half_lower_hist(
+        oh = _extract_half_region_hists(
             video_path, rally_start_ms, other_pos[: len(other_pos) // 2],
         )
         if oh is not None:
@@ -310,30 +354,33 @@ def maybe_emit_slow_drift_split(
         )
         return None
 
-    # The second half is the "drifted" half (we bisect at the midpoint
-    # of the rally; the second half is more likely to contain the
-    # injected wrong-player frames in a typical slow_drift pattern).
+    # Distance on the discriminating region only — using the same
+    # region that proved inter-half distinguishability.
     distances = {
-        other_pid: _hist_chi2(h_second, prof)
+        other_pid: _hist_chi2(h_second[best_region], prof[best_region])
         for other_pid, prof in other_profiles.items()
+        if best_region in prof
     }
+    if not distances:
+        return None
     best_other_pid = min(distances, key=distances.__getitem__)
     best_other_dist = distances[best_other_pid]
     if best_other_dist >= inter_half:
         logger.warning(
             "slow_drift_split %s: PID%d second-half best other-PID dist (%.4f, "
-            "PID%d) >= inter-half (%.4f); skip — no clear re-assignment target",
+            "PID%d, region=%s) >= inter-half (%.4f); skip — no clear "
+            "re-assignment target",
             rally_id[:8] if rally_id else "?", drift_pid, best_other_dist,
-            best_other_pid, inter_half,
+            best_other_pid, best_region, inter_half,
         )
         return None
 
     logger.warning(
         "slow_drift_split %s: PID%d (track %d) bisect at frame %d → "
         "second-half re-assigned to PID%d "
-        "(inter-half chi2=%.3f, target dist=%.3f, shift=%.3f)",
+        "(region=%s inter-half=%.3f target=%.3f shift=%.3f)",
         rally_id[:8] if rally_id else "?", drift_pid, parent_tid, bisect_frame,
-        best_other_pid, inter_half, best_other_dist, shift,
+        best_other_pid, best_region, inter_half, best_other_dist, shift,
     )
 
     # Find the OTHER PID's track — we need to symmetrically swap its
@@ -355,8 +402,8 @@ def maybe_emit_slow_drift_split(
 
     # Stub appearance stats — required by the SubTrackCandidate
     # dataclass; not serialized into match_analysis_json.
-    stub_a = TrackAppearanceStats(track_id=parent_tid, avg_lower_hist=h_first)
-    stub_b = TrackAppearanceStats(track_id=parent_tid, avg_lower_hist=h_second)
+    stub_a = TrackAppearanceStats(track_id=parent_tid)
+    stub_b = TrackAppearanceStats(track_id=parent_tid)
     stub_c = TrackAppearanceStats(track_id=other_track_id)
     stub_d = TrackAppearanceStats(track_id=other_track_id)
 

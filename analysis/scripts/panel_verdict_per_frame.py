@@ -97,7 +97,13 @@ SWAP_IOU_MARGIN = 0.10
 # occlusion"). Both thresholds must fire simultaneously — the half-shift
 # alone is sometimes elevated by legitimate movement, and the overlap
 # alone is sometimes elevated by closely-positioned same-team players.
-HALF_SHIFT_THRESHOLD = 0.20  # max same-PID half-and-half center shift
+HALF_SHIFT_THRESHOLD = 0.25  # max same-PID half-and-half center shift
+# Bumped 2026-05-01 from 0.20 → 0.25 after user visual report on b5fb0594/r10:
+# rally has shift=0.21 but is visually clean (PID3 shirtless / PID4 green shirt
+# stay correctly assigned). Real drift cases (e.g. 5c756c41/r07 PID4 shift=0.58)
+# are well above the new gate. Avoids false-positive `slow_drift` flags on
+# rallies with legitimate large positional movement that doesn't represent
+# identity drift.
 XRANGE_OVERLAP_THRESHOLD = 0.50  # max overlap fraction between PID x-ranges
 
 

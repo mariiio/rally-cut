@@ -66,6 +66,14 @@ PANEL_2026_05_01: list[PanelVerdict] = [
         rally_idx=18, is_control=False,
         expected_verdict="GOOD", expected_shape="cleared (was p2<->p4 swap)",
     ),
+    # Added 2026-05-01 from user visual report: not in original panel.
+    # r15 has p3<->p2 cross-team swap AND p4 unassigned in current state.
+    PanelVerdict(
+        video_id="7d77980f-3006-40e0-adc0-db491a5bb659",
+        rally_idx=14, is_control=False,
+        expected_verdict="BAD",
+        expected_shape="p3<->p2 cross-team swap + p4 unassigned (visual report)",
+    ),
 
     # --- b5fb0594 fixture ---
     PanelVerdict(
@@ -87,8 +95,14 @@ PANEL_2026_05_01: list[PanelVerdict] = [
     PanelVerdict(
         video_id="b5fb0594-d64f-4a0d-bad9-de8fc36414d0",
         rally_idx=9, is_control=False,
-        expected_verdict="BAD",
-        expected_shape="starts GOOD then NEW p1<->p2 within-team swap after occlusion",
+        # Updated 2026-05-01 from BAD → GOOD per user visual report:
+        # PID3 (shirtless) and PID4 (green shirt) are visibly distinct
+        # and stay correctly assigned through the rally. The verdict
+        # tool's prior `slow_drift` flag at shift=0.21 was a false
+        # positive from positional movement, not identity drift. Hence
+        # the HALF_SHIFT_THRESHOLD bump 0.20 → 0.25.
+        expected_verdict="GOOD",
+        expected_shape="cleared (positional movement, no identity drift)",
     ),
 
     # --- 5c756c41 fixture ---
