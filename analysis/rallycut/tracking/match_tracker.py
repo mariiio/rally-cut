@@ -31,6 +31,7 @@ import cv2
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
+from rallycut.tracking import pipeline_forensic as _pf
 from rallycut.tracking._subtrack import SubTrackCandidate
 from rallycut.tracking.ball_features import ServerDetectionResult, detect_server
 from rallycut.tracking.identity_anchor import (
@@ -809,6 +810,28 @@ class MatchPlayerTracker:
         all_track_ids = list(track_court_sides.keys())
         top_tracks = self._top_tracks_by_frames(all_track_ids, track_stats, 4)
 
+        if _pf.is_active():
+            # Frames-per-track ranking visible to top-4 selection.
+            # `TrackAppearanceStats.features` length = #frames sampled per track.
+            ranked = sorted(
+                (
+                    (int(tid), int(len(track_stats[tid].features)))
+                    for tid in all_track_ids if tid in track_stats
+                ),
+                key=lambda kv: -kv[1],
+            )
+            _pf.log_stage("6_top4_selection", {
+                "candidate_track_ids": [int(t) for t in all_track_ids],
+                "ranked_by_frames": [
+                    {"tid": tid, "frames": frames} for tid, frames in ranked
+                ],
+                "winners": [int(t) for t in top_tracks],
+                "near_misses": [
+                    {"tid": tid, "frames": frames}
+                    for tid, frames in ranked[len(top_tracks):len(top_tracks) + 4]
+                ],
+            })
+
         # Compute early-rally positions for position continuity
         early_positions = _compute_track_positions(
             player_positions, top_tracks, window=30, from_start=True
@@ -832,16 +855,34 @@ class MatchPlayerTracker:
         # direct argmax assignment). Default ON; ENABLE_BBOX_SWAP_DETECTION=0
         # to roll back. Inline import keeps the dependency local to this branch.
         from rallycut.tracking.swap_event_detector import build_subtracks_from_events as _w4_build_subtracks  # noqa: I001
+        from rallycut.tracking.swap_event_detector import detect_position_jump_swap_events as _pj_detect
         from rallycut.tracking.swap_event_detector import detect_swap_events as _w4_detect
         from rallycut.tracking.swap_event_detector import is_enabled as _w4_is_enabled
+        from rallycut.tracking.swap_event_detector import is_position_jump_enabled as _pj_is_enabled
         w4_sub_tracks: list[SubTrackCandidate] = []
-        if _w4_is_enabled():
+        _pf_w4_top_tracks_pre = list(top_tracks)
+        _pf_w4_events: list[Any] = []
+        _pf_w4_enabled = _w4_is_enabled()
+        _pf_pj_enabled = _pj_is_enabled()
+        # Combine W4 (IoU-based) and position-jump (Mode B) detectors. Both
+        # emit `SwapEvent`s consumed by the same `build_subtracks_from_events`
+        # which dedups by parent track (only the first event affects each
+        # parent), so overlapping detections collapse cleanly.
+        if _pf_w4_enabled or _pf_pj_enabled:
             try:
-                events = _w4_detect(
-                    primary_track_ids=top_tracks,
-                    positions=player_positions,
-                    track_stats=track_stats,
-                )
+                events: list[Any] = []
+                if _pf_w4_enabled:
+                    events.extend(_w4_detect(
+                        primary_track_ids=top_tracks,
+                        positions=player_positions,
+                        track_stats=track_stats,
+                    ))
+                if _pf_pj_enabled:
+                    events.extend(_pj_detect(
+                        primary_track_ids=top_tracks,
+                        positions=player_positions,
+                    ))
+                _pf_w4_events = list(events)
                 if events:
                     w4_sub_tracks = _w4_build_subtracks(
                         events=events,
@@ -852,15 +893,29 @@ class MatchPlayerTracker:
                     if w4_sub_tracks:
                         # Inject sub-tracks into track_stats + top_tracks so
                         # downstream Hungarian sees them. Parents are removed.
+                        # Propagate parent's court-side + avg_y to synthetic
+                        # IDs so `_initialize_first_rally` can place them
+                        # (Y-sort filters by `track_court_sides.get(t)` and
+                        # would silently drop sub-tracks otherwise — observed
+                        # in 854bb250/r01 where 2 of 4 PIDs ended up
+                        # unassigned). See cross_rally_pipeline_forensic_2026_04_30.
                         for s in w4_sub_tracks:
                             track_stats[s.synthetic_track_id] = s.appearance_stats
+                            if s.parent_track_id in track_court_sides:
+                                track_court_sides[s.synthetic_track_id] = (
+                                    track_court_sides[s.parent_track_id]
+                                )
+                            if s.parent_track_id in track_avg_y:
+                                track_avg_y[s.synthetic_track_id] = (
+                                    track_avg_y[s.parent_track_id]
+                                )
                         w4_parents = {s.parent_track_id for s in w4_sub_tracks}
                         top_tracks = [t for t in top_tracks if t not in w4_parents]
                         top_tracks.extend(
                             s.synthetic_track_id for s in w4_sub_tracks
                         )
                         logger.info(
-                            "W4 swap-event detector emitted %d sub-tracks "
+                            "swap-event detectors (W4+positionjump) emitted %d sub-tracks "
                             "from %d events",
                             len(w4_sub_tracks), len(events),
                         )
@@ -870,6 +925,36 @@ class MatchPlayerTracker:
                     exc_info=True,
                 )
 
+        if _pf.is_active():
+            _pf.log_stage("1_w4_split", {
+                "enabled": bool(_pf_w4_enabled),
+                "top_tracks_pre": [int(t) for t in _pf_w4_top_tracks_pre],
+                "top_tracks_post": [int(t) for t in top_tracks],
+                "events": [
+                    {
+                        "track_a": int(e.track_a),
+                        "track_b": int(e.track_b),
+                        "split_frame": int(e.split_frame),
+                        "peak_iou": float(e.peak_iou),
+                        "same_a": float(e.same_a),
+                        "same_b": float(e.same_b),
+                        "cross_ab": float(e.cross_ab),
+                        "cross_ba": float(e.cross_ba),
+                    }
+                    for e in _pf_w4_events
+                ],
+                "sub_tracks": [
+                    {
+                        "synthetic_track_id": int(s.synthetic_track_id),
+                        "parent_track_id": int(s.parent_track_id),
+                        "segment_index": int(s.segment_index),
+                        "f_start": int(s.f_start),
+                        "f_end": int(s.f_end),
+                    }
+                    for s in w4_sub_tracks
+                ],
+            })
+
         if self.rally_count <= 1 and not self.frozen_player_ids:
             # Phase 3: seeded profiles enrich the per-match prior, but the
             # first-rally track->pid mapping still goes through the baseline
@@ -878,6 +963,7 @@ class MatchPlayerTracker:
             track_to_player = self._initialize_first_rally(
                 top_tracks, track_avg_y, track_court_sides
             )
+            _pf_hungarian_path = "first_rally_y_sort"
         else:
             # Optional pre-Hungarian within-track split (Task 4, 2026-04-26).
             # Returns [] when flag is off, no classifier, or no frozen profiles.
@@ -902,12 +988,36 @@ class MatchPlayerTracker:
                 )
                 # Combine direct sub-track assignments + Hungarian result.
                 track_to_player = {**direct_subtrack_assignments, **hungarian_result}
+                _pf_hungarian_path = "subtrack_split_plus_hungarian"
             else:
                 track_to_player = self._assign_tracks_to_players_global(
                     top_tracks, track_stats, track_court_sides,
                     use_side_penalty=not self.frozen_player_ids,
                     early_positions=early_positions,
                 )
+                _pf_hungarian_path = "hungarian"
+
+        if _pf.is_active():
+            _pf.log_stage("9b_cross_hungarian", {
+                "rally_index": int(rally_index),
+                "rally_count_at_call": int(self.rally_count),
+                "path": _pf_hungarian_path,
+                "frozen_player_ids": bool(self.frozen_player_ids),
+                "top_tracks_in": [int(t) for t in top_tracks],
+                "track_court_sides": {
+                    str(int(tid)): int(side)
+                    for tid, side in (track_court_sides or {}).items()
+                },
+                "track_avg_y": {
+                    str(int(tid)): float(y)
+                    for tid, y in (track_avg_y or {}).items()
+                },
+                "track_to_player_out": {
+                    str(int(tid)): int(pid)
+                    for tid, pid in (track_to_player or {}).items()
+                },
+                "side_switch_detected": bool(side_switch_detected),
+            })
 
         # Combine classifier-based sub-tracks (existing) with W4 sub-tracks (new).
         # Both flow through the same per-frame writer (`_build_per_frame_pid_map`)
@@ -1456,6 +1566,71 @@ class MatchPlayerTracker:
         for r, c in zip(row_ind, col_ind):
             if r < n_tracks and c < n_players:
                 result[track_ids[r]] = all_player_ids[c]
+
+        if _pf.is_active():
+            # For each track, compute the cost of EACH pid (winning + losing
+            # alternatives) so the analyzer can look at per-track margin and
+            # per-pid runner-up. Also compute per-feature breakdown of the
+            # HSV cost component for each (track, pid) pair so we can see
+            # WHICH appearance feature dominates the wrong assignments.
+            per_track_costs: list[dict[str, Any]] = []
+            for i, tid in enumerate(track_ids):
+                row: list[dict[str, Any]] = []
+                for j in range(n_players):
+                    pid = int(all_player_ids[j])
+                    entry: dict[str, Any] = {
+                        "pid": pid,
+                        "cost": float(cost_matrix[i, j]),
+                    }
+                    # Per-feature HSV breakdown when both profile + track
+                    # stats are available; ReID (if used) shows up via
+                    # the gap between hsv_breakdown sum and total cost.
+                    if (
+                        tid in track_stats
+                        and pid in self.state.players
+                    ):
+                        try:
+                            entry["hsv_breakdown"] = (
+                                _pf.appearance_cost_breakdown(
+                                    self.state.players[pid], track_stats[tid],
+                                )
+                            )
+                        except Exception:  # noqa: BLE001
+                            entry["hsv_breakdown"] = {}
+                        if (tid, pid) in reid_costs_cache:
+                            entry["reid_cost"] = float(reid_costs_cache[(tid, pid)])
+                            entry["reid_used"] = bool(
+                                reid_use_for_track.get(tid, False)
+                            )
+                    row.append(entry)
+                row.sort(key=lambda kv: kv["cost"])
+                per_track_costs.append({
+                    "track_id": int(tid),
+                    "court_side": track_court_sides.get(tid),
+                    "ranked": row,
+                    "winner_pid": int(result[tid]) if tid in result else None,
+                    "winner_cost": (
+                        float(cost_matrix[i, all_player_ids.index(result[tid])])
+                        if tid in result else None
+                    ),
+                    "margin_to_runner_up": (
+                        float(row[1]["cost"] - row[0]["cost"])
+                        if len(row) >= 2 else None
+                    ),
+                })
+            _pf.log_stage("9b_hungarian_costs", {
+                "track_ids_in": [int(t) for t in track_ids],
+                "all_player_ids": [int(p) for p in all_player_ids],
+                "use_side_penalty": bool(use_side_penalty),
+                "side_penalty_value": float(active_side_penalty),
+                "default_cost": float(default_cost),
+                "track_court_sides": {
+                    str(int(tid)): int(side)
+                    for tid, side in track_court_sides.items()
+                },
+                "result": {str(int(tid)): int(pid) for tid, pid in result.items()},
+                "per_track": per_track_costs,
+            })
 
         # Collect diagnostics after final (penalized) assignment
         if self.collect_diagnostics and use_side_penalty:

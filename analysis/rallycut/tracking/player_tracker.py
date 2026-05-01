@@ -1016,10 +1016,23 @@ class PlayerTracker:
         # Round FPS to nearest int for BoT-SORT (expects int frame_rate)
         frame_rate = max(int(round(video_fps)), 1)
 
+        # Forensic instrumentation hook (read-only): when BOTSORT_FORENSIC_LOG_DIR
+        # and BOTSORT_FORENSIC_RALLY_TAG are both set, swap in a subclass that
+        # records per-frame BoxMOT internal state to a JSONL sidecar. The
+        # subclass replicates BotSort's body verbatim and makes no behavioral
+        # changes; tracker outputs remain byte-identical when the flag is unset.
+        if os.environ.get("BOTSORT_FORENSIC_LOG_DIR") and os.environ.get(
+            "BOTSORT_FORENSIC_RALLY_TAG"
+        ):
+            from rallycut.tracking.botsort_instrumented import InstrumentedBotSort
+            tracker_cls: type[BotSort] = InstrumentedBotSort
+        else:
+            tracker_cls = BotSort
+
         # Create tracker with with_reid=False to skip loading BoxMOT's
         # internal ReID model. We'll set with_reid=True after construction
         # and pass embeddings via the embs parameter in update().
-        tracker = BotSort(
+        tracker = tracker_cls(
             reid_weights=Path("unused"),  # Not loaded when with_reid=False
             device=torch.device("cpu"),   # Not used for ReID
             half=False,
@@ -1507,6 +1520,7 @@ class PlayerTracker:
         _split_confidence: str | None = None
 
         if filter_enabled:
+            from rallycut.tracking import pipeline_forensic as _pf
             from rallycut.tracking.player_filter import (
                 PlayerFilter,
                 PlayerFilterConfig,
@@ -1553,6 +1567,7 @@ class PlayerTracker:
             if not _skip("SKIP_FIX_HEIGHT_SWAPS"):
                 from rallycut.tracking.height_consistency import fix_height_swaps
 
+                _pf_pre = _pf.positions_summary(positions) if _pf.is_active() else None
                 positions, height_swap_result = fix_height_swaps(
                     positions,
                     color_store=color_store,
@@ -1560,6 +1575,24 @@ class PlayerTracker:
                     learned_store=learned_store,
                 )
                 num_height_swaps = height_swap_result.swaps
+                if _pf.is_active():
+                    _pf.log_stage("2_height_swap", {
+                        "pre": _pf_pre,
+                        "post": _pf.positions_summary(positions),
+                        "n_swaps": int(height_swap_result.swaps),
+                        "swap_details": [
+                            {
+                                "track_a": int(d.track_a),
+                                "track_b": int(d.track_b),
+                                "swap_frame": int(d.swap_frame),
+                                "pre_h_a": float(d.pre_h_a),
+                                "post_h_a": float(d.post_h_a),
+                                "pre_h_b": float(d.pre_h_b),
+                                "post_h_b": float(d.post_h_b),
+                            }
+                            for d in height_swap_result.swap_details
+                        ],
+                    })
 
             # Step 0b: Color-based track splitting
             if color_store is not None and color_store.has_data():
@@ -1568,10 +1601,19 @@ class PlayerTracker:
                         split_tracks_by_color,
                     )
 
+                    _pf_pre = (
+                        _pf.positions_summary(positions) if _pf.is_active() else None
+                    )
                     positions, num_color_splits = split_tracks_by_color(
                         positions, color_store,
                         learned_store=learned_store,
                     )
+                    if _pf.is_active():
+                        _pf.log_stage("3_color_split", {
+                            "pre": _pf_pre,
+                            "post": _pf.positions_summary(positions),
+                            "n_splits": int(num_color_splits),
+                        })
 
                 # Step 0b2: Spatial re-link
                 if not _skip("SKIP_RELINK_SPATIAL_SPLITS"):
@@ -1579,11 +1621,20 @@ class PlayerTracker:
                         relink_spatial_splits,
                     )
 
+                    _pf_pre = (
+                        _pf.positions_summary(positions) if _pf.is_active() else None
+                    )
                     positions, num_spatial_relinks = relink_spatial_splits(
                         positions, color_store,
                         appearance_store=appearance_store,
                         learned_store=learned_store,
                     )
+                    if _pf.is_active():
+                        _pf.log_stage("4a_link_spatial", {
+                            "pre": _pf_pre,
+                            "post": _pf.positions_summary(positions),
+                            "n_relinks": int(num_spatial_relinks),
+                        })
 
                 # Step 0b3: Relaxed fragment linking for primary tracks
                 # Runs before appearance linking to give spatial proximity
@@ -1601,6 +1652,10 @@ class PlayerTracker:
                     )
                     pre_link_filter.analyze_tracks(positions)
                     pre_primary_ids = sorted(pre_link_filter.primary_tracks)
+                    _pf_pre = (
+                        _pf.positions_summary(positions, pre_primary_ids)
+                        if _pf.is_active() else None
+                    )
                     positions, pre_primary_ids, num_primary_relinks = (
                         relink_primary_fragments(
                             positions,
@@ -1610,6 +1665,13 @@ class PlayerTracker:
                             learned_store=learned_store,
                         )
                     )
+                    if _pf.is_active():
+                        _pf.log_stage("4b_link_primary_frag", {
+                            "pre": _pf_pre,
+                            "post": _pf.positions_summary(positions, pre_primary_ids),
+                            "n_relinks": int(num_primary_relinks),
+                            "post_primary_track_ids": [int(t) for t in pre_primary_ids],
+                        })
 
                 # Step 0c: Appearance-based tracklet linking
                 # Session 6 — env-var-gated learned-head + court-plane-velocity
@@ -1629,12 +1691,21 @@ class PlayerTracker:
                     _enable_velocity_gate = (
                         os.environ.get("ENABLE_COURT_VELOCITY_GATE", "0") == "1"
                     )
+                    _pf_pre = (
+                        _pf.positions_summary(positions) if _pf.is_active() else None
+                    )
                     positions, num_appearance_links = link_tracklets_by_appearance(
                         positions, color_store,
                         appearance_store=appearance_store,
                         learned_store=learned_store,
                         calibrator=court_calibrator if _enable_velocity_gate else None,
                     )
+                    if _pf.is_active():
+                        _pf.log_stage("4c_link_appearance", {
+                            "pre": _pf_pre,
+                            "post": _pf.positions_summary(positions),
+                            "n_links": int(num_appearance_links),
+                        })
 
             # Step 1: Stabilize track IDs
             if not _skip("SKIP_STABILIZE_TRACK_IDS"):
@@ -1663,6 +1734,29 @@ class PlayerTracker:
 
             court_split_y = player_filter.court_split_y
             primary_track_ids = sorted(player_filter.primary_tracks)
+
+            if _pf.is_active():
+                # Per-track stats from the filter for falsifiability rules.
+                track_stats_dump: dict[str, dict[str, Any]] = {}
+                for tid, stats in (player_filter.track_stats or {}).items():
+                    track_stats_dump[str(int(tid))] = {
+                        "presence_rate": float(getattr(stats, "presence_rate", 0.0)),
+                        "stability_score": float(getattr(stats, "stability_score", 0.0)),
+                        "court_presence_ratio": float(
+                            getattr(stats, "court_presence_ratio", 0.0)
+                        ),
+                        "is_likely_referee": bool(
+                            getattr(stats, "is_likely_referee", False)
+                        ),
+                        "frame_count": int(getattr(stats, "frame_count", 0)),
+                    }
+                _pf.log_stage("5_candidate_filter", {
+                    "primary_track_ids": [int(t) for t in primary_track_ids],
+                    "court_split_y": (
+                        float(court_split_y) if court_split_y is not None else None
+                    ),
+                    "track_stats": track_stats_dump,
+                })
 
             # Step 2b: Recover missing players from raw positions
             num_recovered = 0
@@ -1697,10 +1791,26 @@ class PlayerTracker:
             # Step 4: Filter each frame
             original_count = len(positions)
             filtered_positions: list[PlayerPosition] = []
-            for frame_num in sorted(frames.keys()):
+            _pf_perframe_drops: list[dict[str, Any]] | None = (
+                [] if _pf.is_active() else None
+            )
+            sorted_frame_nums = sorted(frames.keys())
+            # Stratified sample: ~30 frames evenly across the rally.
+            sample_step = max(1, len(sorted_frame_nums) // 30)
+            for i, frame_num in enumerate(sorted_frame_nums):
                 frame_players = frames[frame_num]
                 filtered_frame = player_filter.filter(frame_players)
                 filtered_positions.extend(filtered_frame)
+                if _pf_perframe_drops is not None and (i % sample_step == 0):
+                    in_tids = sorted({int(p.track_id) for p in frame_players})
+                    out_tids = sorted({int(p.track_id) for p in filtered_frame})
+                    dropped = sorted(set(in_tids) - set(out_tids))
+                    _pf_perframe_drops.append({
+                        "frame": int(frame_num),
+                        "in_tids": in_tids,
+                        "out_tids": out_tids,
+                        "dropped_tids": dropped,
+                    })
 
             positions = filtered_positions
             filter_method = player_filter.filter_method
@@ -1708,6 +1818,14 @@ class PlayerTracker:
                 f"Filtered {original_count} -> {len(positions)} detections "
                 f"using {filter_method}"
             )
+            if _pf.is_active():
+                _pf.log_stage("7_per_frame_filter", {
+                    "filter_method": str(filter_method),
+                    "n_in": int(original_count),
+                    "n_out": int(len(positions)),
+                    "primary_track_ids": [int(t) for t in primary_track_ids],
+                    "samples": _pf_perframe_drops or [],
+                })
 
             # Step 4b: Team classification
             split_result = compute_court_split(
@@ -1732,6 +1850,33 @@ class PlayerTracker:
                     "split confidence (%d tracks)",
                     len(team_assignments),
                 )
+
+            if _pf.is_active():
+                # Per-track avg_y for the primary tracks (used for team ranking).
+                track_avg_y: dict[str, float] = {}
+                track_n: dict[str, int] = {}
+                for p in positions:
+                    tid = int(p.track_id)
+                    if tid in primary_track_ids:
+                        track_avg_y[str(tid)] = track_avg_y.get(str(tid), 0.0) + p.y
+                        track_n[str(tid)] = track_n.get(str(tid), 0) + 1
+                for tid_s, total in list(track_avg_y.items()):
+                    n = track_n.get(tid_s, 1)
+                    track_avg_y[tid_s] = float(total / n)
+                _pf.log_stage("8_team_classification", {
+                    "court_split_y": (
+                        float(split_y) if split_y is not None else None
+                    ),
+                    "split_confidence": _split_confidence,
+                    "team_skipped": bool(_team_skipped),
+                    "team_assignments": {
+                        str(int(tid)): int(team)
+                        for tid, team in (team_assignments or {}).items()
+                        if int(tid) in primary_track_ids
+                    },
+                    "primary_avg_y": track_avg_y,
+                    "primary_track_ids": [int(t) for t in primary_track_ids],
+                })
 
             # Step 4b.5: Within-team occlusion-resolver (Session 5).
             # Runs BEFORE global identity so same-team swap corrections
@@ -1782,6 +1927,10 @@ class PlayerTracker:
                     for p in positions
                 }
 
+                _pf_pre_9a = (
+                    _pf.positions_summary(positions, primary_track_ids)
+                    if _pf.is_active() else None
+                )
                 positions, global_result = optimize_global_identity(
                     positions,
                     team_assignments,
@@ -1792,6 +1941,28 @@ class PlayerTracker:
                 )
                 _num_global_segments = global_result.num_segments
                 _num_global_remapped = global_result.num_remapped
+
+                if _pf.is_active():
+                    # Track id remappings caused by within-rally global identity.
+                    remap_count: dict[tuple[int, int], int] = {}
+                    for p in positions:
+                        old_tid = pre_global.get((p.frame_number, id(p)))
+                        if old_tid is not None and old_tid != p.track_id:
+                            key = (int(old_tid), int(p.track_id))
+                            remap_count[key] = remap_count.get(key, 0) + 1
+                    _pf.log_stage("9a_within_global_id", {
+                        "pre": _pf_pre_9a,
+                        "post": _pf.positions_summary(positions, primary_track_ids),
+                        "skipped": bool(global_result.skipped),
+                        "skip_reason": str(global_result.skip_reason),
+                        "num_segments": int(global_result.num_segments),
+                        "num_remapped": int(global_result.num_remapped),
+                        "num_interactions": int(global_result.num_interactions),
+                        "remap_pairs": [
+                            {"from": old, "to": new, "n_frames": n}
+                            for (old, new), n in sorted(remap_count.items())
+                        ],
+                    })
 
                 if global_result.num_remapped > 0:
                     remap_keys: dict[tuple[int, int], int] = {}
@@ -1825,6 +1996,14 @@ class PlayerTracker:
                     detect_convergence_swaps,
                 )
 
+                _pf_pre_10 = (
+                    _pf.positions_summary(positions, primary_track_ids)
+                    if _pf.is_active() else None
+                )
+                _pf_pre_tids_10 = (
+                    {(p.frame_number, id(p)): int(p.track_id) for p in positions}
+                    if _pf.is_active() else None
+                )
                 positions, _num_convergence_swaps = (
                     detect_convergence_swaps(
                         positions,
@@ -1835,6 +2014,23 @@ class PlayerTracker:
                         learned_store=learned_store,
                     )
                 )
+                if _pf.is_active():
+                    swap_remap: dict[tuple[int, int], int] = {}
+                    if _pf_pre_tids_10 is not None:
+                        for p in positions:
+                            pre_tid = _pf_pre_tids_10.get((p.frame_number, id(p)))
+                            if pre_tid is not None and pre_tid != p.track_id:
+                                key = (int(pre_tid), int(p.track_id))
+                                swap_remap[key] = swap_remap.get(key, 0) + 1
+                    _pf.log_stage("10_drift_convergence", {
+                        "pre": _pf_pre_10,
+                        "post": _pf.positions_summary(positions, primary_track_ids),
+                        "n_swaps": int(_num_convergence_swaps),
+                        "swap_remap": [
+                            {"from": old, "to": new, "n_frames": n}
+                            for (old, new), n in sorted(swap_remap.items())
+                        ],
+                    })
 
         # Step 4e/4f removed: post-identity spatial consistency (drift
         # detection) was net-negative — it fragmented correct tracks and

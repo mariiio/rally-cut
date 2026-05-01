@@ -77,6 +77,37 @@ def is_enabled() -> bool:
     return os.environ.get("ENABLE_BBOX_SWAP_DETECTION", "1") == "1"
 
 
+def is_position_jump_enabled() -> bool:
+    """Default: ON (shipped 2026-05-01). Position-jump swap detector covers
+    W4's blind spot — track-ID swaps that occur without sufficient bbox
+    overlap to trip the IoU>=0.30 criterion (e.g., players passing each
+    other quickly with momentary occlusion). Detected as paired correlated
+    single-frame jumps in opposite directions. Validated on 1/9 panel
+    error (5c756c41/r07: t1+t4 paired jump at f310->311) with 0/4 control
+    fires. Falsifiable, no fitted thresholds. Safe to flip OFF via
+    `ENABLE_POSITION_JUMP_SWAP=0` for rollback.
+    """
+    return os.environ.get("ENABLE_POSITION_JUMP_SWAP", "1") == "1"
+
+
+# Position-jump detection thresholds (locked, physical-plausibility-derived).
+# A volleyball player at 30fps cannot translate >10% of the frame width in a
+# single frame: 10% of frame width ≈ 1.6m on a 16m court @ 30fps = 48 m/s.
+# World-record sprinters peak at ~12 m/s, so 48 m/s is unphysical.
+POSITION_JUMP_THRESHOLD = 0.10
+# Max distance between a's post-jump position and b's pre-jump position (and
+# vice versa) for the jump to be classified as a SWAP rather than independent
+# YOLO detection noise. 0.05 normalized ≈ 80cm — within "they crossed at the
+# same physical spot" tolerance.
+POSITION_JUMP_PAIR_DISTANCE = 0.05
+# BoxMOT may register the swap on the two tracks at slightly different frames
+# (1-2 frame lag depending on which track's detection updates first).
+POSITION_JUMP_PAIR_FRAME_TOLERANCE = 2
+# Skip jumps separated by >5 frames of absence: long gaps allow legitimate
+# motion across the gap (player ran while off-screen), not a true 1-frame jump.
+POSITION_JUMP_MAX_GAP_FRAMES = 5
+
+
 @dataclass
 class SwapEvent:
     """A detected within-rally swap of two BoT-SORT tracks at a frame."""
@@ -279,6 +310,151 @@ def detect_swap_events(
                 "swap_event_detector: %d events found at low IoU threshold %.2f",
                 len(events), iou_threshold_low,
             )
+    return events
+
+
+def _track_jumps(
+    track_positions: list[PlayerPosition],
+    threshold: float,
+    max_gap_frames: int,
+) -> list[tuple[int, float, float, float, float]]:
+    """List of (jump_frame, prev_x, prev_y, new_x, new_y) for single-frame
+    position jumps in this track. Skips gaps > max_gap_frames where
+    legitimate motion across the gap would be confused with a jump.
+    """
+    out: list[tuple[int, float, float, float, float]] = []
+    for i in range(1, len(track_positions)):
+        prev = track_positions[i - 1]
+        curr = track_positions[i]
+        df = curr.frame_number - prev.frame_number
+        if df <= 0 or df > max_gap_frames:
+            continue
+        dx = abs(curr.x - prev.x) / df
+        dy = abs(curr.y - prev.y) / df
+        if dx > threshold or dy > threshold:
+            out.append((
+                int(curr.frame_number),
+                float(prev.x), float(prev.y),
+                float(curr.x), float(curr.y),
+            ))
+    return out
+
+
+def detect_position_jump_swap_events(
+    primary_track_ids: list[int],
+    positions: list[PlayerPosition],
+    jump_threshold: float = POSITION_JUMP_THRESHOLD,
+    pair_distance: float = POSITION_JUMP_PAIR_DISTANCE,
+    pair_frame_tolerance: int = POSITION_JUMP_PAIR_FRAME_TOLERANCE,
+    max_gap_frames: int = POSITION_JUMP_MAX_GAP_FRAMES,
+) -> list[SwapEvent]:
+    """Detect track-ID swap events via paired correlated single-frame jumps.
+
+    Covers W4's blind spot. W4 (`detect_swap_events`) requires bbox IoU
+    >= 0.30 at the swap frame; this misses swaps where two players pass
+    each other quickly without bbox overlap (e.g., 5c756c41/r07 t1+t4 at
+    f310->311). The position-jump signature catches these via:
+
+      1. Per-track: detect any single-frame |Δposition| > jump_threshold.
+         Jumps separated by long gaps (> max_gap_frames) are excluded —
+         they reflect legitimate motion across an off-screen interval.
+      2. Per-pair: a pair (a, b) is a swap iff BOTH tracks have a jump at
+         the same frame (within pair_frame_tolerance) AND the post-jump
+         position of one matches the pre-jump position of the other,
+         within pair_distance, in BOTH directions. This rules out
+         independent YOLO instability or coincidental jumps.
+
+    Returns SwapEvents with cost fields set to -1.0 (sentinel) — position-
+    jump detector doesn't compute mirror-cost. `build_subtracks_from_events`
+    only uses (track_a, track_b, split_frame); cost fields are diagnostic.
+
+    One event per pair maximum: even if multiple correlated-jump candidates
+    exist, only the earliest is emitted (rare in practice).
+
+    Args:
+        primary_track_ids: rally's primary tracks.
+        positions: rally's PlayerPositions.
+        jump_threshold: per-frame normalized position jump threshold.
+        pair_distance: max swap-correlation distance.
+        pair_frame_tolerance: ± frame tolerance for paired jumps.
+        max_gap_frames: skip jumps over gaps longer than this.
+
+    Returns:
+        List of SwapEvent. Empty if no paired jumps detected.
+    """
+    if len(primary_track_ids) < 2:
+        return []
+
+    by_track: dict[int, list[PlayerPosition]] = {}
+    for p in positions:
+        if p.track_id in primary_track_ids:
+            by_track.setdefault(p.track_id, []).append(p)
+    for tid in by_track:
+        by_track[tid].sort(key=lambda p: p.frame_number)
+
+    # Detect per-track jumps; skip undersized tracks (likely noise, not players).
+    jumps_per_track: dict[int, list[tuple[int, float, float, float, float]]] = {}
+    for tid, ps in by_track.items():
+        if len(ps) < MIN_TRACK_COVERAGE_FRAMES:
+            continue
+        track_jumps = _track_jumps(ps, jump_threshold, max_gap_frames)
+        if track_jumps:
+            jumps_per_track[tid] = track_jumps
+
+    if len(jumps_per_track) < 2:
+        return []
+
+    events: list[SwapEvent] = []
+    paired: set[tuple[int, int]] = set()
+
+    for i, a in enumerate(primary_track_ids):
+        if a not in jumps_per_track:
+            continue
+        for b in primary_track_ids[i + 1:]:
+            if b not in jumps_per_track:
+                continue
+            pair_key = (min(a, b), max(a, b))
+            if pair_key in paired:
+                continue
+            best_event: SwapEvent | None = None
+            for ja in jumps_per_track[a]:
+                a_frame, a_prev_x, a_prev_y, a_new_x, a_new_y = ja
+                for jb in jumps_per_track[b]:
+                    b_frame, b_prev_x, b_prev_y, b_new_x, b_new_y = jb
+                    if abs(a_frame - b_frame) > pair_frame_tolerance:
+                        continue
+                    # Verify bidirectional swap: a's post matches b's pre,
+                    # b's post matches a's pre (within pair_distance).
+                    d_a_to_b_pre = (
+                        (a_new_x - b_prev_x) ** 2
+                        + (a_new_y - b_prev_y) ** 2
+                    ) ** 0.5
+                    d_b_to_a_pre = (
+                        (b_new_x - a_prev_x) ** 2
+                        + (b_new_y - a_prev_y) ** 2
+                    ) ** 0.5
+                    if d_a_to_b_pre > pair_distance:
+                        continue
+                    if d_b_to_a_pre > pair_distance:
+                        continue
+                    split = min(a_frame, b_frame)
+                    candidate = SwapEvent(
+                        track_a=a, track_b=b, split_frame=split,
+                        peak_iou=-1.0,
+                        same_a=-1.0, same_b=-1.0,
+                        cross_ab=-1.0, cross_ba=-1.0,
+                    )
+                    if best_event is None or candidate.split_frame < best_event.split_frame:
+                        best_event = candidate
+            if best_event is not None:
+                events.append(best_event)
+                paired.add(pair_key)
+                logger.info(
+                    "position_jump_swap: pair (t%d, t%d) split @ f%d",
+                    best_event.track_a, best_event.track_b,
+                    best_event.split_frame,
+                )
+
     return events
 
 
