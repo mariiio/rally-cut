@@ -344,6 +344,17 @@ Per-rally `assignmentAnchor` on `match_analysis_json.rallies[]` decouples each r
 
 Anchors are written on every blind-path run regardless of the read flag. The cache naturally invalidates when track IDs change (re-tracking with BoT-SORT). Tests: `tests/unit/test_match_solver_pinned.py`.
 
+### Slow-drift bisect splitter (Phase 3, in-progress)
+
+`ENABLE_SLOW_DRIFT_SPLIT=1` activates a within-rally identity-drift fix targeting the verdict tool's `slow_drift` shape. Detects per-PID half-shift > 0.20 + pairwise x-overlap > 0.45, then bisects the worst-PID's track at the median frame. Safety gates: HSV inter-half χ² ≥ 0.20 AND second half best-matches a different PID. When all gates pass, emits FOUR sub-tracks for a paired late-half swap (drift_track first half → drift_pid, drift_track second half → other_pid; mirror for other_track). Module: `tracking/_slow_drift_split.py`.
+
+Status: detection + override mechanism work end-to-end (verified on 5c756c41/r07 — slow_drift mechanism eliminated). Two remaining issues need next-session work before promoting to default-on:
+
+1. **`within_rally_swap` artifact at bisect frame**: a sharp per-frame transition at the bisect point trips the verdict tool's per-frame swap detector. The underlying drift IS fixed (gradual centroid shift gone) but the verdict-tool shape changes from `slow_drift` to `within_rally_swap`. Visual review pending to confirm this is the correct fix.
+2. **Cross-rally interaction with `--reset-anchors`**: panel runs with `--reset-anchors` re-shuffle assignments, sometimes eliminating the slow_drift signal entirely (because the rally's tracks get different PIDs). Default behavior with anchors stable is preferred; `--reset-anchors` should be avoided unless rebuilding from scratch.
+
+Default OFF until user visual verification confirms the within-rally swap shape is acceptable.
+
 ### Diagnostic env flags
 
 - `MATCH_PLAYERS_PROBE=1` — write per-(iteration, rally) sidecar JSON to `analysis/reports/profile_drift_probe/` capturing MatchSolver iteration state + post-solve `_update_profiles` snapshots. Default OFF; used to falsify hypotheses about cross-rally cascade.

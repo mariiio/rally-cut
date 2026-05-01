@@ -3740,6 +3740,52 @@ def match_players_across_rallies(
 
         results = tracker.refine_assignments(results, skip_stages_1_and_2=True)
 
+        # Slow-drift bisect splitter (Phase 3, ENABLE_SLOW_DRIFT_SPLIT=1).
+        # Runs AFTER refine_assignments so the per-rally pid mapping matches
+        # what gets persisted to match_analysis_json (and what the verdict
+        # tool sees post-remap). Stage 0 side-switch detection inside
+        # refine_assignments can mutate per-rally pids; running before it
+        # would see a different mapping than the verdict tool's view.
+        # Detects within-rally identity drift (verdict tool's `slow_drift`
+        # signal), bisects the worst-PID's track at the median frame, and
+        # emits a paired per-frame swap sub-track when the halves are
+        # HSV-distinguishable AND one half best-matches a different PID.
+        # Default OFF.
+        from rallycut.tracking import _slow_drift_split as _sds
+        if _sds.is_enabled():
+            logger.warning(
+                "slow_drift_split: scanning %d rallies (ENABLE_SLOW_DRIFT_SPLIT=1)",
+                len(rallies),
+            )
+            n_emitted = 0
+            for i, (rally, r) in enumerate(zip(rallies, results)):
+                overrides = _sds.maybe_emit_slow_drift_split(
+                    rally_id=rally.rally_id,
+                    video_path=video_path,
+                    rally_start_ms=rally.start_ms,
+                    positions=rally.positions,
+                    track_to_player=r.track_to_player,
+                )
+                if not overrides:
+                    continue
+                # Each override is a SubTrackCandidate; emitter returns
+                # FOUR (drift+other tracks × first+second halves) so the
+                # remap-track-ids per-frame override resolver covers every
+                # frame of both parents — avoids the UNLABELED trap and
+                # the duplicate-PID-per-frame issue.
+                for ov in overrides:
+                    r.sub_tracks.append(ov)
+                    if ov.aggregated_argmax_pid is not None:
+                        r.track_to_player[ov.synthetic_track_id] = (
+                            ov.aggregated_argmax_pid
+                        )
+                n_emitted += 1
+            if n_emitted:
+                logger.info(
+                    "slow_drift_split: emitted swap sub-tracks for %d rallies",
+                    n_emitted,
+                )
+
     # Build team templates from canonical-aware positional team membership.
     # Each diagnostic carries the per-rally `track_court_sides` produced by
     # `_classify_track_sides`; pairing with each rally's `track_to_player`
