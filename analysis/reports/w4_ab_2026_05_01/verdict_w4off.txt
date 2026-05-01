@@ -1,0 +1,21 @@
+rally          kind  expect actual agree pids     unlbl  jump   swaps  derived_shape
+------------------------------------------------------------------------------------------------------------------------
+7d77980f/r01   CTRL  GOOD   GOOD   YES   1,2,3,4  0      0.10   0      clean
+7d77980f/r02   PNL   BAD    BAD    YES   1,2,3,4,11 0      0.11   1      within_rally_swap (1 per-frame swap events)
+7d77980f/r13   PNL   GOOD   GOOD   YES   1,2,3,4,10 0      0.03   0      clean (extras: [10])
+7d77980f/r19   PNL   GOOD   GOOD   YES   1,2,3,4,14 0      0.13   0      clean (extras: [14])
+b5fb0594/r01   CTRL  BAD    BAD    YES   1,2,4,18 0      0.16   0      hungarian_drop (missing PIDs [3]; have [1, 2, 4, 18])
+b5fb0594/r04   PNL   GOOD   GOOD   YES   1,2,3,4  0      0.02   0      clean
+b5fb0594/r06   PNL   GOOD   GOOD   YES   1,2,3,4  0      0.03   0      clean
+b5fb0594/r10   PNL   BAD    BAD    YES   1,2,3,4  0      0.02   0      slow_drift (PID3 half-shift=0.21, xrange-overlap=0.56)
+5c756c41/r01   CTRL  GOOD   GOOD   YES   1,2,3,4  8      0.09   0      clean
+5c756c41/r03   PNL   BAD    GOOD   NO    1,2,3,4  0      0.06   0      clean
+5c756c41/r07   PNL   BAD    BAD    YES   1,2,3,4  0      0.02   0      slow_drift (PID4 half-shift=0.58, xrange-overlap=0.51)
+854bb250/r01   PNL   GOOD   GOOD   YES   1,2,3,4  0      0.02   0      clean
+854bb250/r02   CTRL  GOOD   GOOD   YES   1,2,3,4  0      0.03   0      clean
+
+AGREES: 12/13
+
+Disagreements (expected_shape vs derived_shape):
+  5c756c41/r03   PANEL expected=BAD (NEW p2<->p3 cross-team start swap)
+                       derived =GOOD (clean)
