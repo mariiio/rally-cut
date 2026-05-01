@@ -9,6 +9,8 @@ import pytest
 
 from rallycut.cli.commands.remap_track_ids import (
     _build_full_mapping,
+    _capture_snapshot,
+    _deepcopy_json,
     _invert_mapping,
     _remap_actions,
     _remap_contacts,
@@ -312,3 +314,105 @@ class TestRemapIdempotent:
         # Fresh data should remain as-is (identity mapping applied = no change)
         assert [p["trackId"] for p in fresh_positions] == [1, 2, 3, 4]
         assert fresh_primary == [1, 2, 3, 4]
+
+
+class TestSnapshotIdempotent:
+    """Snapshot-based idempotency: two runs from snapshot produce identical output.
+
+    Mirrors the new pre_remap_state_json flow in remap_track_ids_cmd:
+        - Run 1 captures snapshot of pristine row state, applies mapping, writes outputs.
+        - Run 2 restores from snapshot, applies same mapping, writes outputs.
+        - positions / contacts / actions / primary_ids must be byte-identical.
+    """
+
+    def _make_pristine(self) -> dict[str, Any]:
+        return {
+            "positions": [
+                {"trackId": 7, "frameNumber": 0, "x": 0.1, "y": 0.2, "width": 0.05, "height": 0.1, "confidence": 0.9},
+                {"trackId": 12, "frameNumber": 0, "x": 0.3, "y": 0.4, "width": 0.05, "height": 0.1, "confidence": 0.9},
+                {"trackId": 15, "frameNumber": 1, "x": 0.5, "y": 0.6, "width": 0.05, "height": 0.1, "confidence": 0.9},
+                {"trackId": 23, "frameNumber": 1, "x": 0.7, "y": 0.8, "width": 0.05, "height": 0.1, "confidence": 0.9},
+            ],
+            "contacts": {"contacts": [{"playerTrackId": 7, "frame": 0, "playerCandidates": [[12, 0.9]]}]},
+            "actions": {"actions": [{"playerTrackId": 15, "frame": 1}], "teamAssignments": {"7": "near", "12": "far"}},
+            "primaryTrackIds": [7, 12, 15, 23],
+            "actionGroundTruth": [{"playerTrackId": 23, "frame": 1}],
+        }
+
+    def _apply_remap(self, snapshot: dict[str, Any], track_to_player: dict[int, int]) -> dict[str, Any]:
+        """Replicates the per-rally body of remap_track_ids_cmd: deep-copy from
+        snapshot, build full mapping (with collision shifts), apply to all five
+        fields, return the resulting working copy."""
+        pos = _deepcopy_json(snapshot["positions"])
+        con = _deepcopy_json(snapshot["contacts"])
+        act = _deepcopy_json(snapshot["actions"])
+        pri = _deepcopy_json(snapshot["primaryTrackIds"])
+        gt = _deepcopy_json(snapshot["actionGroundTruth"])
+
+        all_ids = {p["trackId"] for p in pos} | set(pri)
+        mapping = _build_full_mapping(track_to_player, all_ids)
+        _remap_positions(pos, mapping)
+        _remap_contacts(con, mapping)
+        _remap_actions(act, mapping)
+        pri = [mapping.get(t, t) for t in pri]
+        for label in gt:
+            old_tid = label.get("playerTrackId")
+            if old_tid is not None and old_tid in mapping:
+                label["playerTrackId"] = mapping[old_tid]
+        return {
+            "positions": pos,
+            "contacts": con,
+            "actions": act,
+            "primaryTrackIds": pri,
+            "actionGroundTruth": gt,
+        }
+
+    def test_two_runs_byte_identical(self) -> None:
+        """Run 1 captures snapshot + applies mapping; Run 2 restores from snapshot
+        + applies same mapping. Outputs must match byte-for-byte (the regression
+        target the user verified on b5fb0594/r04)."""
+        pristine = self._make_pristine()
+        track_to_player = {7: 2, 12: 1, 15: 3, 23: 4}  # non-identity, exercises swap
+
+        # Run 1: pre_remap_state_json IS NULL → capture snapshot from current row.
+        snapshot = _capture_snapshot(
+            pristine["positions"], pristine["contacts"], pristine["actions"],
+            pristine["primaryTrackIds"], pristine["actionGroundTruth"],
+        )
+        run1_output = self._apply_remap(snapshot, track_to_player)
+
+        # Snapshot itself must remain pristine (snapshot != run1_output).
+        assert snapshot["positions"][0]["trackId"] == 7  # original
+        assert run1_output["positions"][0]["trackId"] == 2  # remapped
+
+        # Run 2: pre_remap_state_json EXISTS → restore from snapshot, apply mapping.
+        # The snapshot variable plays the role of pre_remap_state_json read from DB.
+        run2_output = self._apply_remap(snapshot, track_to_player)
+
+        # Byte-identical via JSON round-trip (matches the DB hash check pattern).
+        import json
+        assert json.dumps(run1_output, sort_keys=True) == json.dumps(run2_output, sort_keys=True)
+
+    def test_snapshot_immune_to_working_copy_mutation(self) -> None:
+        """Mutating the working copy during remap must not leak back into the
+        snapshot dict. Otherwise on first run we'd persist the mutated state
+        instead of the pristine state, breaking idempotency."""
+        pristine = self._make_pristine()
+        track_to_player = {7: 2, 12: 1, 15: 3, 23: 4}
+
+        snapshot = _capture_snapshot(
+            pristine["positions"], pristine["contacts"], pristine["actions"],
+            pristine["primaryTrackIds"], pristine["actionGroundTruth"],
+        )
+        snapshot_serialized_before = self._serialize(snapshot)
+
+        # Run remap (mutates working copy).
+        self._apply_remap(snapshot, track_to_player)
+
+        # Snapshot must be unchanged.
+        assert self._serialize(snapshot) == snapshot_serialized_before
+
+    @staticmethod
+    def _serialize(payload: dict[str, Any]) -> str:
+        import json
+        return json.dumps(payload, sort_keys=True)

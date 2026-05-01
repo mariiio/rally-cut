@@ -372,6 +372,66 @@ def _remap_actions(
     return count
 
 
+_SNAPSHOT_FIELDS = (
+    "positions",
+    "contacts",
+    "actions",
+    "primaryTrackIds",
+    "actionGroundTruth",
+)
+
+
+def _capture_snapshot(
+    positions_json: Any,
+    contacts_json: Any,
+    actions_json: Any,
+    primary_ids: Any,
+    action_gt_json: Any,
+) -> dict[str, Any]:
+    """Bundle the five remap-mutated fields into one snapshot dict.
+
+    Storing them together (rather than in separate columns) keeps the
+    snapshot atomic: we never half-restore. None values are preserved as
+    None so the restore round-trip is exact.
+    """
+    return {
+        "positions": positions_json,
+        "contacts": contacts_json,
+        "actions": actions_json,
+        "primaryTrackIds": primary_ids,
+        "actionGroundTruth": action_gt_json,
+    }
+
+
+def _restore_snapshot(
+    snapshot: dict[str, Any],
+) -> tuple[Any, Any, Any, Any, Any]:
+    """Inverse of _capture_snapshot.
+
+    Returns (positions, contacts, actions, primary_ids, action_gt) in the
+    same order the SELECT uses, so the caller can reuse it directly.
+    """
+    return (
+        snapshot.get("positions"),
+        snapshot.get("contacts"),
+        snapshot.get("actions"),
+        snapshot.get("primaryTrackIds"),
+        snapshot.get("actionGroundTruth"),
+    )
+
+
+def _deepcopy_json(value: Any) -> Any:
+    """Round-trip through JSON to deep-copy a snapshotted value.
+
+    Faster than copy.deepcopy for plain JSON structures and guarantees the
+    working copy is independent of the snapshot dict (so mutations during
+    remap don't leak back into pre_remap_state_json on write).
+    """
+    if value is None:
+        return None
+    return json.loads(json.dumps(value))
+
+
 @handle_errors
 def remap_track_ids_cmd(
     video_id: str = typer.Argument(
@@ -392,6 +452,16 @@ def remap_track_ids_cmd(
         None,
         "--rally-ids",
         help="Comma-separated rally UUIDs to process. If omitted, all tracked rallies in the video are processed.",
+    ),
+    reset_snapshot: bool = typer.Option(
+        False,
+        "--reset-snapshot",
+        help=(
+            "Re-snapshot pre_remap_state_json from current row state on this "
+            "run. Use after match-players produces a new canonical permutation "
+            "and you want subsequent remap-track-ids runs to treat the current "
+            "values as the new pristine baseline."
+        ),
     ),
 ) -> None:
     """Remap per-rally track IDs to consistent match-level player IDs (1-4).
@@ -486,13 +556,17 @@ def remap_track_ids_cmd(
         )
         console.print(f"  {len(raw_mappings)} rallies with mappings")
 
-    # Load all player tracks for this video
+    # Load all player tracks for this video. pre_remap_state_json is the
+    # idempotency anchor: when present, it carries the pristine pre-remap
+    # snapshot of {positions, contacts, actions, primaryTrackIds,
+    # actionGroundTruth}; we restore from it on every run so the mapping is
+    # always applied to the same input.
     rally_ids_list = list(raw_mappings.keys())
     placeholders = ", ".join(["%s"] * len(rally_ids_list))
     query = f"""
         SELECT r.id, pt.id, pt.positions_json, pt.contacts_json,
                pt.actions_json, pt.primary_track_ids,
-               pt.action_ground_truth_json
+               pt.action_ground_truth_json, pt.pre_remap_state_json
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         WHERE r.id IN ({placeholders})
@@ -506,63 +580,48 @@ def remap_track_ids_cmd(
     total_remapped = 0
     updates: list[tuple[int, dict[str, Any]]] = []  # (pt_id, {column: value})
 
-    for rally_id_val, pt_id_val, pos_json, contacts_json, actions_json, primary_ids, action_gt_json in rows:
+    for (
+        rally_id_val,
+        pt_id_val,
+        pos_json,
+        contacts_json,
+        actions_json,
+        primary_ids,
+        action_gt_json,
+        pre_remap_state,
+    ) in rows:
         rally_id = str(rally_id_val)
         pt_id = cast(int, pt_id_val)
         raw_mapping = raw_mappings.get(rally_id, {})
         if not raw_mapping:
             continue
         sub_track_overrides = rally_overrides.get(rally_id, [])
-
-        # --- Step 1: Reverse previous remap if needed ---
         rally_entry = rally_entries_by_id.get(rally_id, {})
-        applied_raw = rally_entry.get("appliedFullMapping")
-        was_remapped = rally_entry.get("remapApplied", False)
-        if applied_raw and was_remapped:
-            applied = {int(k): int(v) for k, v in applied_raw.items()}
-            # Use positions for the subset check; fall back to primary_ids
-            check_positions: list[dict[str, Any]] = []
-            if pos_json:
-                check_positions = cast(list[dict[str, Any]], pos_json)
-            elif primary_ids:
-                check_positions = [
-                    {"trackId": tid} for tid in cast(list[int], primary_ids)
-                ]
-            if check_positions and _should_reverse(check_positions, applied):
-                inverse = _invert_mapping(applied)
-                # Reverse pass: deliberately omit sub_track_overrides — the
-                # inverse maps pids back to (collision-shifted) track ids,
-                # and a previously-overriden split parent's positions cannot
-                # be recovered to their pre-segmentation parent id without
-                # the original sub-track ranges, which were already encoded
-                # into the forward override step. Old data without
-                # sub-tracks reverses cleanly via the flat inverse.
-                if pos_json:
-                    _remap_positions(
-                        cast(list[dict[str, Any]], pos_json), inverse
-                    )
-                if contacts_json:
-                    _remap_contacts(
-                        cast(dict[str, Any], contacts_json), inverse
-                    )
-                if actions_json:
-                    _remap_actions(
-                        cast(dict[str, Any], actions_json), inverse
-                    )
-                if primary_ids:
-                    primary_ids = [
-                        inverse.get(tid, tid)
-                        for tid in cast(list[int], primary_ids)
-                    ]
-                if action_gt_json:
-                    for label in cast(list[dict[str, Any]], action_gt_json):
-                        old_tid = label.get("playerTrackId")
-                        if old_tid is not None and old_tid in inverse:
-                            label["playerTrackId"] = inverse[old_tid]
-                if not quiet:
-                    console.print(
-                        f"  {rally_id[:8]}: reversed previous remap"
-                    )
+
+        # --- Step 1: Snapshot or restore. ---
+        # First run (or --reset-snapshot): capture current row values as the
+        # pristine snapshot. Subsequent runs: restore working values from the
+        # snapshot so the forward mapping always applies to the same input.
+        # All field assignments below are "working copies" — independent of
+        # the snapshot dict, so later mutations don't leak back into
+        # pre_remap_state_json on write.
+        snapshot_payload: dict[str, Any] | None = (
+            cast(dict[str, Any], pre_remap_state) if pre_remap_state else None
+        )
+        write_snapshot = False
+        if snapshot_payload is None or reset_snapshot:
+            snapshot_payload = _capture_snapshot(
+                pos_json, contacts_json, actions_json, primary_ids, action_gt_json,
+            )
+            write_snapshot = True
+
+        pos_json, contacts_json, actions_json, primary_ids, action_gt_json = (
+            _deepcopy_json(snapshot_payload.get("positions")),
+            _deepcopy_json(snapshot_payload.get("contacts")),
+            _deepcopy_json(snapshot_payload.get("actions")),
+            _deepcopy_json(snapshot_payload.get("primaryTrackIds")),
+            _deepcopy_json(snapshot_payload.get("actionGroundTruth")),
+        )
 
         # --- Step 2: Collect all track IDs (now original IDs) ---
         all_track_ids: set[int] = set()
@@ -587,6 +646,14 @@ def remap_track_ids_cmd(
             raw_mapping, all_track_ids, sub_track_pids=sub_track_pids,
         )
 
+        # Initialize changes early so first-run snapshot capture is
+        # persisted even on identity-mapping rallies (where no other field
+        # would otherwise change).
+        changes: dict[str, Any] = {}
+        rally_count = 0
+        if write_snapshot:
+            changes["pre_remap_state_json"] = json.dumps(snapshot_payload)
+
         # Check if mapping is all identity AND there are no sub-track
         # overrides (which always force a remap). Clear stale
         # appliedFullMapping/remapApplied so they don't trigger spurious
@@ -594,12 +661,11 @@ def remap_track_ids_cmd(
         if not any(k != v for k, v in mapping.items()) and not sub_track_overrides:
             rally_entry.pop("appliedFullMapping", None)
             rally_entry.pop("remapApplied", None)
+            if changes:
+                updates.append((pt_id, changes))
             if not quiet:
                 console.print(f"  [dim]{rally_id[:8]}: already using player IDs[/dim]")
             continue
-
-        changes: dict[str, Any] = {}
-        rally_count = 0
 
         # Remap positions
         if pos_json:

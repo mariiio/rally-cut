@@ -325,6 +325,7 @@ model PlayerTrack {
   detectionRate       Float?            @map("detection_rate")
   positionsJson       Json?             @map("positions_json")
   rawPositionsJson    Json?             @map("raw_positions_json")
+  preRemapStateJson   Json?             @map("pre_remap_state_json")
   primaryTrackIds     Json?             @map("primary_track_ids")
   uniqueTrackCount    Int?              @map("unique_track_count")
   fps                 Float?            @map("fps")
