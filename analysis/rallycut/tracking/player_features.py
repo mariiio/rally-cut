@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 import os
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal, overload
 
 import cv2
 import numpy as np
@@ -46,6 +46,17 @@ V_RANGES = [0, 256]
 # Tuned via grid search on 46 GT videos: α=0.10 → 86.7% (+1.3pp) with
 # near-zero drift (early 86.9% vs late 86.6%) vs baseline drift of +4.6pp.
 PROFILE_EMA_ALPHA: float = 0.10
+
+
+def _drop_profile_ema() -> bool:
+    """Phase-1 counterfactual gate: when ``EXPERIMENTAL_DROP_PROFILE_EMA=1``,
+    each per-field EMA branch in ``update_from_features`` becomes a no-op
+    after first-sample init. First-sample init still runs so cluster
+    profiles bootstrap normally; subsequent rallies' EMA updates are
+    skipped, freezing each field to its first-sample value. Probed via
+    ``_profile_drift_probe`` sidecars; default OFF (no behavior change).
+    """
+    return os.environ.get("EXPERIMENTAL_DROP_PROFILE_EMA", "0") == "1"
 
 # Tighter skin range for clothing mask — avoids removing red/orange clothing.
 # Real skin: H=5-20, moderate S (40-170), moderate V (70-230).
@@ -222,11 +233,20 @@ class PlayerAppearanceProfile:
 
     def update_from_features(self, features: PlayerAppearanceFeatures) -> None:
         """Update profile with new appearance features."""
+        # Phase-1 counterfactual: when EXPERIMENTAL_DROP_PROFILE_EMA=1, each
+        # per-field EMA branch becomes a no-op after first-sample init.
+        # First-sample (avg is None) always runs so profiles bootstrap;
+        # subsequent samples' EMA updates are skipped to freeze the field.
+        # Counts continue to increment so callers/tests can still observe
+        # how many samples were observed; freeze is detected via the
+        # avg_* checksums in `_profile_drift_probe`.
+        ema_frozen = _drop_profile_ema()
+
         # Update skin tone
         if features.skin_tone_hsv is not None and features.skin_pixel_count >= MIN_SKIN_PIXELS:
             if self.avg_skin_tone_hsv is None:
                 self.avg_skin_tone_hsv = features.skin_tone_hsv
-            else:
+            elif not ema_frozen:
                 weight = self._ema_weight(self.skin_sample_count)
                 h1, s1, v1 = self.avg_skin_tone_hsv
                 h2, s2, v2 = features.skin_tone_hsv
@@ -240,7 +260,7 @@ class PlayerAppearanceProfile:
         if features.upper_body_hist is not None:
             if self.avg_upper_hist is None:
                 self.avg_upper_hist = features.upper_body_hist.copy()
-            else:
+            elif not ema_frozen:
                 weight = self._ema_weight(self.upper_hist_count)
                 self.avg_upper_hist = (
                     self.avg_upper_hist * (1 - weight)
@@ -252,7 +272,7 @@ class PlayerAppearanceProfile:
         if features.lower_body_hist is not None:
             if self.avg_lower_hist is None:
                 self.avg_lower_hist = features.lower_body_hist.copy()
-            else:
+            elif not ema_frozen:
                 weight = self._ema_weight(self.lower_hist_count)
                 self.avg_lower_hist = (
                     self.avg_lower_hist * (1 - weight)
@@ -264,7 +284,7 @@ class PlayerAppearanceProfile:
         if features.upper_body_v_hist is not None:
             if self.avg_upper_v_hist is None:
                 self.avg_upper_v_hist = features.upper_body_v_hist.copy()
-            else:
+            elif not ema_frozen:
                 weight = self._ema_weight(self.upper_v_hist_count)
                 self.avg_upper_v_hist = (
                     self.avg_upper_v_hist * (1 - weight)
@@ -276,7 +296,7 @@ class PlayerAppearanceProfile:
         if features.lower_body_v_hist is not None:
             if self.avg_lower_v_hist is None:
                 self.avg_lower_v_hist = features.lower_body_v_hist.copy()
-            else:
+            elif not ema_frozen:
                 weight = self._ema_weight(self.lower_v_hist_count)
                 self.avg_lower_v_hist = (
                     self.avg_lower_v_hist * (1 - weight)
@@ -288,7 +308,7 @@ class PlayerAppearanceProfile:
         if features.dominant_color_hsv is not None:
             if self.avg_dominant_color_hsv is None:
                 self.avg_dominant_color_hsv = features.dominant_color_hsv
-            else:
+            elif not ema_frozen:
                 weight = self._ema_weight(self.dominant_color_count)
                 h1, s1, v1 = self.avg_dominant_color_hsv
                 h2, s2, v2 = features.dominant_color_hsv
@@ -302,7 +322,7 @@ class PlayerAppearanceProfile:
         if features.head_hist is not None:
             if self.avg_head_hist is None:
                 self.avg_head_hist = features.head_hist.copy()
-            else:
+            elif not ema_frozen:
                 weight = self._ema_weight(self.head_hist_count)
                 self.avg_head_hist = (
                     self.avg_head_hist * (1 - weight)
@@ -935,11 +955,48 @@ def compute_appearance_similarity(
     return 1.0 - similarity  # Return cost (lower = better match)
 
 
+# Feature names used in the optional per-feature breakdown. Stable keys so
+# downstream consumers (diagnostic probes) can rely on them. The HSV keys
+# match the seven _WEIGHT_* constants above; "reid" and "body_prop" are
+# included only when their respective blends fire.
+_BREAKDOWN_KEYS_HSV: tuple[str, ...] = (
+    "lower_hist",
+    "lower_v_hist",
+    "upper_hist",
+    "upper_v_hist",
+    "skin",
+    "dominant_color",
+    "head_hist",
+)
+
+
+@overload
 def compute_track_similarity(
     stats_a: TrackAppearanceStats,
     stats_b: TrackAppearanceStats,
     reid_blend: float = 0.0,
-) -> float:
+    *,
+    return_breakdown: Literal[False] = False,
+) -> float: ...
+
+
+@overload
+def compute_track_similarity(
+    stats_a: TrackAppearanceStats,
+    stats_b: TrackAppearanceStats,
+    reid_blend: float = 0.0,
+    *,
+    return_breakdown: Literal[True],
+) -> tuple[float, dict[str, float]]: ...
+
+
+def compute_track_similarity(
+    stats_a: TrackAppearanceStats,
+    stats_b: TrackAppearanceStats,
+    reid_blend: float = 0.0,
+    *,
+    return_breakdown: bool = False,
+) -> float | tuple[float, dict[str, float]]:
     """Compute similarity cost between two track appearance stats.
 
     Same cost formula as compute_appearance_similarity but works between
@@ -950,37 +1007,43 @@ def compute_track_similarity(
         stats_b: Second track's appearance stats.
         reid_blend: When >0 and both tracks have ReID embeddings, blend
             ReID cosine distance with HSV cost (0.0 = HSV-only).
+        return_breakdown: Diagnostic-only. When True, also return a dict
+            mapping each contributing feature name to its weighted
+            contribution to the final returned cost. The dict values
+            sum to the returned cost (modulo float error). Default False
+            preserves the scalar return type for production callers.
 
     Returns:
-        Cost (0-1, lower = more similar).
+        Cost (0-1, lower = more similar). When ``return_breakdown=True``,
+        ``(cost, dict[str, float])``.
     """
-    scores: list[tuple[float, float]] = []
+    scores: list[tuple[str, float, float]] = []  # (key, weight, similarity)
 
     lower_sim = _histogram_similarity(stats_a.avg_lower_hist, stats_b.avg_lower_hist)
     if lower_sim is not None:
-        scores.append((_WEIGHT_LOWER_HIST, lower_sim))
+        scores.append(("lower_hist", _WEIGHT_LOWER_HIST, lower_sim))
 
     lower_v_sim = _histogram_similarity(
         stats_a.avg_lower_v_hist, stats_b.avg_lower_v_hist,
     )
     if lower_v_sim is not None:
-        scores.append((_WEIGHT_LOWER_V_HIST, lower_v_sim))
+        scores.append(("lower_v_hist", _WEIGHT_LOWER_V_HIST, lower_v_sim))
 
     upper_sim = _histogram_similarity(stats_a.avg_upper_hist, stats_b.avg_upper_hist)
     if upper_sim is not None:
-        scores.append((_WEIGHT_UPPER_HIST, upper_sim))
+        scores.append(("upper_hist", _WEIGHT_UPPER_HIST, upper_sim))
 
     upper_v_sim = _histogram_similarity(
         stats_a.avg_upper_v_hist, stats_b.avg_upper_v_hist,
     )
     if upper_v_sim is not None:
-        scores.append((_WEIGHT_UPPER_V_HIST, upper_v_sim))
+        scores.append(("upper_v_hist", _WEIGHT_UPPER_V_HIST, upper_v_sim))
 
     if stats_a.avg_skin_tone_hsv is not None and stats_b.avg_skin_tone_hsv is not None:
         skin_score = _hsv_similarity(
             stats_a.avg_skin_tone_hsv, stats_b.avg_skin_tone_hsv,
         )
-        scores.append((_WEIGHT_SKIN, skin_score))
+        scores.append(("skin", _WEIGHT_SKIN, skin_score))
 
     if (
         stats_a.avg_dominant_color_hsv is not None
@@ -989,18 +1052,28 @@ def compute_track_similarity(
         dc_score = _hsv_similarity(
             stats_a.avg_dominant_color_hsv, stats_b.avg_dominant_color_hsv,
         )
-        scores.append((_WEIGHT_DOMINANT_COLOR, dc_score))
+        scores.append(("dominant_color", _WEIGHT_DOMINANT_COLOR, dc_score))
 
     head_sim = _histogram_similarity(stats_a.avg_head_hist, stats_b.avg_head_hist)
     if head_sim is not None:
-        scores.append((_WEIGHT_HEAD_HIST, head_sim))
+        scores.append(("head_hist", _WEIGHT_HEAD_HIST, head_sim))
 
     if not scores:
+        if return_breakdown:
+            return 1.0, {}
         return 1.0
 
-    total_weight = sum(w for w, _ in scores)
-    similarity = sum(w * s for w, s in scores) / total_weight
+    total_weight = sum(w for _, w, _ in scores)
+    similarity = sum(w * s for _, w, s in scores) / total_weight
     hsv_cost = 1.0 - similarity
+
+    # Per-feature contribution to hsv_cost. Algebraic identity:
+    #   hsv_cost = sum(w * (1 - s)) / total_weight
+    # so the per-feature contribution is w * (1 - s) / total_weight, and the
+    # sum across features equals hsv_cost exactly.
+    hsv_contrib: dict[str, float] = {
+        key: float(w * (1.0 - s) / total_weight) for key, w, s in scores
+    }
 
     # Blend ReID cosine distance when both tracks have compatible embeddings
     if (
@@ -1010,7 +1083,14 @@ def compute_track_similarity(
         and stats_a.reid_embedding.shape == stats_b.reid_embedding.shape
     ):
         reid_cost = 1.0 - float(np.dot(stats_a.reid_embedding, stats_b.reid_embedding))
-        return reid_cost * reid_blend + hsv_cost * (1 - reid_blend)
+        cost = reid_cost * reid_blend + hsv_cost * (1 - reid_blend)
+        if return_breakdown:
+            scaled: dict[str, float] = {
+                k: v * (1.0 - reid_blend) for k, v in hsv_contrib.items()
+            }
+            scaled["reid"] = float(reid_cost * reid_blend)
+            return cost, scaled
+        return cost
 
     # Body-proportion blend (W2 infrastructure; dormant unless pose mode on).
     # body_proportions is None on the legacy extraction path so the if-block
@@ -1025,8 +1105,15 @@ def compute_track_similarity(
             alpha = _BODY_PROP_ALPHA_DEFAULT
         alpha = max(0.0, min(1.0, alpha))
         if alpha > 0.0:
-            return (1.0 - alpha) * hsv_cost + alpha * prop_cost
+            cost = (1.0 - alpha) * hsv_cost + alpha * prop_cost
+            if return_breakdown:
+                scaled = {k: v * (1.0 - alpha) for k, v in hsv_contrib.items()}
+                scaled["body_prop"] = float(alpha * prop_cost)
+                return cost, scaled
+            return cost
 
+    if return_breakdown:
+        return hsv_cost, hsv_contrib
     return hsv_cost
 
 

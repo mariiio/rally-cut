@@ -31,6 +31,7 @@ import cv2
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
+from rallycut.tracking import _profile_drift_probe as _probe
 from rallycut.tracking._subtrack import SubTrackCandidate
 from rallycut.tracking.ball_features import ServerDetectionResult, detect_server
 from rallycut.tracking.identity_anchor import (
@@ -40,6 +41,7 @@ from rallycut.tracking.identity_anchor import (
 from rallycut.tracking.player_features import (
     PlayerAppearanceProfile,
     TrackAppearanceStats,
+    _drop_profile_ema,
     compute_appearance_similarity,
     compute_track_similarity,
     extract_appearance_features,
@@ -2003,11 +2005,15 @@ class MatchPlayerTracker:
             for features in stats.features:
                 profile.update_from_features(features)
 
-            # Update ReID embedding (per-track average, not per-sample)
+            # Update ReID embedding (per-track average, not per-sample).
+            # The same EXPERIMENTAL_DROP_PROFILE_EMA gate applied in
+            # PlayerAppearanceProfile.update_from_features applies here:
+            # first-sample init runs; subsequent EMA updates skip when
+            # the flag is set so the embedding freezes to first-sample.
             if stats.reid_embedding is not None:
                 if profile.reid_embedding is None:
                     profile.reid_embedding = stats.reid_embedding.copy()
-                else:
+                elif not _drop_profile_ema():
                     alpha = profile._ema_weight(profile.reid_embedding_count)
                     profile.reid_embedding = (
                         profile.reid_embedding * (1 - alpha)
@@ -3421,6 +3427,20 @@ def match_players_across_rallies(
             f"Using reference profiles for players: "
             f"{sorted(reference_profiles.keys())}"
         )
+
+    # Profile-drift probe (Phase 1, Task 3 of post-7307c1d-revert refactor).
+    # No-op when MATCH_PLAYERS_PROBE is unset; otherwise writes a sidecar
+    # JSON to analysis/reports/profile_drift_probe/ at finalize time.
+    _probe.begin_probe(
+        video_id=rallies[0].video_id if rallies else "",
+        rally_ids=[r.rally_id for r in rallies],
+        extra={
+            "num_rallies": len(rallies),
+            "has_reference_profiles": bool(reference_profiles),
+            "extract_reid": bool(extract_reid),
+        },
+    )
+
     tracker = MatchPlayerTracker(
         calibrator=calibrator,
         collect_diagnostics=collect_diagnostics,
@@ -3569,7 +3589,19 @@ def match_players_across_rallies(
         tracker.state.initialize_players()
         for i, data in enumerate(tracker.stored_rally_data):
             if i < len(solved) and solved[i]:
-                tracker._update_profiles(data.track_stats, solved[i])
+                if _probe.is_enabled():
+                    before = _probe.checksum_profiles(tracker.state.players)
+                    tracker._update_profiles(data.track_stats, solved[i])
+                    after = _probe.checksum_profiles(tracker.state.players)
+                    _probe.record_update_profiles(
+                        rally_idx=i,
+                        track_to_player=solved[i],
+                        before=before,
+                        after=after,
+                        context="post_solve",
+                    )
+                else:
+                    tracker._update_profiles(data.track_stats, solved[i])
 
         results = tracker.refine_assignments(results, skip_stages_1_and_2=True)
 
@@ -3599,6 +3631,8 @@ def match_players_across_rallies(
         track_to_player_per_rally=track_to_player_per_rally,
         track_court_sides_per_rally=track_court_sides_per_rally,
     )
+
+    _probe.finalize_probe()
 
     return MatchPlayersResult(
         rally_results=results,

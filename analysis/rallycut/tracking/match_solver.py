@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from scipy.optimize import linear_sum_assignment
 
+from rallycut.tracking import _profile_drift_probe as _probe
 from rallycut.tracking.player_features import compute_track_similarity
 
 if TYPE_CHECKING:
@@ -152,6 +153,8 @@ class MatchSolver:
                     stored=stored_rally_data[i],
                     members_by_cluster=members_by_cluster,
                     all_rallies=stored_rally_data,
+                    iteration=iteration,
+                    prev_assignment=assignments[i],
                 )
                 if new_a != assignments[i]:
                     changes += 1
@@ -263,6 +266,9 @@ class MatchSolver:
         stored: StoredRallyData,
         members_by_cluster: dict[int, list[tuple[int, int]]],
         all_rallies: list[StoredRallyData],
+        *,
+        iteration: int = -1,
+        prev_assignment: dict[int, int] | None = None,
     ) -> dict[int, int]:
         """Hungarian-assign top_tracks to clusters with a team-pair guard.
 
@@ -318,10 +324,25 @@ class MatchSolver:
             and set(cluster_ids) == set(TEAM_LO_PAIR + TEAM_HI_PAIR)
             and all(t in high_conf for t in top)
         ):
-            return self._assign_with_team_pair(top, cluster_ids, cost, high_conf)
+            assignment = self._assign_with_team_pair(
+                top, cluster_ids, cost, high_conf,
+            )
+        else:
+            row_ind, col_ind = linear_sum_assignment(cost)
+            assignment = {
+                top[r]: cluster_ids[c] for r, c in zip(row_ind, col_ind)
+            }
 
-        row_ind, col_ind = linear_sum_assignment(cost)
-        return {top[r]: cluster_ids[c] for r, c in zip(row_ind, col_ind)}
+        _probe.record_solver_iteration(
+            iteration=iteration,
+            rally_idx=rally_idx,
+            top_tracks=top,
+            cluster_ids=cluster_ids,
+            cost_matrix=cost,
+            assignment=assignment,
+            prev_assignment=prev_assignment,
+        )
+        return assignment
 
     def _build_appearance_cost(
         self,
