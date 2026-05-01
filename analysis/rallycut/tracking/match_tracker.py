@@ -3240,6 +3240,20 @@ class MatchPlayersResult:
     # cascade through `_build_appearance_cost`. See
     # `ENABLE_ASSIGNMENT_ANCHORS` and `_stored_rally_data_hash`.
     track_stats_hashes: dict[str, str] = field(default_factory=dict)
+    # Cache-hit summary: number of rallies whose assignment was pinned
+    # from a prior anchor (vs re-solved by MatchSolver). Useful for
+    # surfacing in the CLI output and for monitoring cache health.
+    anchor_cache_hits: int = 0
+    anchor_cache_total: int = 0
+
+
+# Confidence threshold for persisting an `assignmentAnchor`. Below this,
+# the rally is allowed to re-solve every run (fresh attempt with new
+# cross-rally context) instead of locking in a low-confidence decision.
+# Lower than `MIN_PROFILE_UPDATE_CONFIDENCE = 0.80` because anchors only
+# affect THIS rally's decision (not downstream profiles), but high enough
+# to skip clearly-uncertain assignments. Tunable.
+ANCHOR_MIN_CONFIDENCE = 0.50
 
 
 def replay_refine_from_scratchpad(
@@ -3601,6 +3615,8 @@ def match_players_across_rallies(
     #     Hungarian + Pass-2 stages 1+2. ``refine_assignments`` runs
     #     Stage 0 (side-switch) + the canonical re-anchor only.
     track_stats_hashes: dict[str, str] = {}
+    cache_hit_count = 0
+    cache_total = 0
     if tracker.frozen_player_ids:
         results = tracker.refine_assignments(results)
     else:
@@ -3620,7 +3636,9 @@ def match_players_across_rallies(
         # cascade source confirmed by the Phase 1 falsification + DB-state
         # determinism probe).
         pinned_assignments: dict[int, dict[int, int]] = {}
-        anchors_enabled = os.environ.get("ENABLE_ASSIGNMENT_ANCHORS", "0") == "1"
+        # Default ON — anchor cache decouples each rally from cross-rally
+        # input drift. Set ENABLE_ASSIGNMENT_ANCHORS=0 to disable.
+        anchors_enabled = os.environ.get("ENABLE_ASSIGNMENT_ANCHORS", "1") != "0"
         if anchors_enabled and prior_match_analysis:
             prior_anchors_by_rid: dict[str, dict[str, Any]] = {}
             for entry in prior_match_analysis.get("rallies", []):
@@ -3657,6 +3675,9 @@ def match_players_across_rallies(
                     "AssignmentAnchor cache: %d/%d rallies pinned",
                     len(pinned_assignments), len(tracker.stored_rally_data),
                 )
+
+        cache_hit_count = len(pinned_assignments)
+        cache_total = len(tracker.stored_rally_data) if anchors_enabled else 0
 
         _probe.record_track_stats_input(tracker.stored_rally_data)
         solver = MatchSolver(reid_blend=REID_BLEND)
@@ -3755,6 +3776,8 @@ def match_players_across_rallies(
         diagnostics=tracker.diagnostics,
         scratchpad=scratchpad_to_dict(tracker),
         track_stats_hashes=track_stats_hashes,
+        anchor_cache_hits=cache_hit_count,
+        anchor_cache_total=cache_total,
     )
 
 

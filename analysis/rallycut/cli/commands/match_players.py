@@ -287,6 +287,19 @@ def match_players(
             "ref-crop run from the modal can pick it up unchanged."
         ),
     ),
+    reset_anchors: bool = typer.Option(
+        False,
+        "--reset-anchors",
+        help=(
+            "Strip every `assignmentAnchor` from match_analysis_json before "
+            "running, forcing MatchSolver to re-solve every rally from "
+            "scratch. Use after upstream pipeline changes (player-tracker "
+            "retune, court-calibration update) that don't change the "
+            "structural fingerprint but DO change semantic input. The cache "
+            "naturally invalidates on re-tracking; --reset-anchors covers "
+            "the cases that don't shift track IDs."
+        ),
+    ),
 ) -> None:
     """Match players across rallies for consistent player IDs (1-4).
 
@@ -605,10 +618,30 @@ def match_players(
     if enable_track_split and canonical_bgr_crops:
         crops_by_pid_for_classifier = canonical_bgr_crops
 
+    # --reset-anchors: strip prior assignmentAnchor entries before solving.
+    # Caller has explicitly invalidated the cache; the next solve will
+    # rebuild fresh anchors. We mutate a copy so the DB-stored prior
+    # state is untouched until the new match_analysis_json overwrites it.
+    prior_match_analysis_for_solver: dict[str, Any] | None = old_match_analysis
+    if reset_anchors and old_match_analysis:
+        from copy import deepcopy
+        scrubbed = deepcopy(old_match_analysis)
+        n_stripped = 0
+        for entry in scrubbed.get("rallies", []):
+            if entry.pop("assignmentAnchor", None) is not None:
+                n_stripped += 1
+        prior_match_analysis_for_solver = scrubbed
+        if not quiet:
+            console.print(
+                f"  [yellow]--reset-anchors:[/yellow] stripped {n_stripped} "
+                "assignmentAnchor entries; all rallies will re-solve."
+            )
+
     # Run matching. `prior_match_analysis` lets the blind path read
     # per-rally `assignmentAnchor` entries from the previous run and pin
     # those rallies' MatchSolver decisions when the pre-solve hash still
-    # matches (cascade fix; gated by ENABLE_ASSIGNMENT_ANCHORS=1).
+    # matches (cascade fix; default ON, set ENABLE_ASSIGNMENT_ANCHORS=0
+    # to disable).
     match_result: MatchPlayersResult = match_players_across_rallies(
         video_path=video_path,
         rallies=rallies,
@@ -618,9 +651,23 @@ def match_players(
         calibrator=court_calibrator,
         enable_track_split=enable_track_split,
         crops_by_pid_for_classifier=crops_by_pid_for_classifier,
-        prior_match_analysis=old_match_analysis,
+        prior_match_analysis=prior_match_analysis_for_solver,
     )
     results = match_result.rally_results
+
+    if not quiet and match_result.anchor_cache_total > 0:
+        hits = match_result.anchor_cache_hits
+        total = match_result.anchor_cache_total
+        if hits > 0:
+            console.print(
+                f"  [green]Anchor cache:[/green] {hits}/{total} rallies pinned "
+                "(skipped MatchSolver re-decision)"
+            )
+        else:
+            console.print(
+                f"  [dim]Anchor cache: 0/{total} pinned (no prior anchors "
+                "or hashes mismatch — fresh solve)[/dim]"
+            )
 
     # Print summary table
     if not quiet:
@@ -722,11 +769,14 @@ def match_players(
                 rally_entry["subTracks"] = sub_track_entries
         # Persist assignmentAnchor for blind-path solves so the next run
         # can pin this rally and skip MatchSolver re-decision when
-        # pre-solve state is unchanged. The hash is only populated for
-        # the blind branch — ref-crop runs leave it empty and no anchor
-        # is written.
+        # pre-solve state is unchanged. Confidence gate: rallies below
+        # ANCHOR_MIN_CONFIDENCE re-solve every run instead of locking in
+        # an uncertain assignment. Hash is only populated for the blind
+        # branch — ref-crop runs leave it empty and no anchor is written.
+        from rallycut.tracking.match_tracker import ANCHOR_MIN_CONFIDENCE
         ts_hash = match_result.track_stats_hashes.get(rally.rally_id)
-        if ts_hash and result.track_to_player:
+        confidence_ok = result.assignment_confidence >= ANCHOR_MIN_CONFIDENCE
+        if ts_hash and result.track_to_player and confidence_ok:
             rally_entry["assignmentAnchor"] = {
                 "trackStatsHash": ts_hash,
                 "assignment": {
@@ -734,6 +784,7 @@ def match_players(
                     for k, v in result.track_to_player.items()
                     if int(k) > 0  # exclude any synthetic sub-track ids
                 },
+                "confidence": float(result.assignment_confidence),
             }
         rally_entries.append(rally_entry)
 

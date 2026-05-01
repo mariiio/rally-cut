@@ -332,6 +332,23 @@ WASB HRNet is the sole ball tracker (96.9% keyframes-only match on 43 GT rallies
 
 Maintains consistent player IDs (1-4) across a match via appearance-based Hungarian assignment (2 passes). Features: upper/lower body color histograms, dominant clothing color, skin tone. Includes side switch detection and global within-team voting. See `tracking/match_tracker.py` and `tracking/player_features.py`.
 
+### Assignment-anchor cache (Phase 2, 2026-05-01)
+
+Per-rally `assignmentAnchor` on `match_analysis_json.rallies[]` decouples each rally's MatchSolver decision from cross-rally input drift. After a blind-path solve, each rally persists `{trackStatsHash, assignment, confidence}`. On the next run, when the rally's structural fingerprint (top_tracks, court_sides, positions) still matches its anchor, MatchSolver pins its prior assignment and skips re-decision — preventing the cascade where re-tracking ONE rally would shift every other rally's Hungarian via `_build_appearance_cost`.
+
+| Flag / constant | Default | Effect |
+|---|---|---|
+| `ENABLE_ASSIGNMENT_ANCHORS=0` | (default ON) | Disable the cache; every rally re-solves every run |
+| `match-players --reset-anchors` | off | Strip all prior anchors before solving (use after upstream pipeline retunes that don't change track IDs) |
+| `ANCHOR_MIN_CONFIDENCE=0.50` | code constant | Below this assignment_confidence, the rally's anchor is NOT written — low-confidence rallies re-solve every run instead of locking in an uncertain decision |
+
+Anchors are written on every blind-path run regardless of the read flag. The cache naturally invalidates when track IDs change (re-tracking with BoT-SORT). Tests: `tests/unit/test_match_solver_pinned.py`.
+
+### Diagnostic env flags
+
+- `MATCH_PLAYERS_PROBE=1` — write per-(iteration, rally) sidecar JSON to `analysis/reports/profile_drift_probe/` capturing MatchSolver iteration state + post-solve `_update_profiles` snapshots. Default OFF; used to falsify hypotheses about cross-rally cascade.
+- `EXPERIMENTAL_DROP_PROFILE_EMA=1` — freeze every per-field EMA in `PlayerAppearanceProfile.update_from_features()` after first sample. Documented falsification artifact (Phase 1 falsified that EMA is the cascade source); kept in code so future sessions don't re-attempt without reading `phase1_ema_cascade_FALSIFIED_2026_05_01.md`.
+
 ## Ground Truth Labeling
 
 Label Studio integration for tracking accuracy evaluation. See `labeling/studio_client.py`.
