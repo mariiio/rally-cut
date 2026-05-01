@@ -107,6 +107,48 @@ def checksum_profiles(
     return {str(pid): _checksum_profile(p) for pid, p in profiles.items()}
 
 
+def record_track_stats_input(
+    stored_rally_data: list[Any],
+) -> None:
+    """Capture per-rally track_stats checksums BEFORE MatchSolver runs.
+
+    Used to test whether two consecutive match-players invocations on the
+    same DB state produce identical track-level appearance features
+    (the input to MatchSolver). Drift here would explain cross-rally
+    cascades that don't come from MatchSolver internals.
+    """
+    if _state is None:
+        return
+    snapshot = []
+    for i, rally in enumerate(stored_rally_data):
+        per_track: dict[str, dict[str, Any]] = {}
+        for tid, stats in rally.track_stats.items():
+            per_track[str(int(tid))] = {
+                "lower_hist_l2": _l2(stats.avg_lower_hist),
+                "upper_hist_l2": _l2(stats.avg_upper_hist),
+                "head_hist_l2": _l2(stats.avg_head_hist),
+                "lower_v_hist_l2": _l2(stats.avg_lower_v_hist),
+                "upper_v_hist_l2": _l2(stats.avg_upper_v_hist),
+                "skin_tone_hsv": (
+                    list(stats.avg_skin_tone_hsv) if stats.avg_skin_tone_hsv else None
+                ),
+                "dominant_color_hsv": (
+                    list(stats.avg_dominant_color_hsv)
+                    if stats.avg_dominant_color_hsv else None
+                ),
+                "reid_norm": _l2(stats.reid_embedding),
+            }
+        snapshot.append({
+            "rally_idx": i,
+            "top_tracks": [int(t) for t in rally.top_tracks],
+            "track_court_sides": {
+                str(int(k)): int(v) for k, v in rally.track_court_sides.items()
+            },
+            "track_stats": per_track,
+        })
+    _state["track_stats_input"] = snapshot
+
+
 def record_solver_iteration(
     *,
     iteration: int,
@@ -179,6 +221,7 @@ def finalize_probe() -> Path | None:
         "finished_at": time.time(),
         ENV_DROP_EMA_FLAG: os.environ.get(ENV_DROP_EMA_FLAG, "0"),
         "extra": _state["extra"],
+        "track_stats_input": _state.get("track_stats_input", []),
         "iter_records": _state["iter_records"],
         "update_records": _state["update_records"],
     }

@@ -3548,6 +3548,7 @@ def match_players_across_rallies(
     else:
         from rallycut.tracking.match_solver import MatchSolver
 
+        _probe.record_track_stats_input(tracker.stored_rally_data)
         solver = MatchSolver(reid_blend=REID_BLEND)
         solved = solver.solve(tracker.stored_rally_data)
 
