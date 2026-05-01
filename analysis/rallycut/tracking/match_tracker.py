@@ -19,6 +19,8 @@ Architecture:
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 from collections import defaultdict
@@ -550,6 +552,53 @@ class StoredRallyData:
                 for tid, side in d.get("sides_by_bbox", {}).items()
             },
         )
+
+
+def _stored_rally_data_hash(data: StoredRallyData) -> str:
+    """SHA256 of the rally's pre-MatchSolver structural state.
+
+    Cache key for the per-rally `assignmentAnchor` mechanism
+    (`ENABLE_ASSIGNMENT_ANCHORS=1`). Captures the structural fingerprint of
+    the rally: which tracks are top tracks, their court-side classifications,
+    and their early/late positions (rounded to 4 decimals to absorb minor
+    float-arithmetic noise from per-frame feature extraction).
+
+    NOT hashed: appearance histograms / ReID embeddings. These are functions
+    of (positions × video frames × extractor) and have small numerical drift
+    on CPU floats. If positions and track IDs match between runs, appearance
+    features are reproducible — so the structural fingerprint is the correct
+    cache key for "did anything that would change MatchSolver's input
+    actually change?". Re-tracking with BoT-SORT changes track IDs (which IS
+    captured here); pure feature-extraction non-determinism is not.
+
+    Other rallies' state changes do NOT invalidate this hash — that
+    decoupling is exactly the cascade fix (Phase 2 of the post-7307c1d-revert
+    refactor).
+    """
+    def _round_pos(v: tuple[float, float]) -> list[float]:
+        return [round(float(v[0]), 4), round(float(v[1]), 4)]
+
+    payload = {
+        "top_tracks": sorted(int(t) for t in data.top_tracks),
+        "track_court_sides": {
+            str(int(k)): int(v) for k, v in sorted(data.track_court_sides.items())
+        },
+        "sides_by_bbox": {
+            str(int(k)): int(v) for k, v in sorted(data.sides_by_bbox.items())
+        },
+        "early_positions": {
+            str(int(k)): _round_pos(v)
+            for k, v in sorted(data.early_positions.items())
+        },
+        "late_positions": {
+            str(int(k)): _round_pos(v)
+            for k, v in sorted(data.late_positions.items())
+        },
+        "sides_from_calibration": bool(data.sides_from_calibration),
+    }
+    return hashlib.sha256(
+        json.dumps(payload, sort_keys=True, default=str).encode()
+    ).hexdigest()
 
 
 def _team_match_cost(
@@ -3184,6 +3233,13 @@ class MatchPlayersResult:
     # under new frozen profiles. Populated by match_players_across_rallies
     # after refine_assignments. See scratchpad_to_dict() for the shape.
     scratchpad: dict[str, Any] = field(default_factory=dict)
+    # Per-rally hash of MatchSolver pre-solve state. Populated only when
+    # the blind path runs (MatchSolver path). Consumed by the CLI to
+    # write `assignmentAnchor` into match_analysis_json so subsequent
+    # blind runs can pin per-rally assignments and avoid cross-rally
+    # cascade through `_build_appearance_cost`. See
+    # `ENABLE_ASSIGNMENT_ANCHORS` and `_stored_rally_data_hash`.
+    track_stats_hashes: dict[str, str] = field(default_factory=dict)
 
 
 def replay_refine_from_scratchpad(
@@ -3371,6 +3427,7 @@ def match_players_across_rallies(
     *,
     enable_track_split: bool = False,
     crops_by_pid_for_classifier: dict[int, list[np.ndarray]] | None = None,
+    prior_match_analysis: dict[str, Any] | None = None,
 ) -> MatchPlayersResult:
     """
     Match players across all rallies in a video for consistent IDs.
@@ -3543,14 +3600,70 @@ def match_players_across_rallies(
     #   - Blind path: a global ``MatchSolver`` replaces Pass-1 forward
     #     Hungarian + Pass-2 stages 1+2. ``refine_assignments`` runs
     #     Stage 0 (side-switch) + the canonical re-anchor only.
+    track_stats_hashes: dict[str, str] = {}
     if tracker.frozen_player_ids:
         results = tracker.refine_assignments(results)
     else:
         from rallycut.tracking.match_solver import MatchSolver
 
+        # Per-rally pre-MatchSolver state hashes — fed back to the CLI to
+        # write `assignmentAnchor` into match_analysis_json. Always
+        # populated on the blind path so the next run can use them.
+        for i, data in enumerate(tracker.stored_rally_data):
+            if i < len(rallies):
+                track_stats_hashes[rallies[i].rally_id] = _stored_rally_data_hash(data)
+
+        # Per-rally assignment-anchor cache (ENABLE_ASSIGNMENT_ANCHORS=1).
+        # When a rally's pre-MatchSolver hash matches its prior anchor's
+        # hash, we pin the prior assignment instead of re-solving — this
+        # decouples its decision from cross-rally input drift (the actual
+        # cascade source confirmed by the Phase 1 falsification + DB-state
+        # determinism probe).
+        pinned_assignments: dict[int, dict[int, int]] = {}
+        anchors_enabled = os.environ.get("ENABLE_ASSIGNMENT_ANCHORS", "0") == "1"
+        if anchors_enabled and prior_match_analysis:
+            prior_anchors_by_rid: dict[str, dict[str, Any]] = {}
+            for entry in prior_match_analysis.get("rallies", []):
+                rid = entry.get("rallyId") or entry.get("rally_id")
+                anchor = entry.get("assignmentAnchor")
+                if rid and isinstance(anchor, dict):
+                    prior_anchors_by_rid[rid] = anchor
+
+            for i, rally in enumerate(rallies):
+                if i >= len(tracker.stored_rally_data):
+                    break
+                anchor = prior_anchors_by_rid.get(rally.rally_id)
+                if not anchor:
+                    continue
+                if anchor.get("trackStatsHash") != track_stats_hashes.get(rally.rally_id):
+                    continue
+                raw_assignment = anchor.get("assignment") or {}
+                try:
+                    assignment = {
+                        int(k): int(v) for k, v in raw_assignment.items()
+                    }
+                except (TypeError, ValueError):
+                    continue
+                expected_tids = {
+                    int(t) for t in tracker.stored_rally_data[i].top_tracks
+                }
+                if set(assignment.keys()) != expected_tids:
+                    # Anchor's track ids don't fit current state — skip.
+                    continue
+                pinned_assignments[i] = assignment
+
+            if pinned_assignments:
+                logger.info(
+                    "AssignmentAnchor cache: %d/%d rallies pinned",
+                    len(pinned_assignments), len(tracker.stored_rally_data),
+                )
+
         _probe.record_track_stats_input(tracker.stored_rally_data)
         solver = MatchSolver(reid_blend=REID_BLEND)
-        solved = solver.solve(tracker.stored_rally_data)
+        solved = solver.solve(
+            tracker.stored_rally_data,
+            pinned_assignments=pinned_assignments or None,
+        )
 
         # Splice solver assignments into the per-rally results. server_player_id
         # is re-derived from the solver's track_to_player using the original
@@ -3641,6 +3754,7 @@ def match_players_across_rallies(
         team_templates=team_templates,
         diagnostics=tracker.diagnostics,
         scratchpad=scratchpad_to_dict(tracker),
+        track_stats_hashes=track_stats_hashes,
     )
 
 

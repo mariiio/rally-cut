@@ -605,7 +605,10 @@ def match_players(
     if enable_track_split and canonical_bgr_crops:
         crops_by_pid_for_classifier = canonical_bgr_crops
 
-    # Run matching
+    # Run matching. `prior_match_analysis` lets the blind path read
+    # per-rally `assignmentAnchor` entries from the previous run and pin
+    # those rallies' MatchSolver decisions when the pre-solve hash still
+    # matches (cascade fix; gated by ENABLE_ASSIGNMENT_ANCHORS=1).
     match_result: MatchPlayersResult = match_players_across_rallies(
         video_path=video_path,
         rallies=rallies,
@@ -615,6 +618,7 @@ def match_players(
         calibrator=court_calibrator,
         enable_track_split=enable_track_split,
         crops_by_pid_for_classifier=crops_by_pid_for_classifier,
+        prior_match_analysis=old_match_analysis,
     )
     results = match_result.rally_results
 
@@ -716,6 +720,21 @@ def match_players(
             ]
             if sub_track_entries:
                 rally_entry["subTracks"] = sub_track_entries
+        # Persist assignmentAnchor for blind-path solves so the next run
+        # can pin this rally and skip MatchSolver re-decision when
+        # pre-solve state is unchanged. The hash is only populated for
+        # the blind branch — ref-crop runs leave it empty and no anchor
+        # is written.
+        ts_hash = match_result.track_stats_hashes.get(rally.rally_id)
+        if ts_hash and result.track_to_player:
+            rally_entry["assignmentAnchor"] = {
+                "trackStatsHash": ts_hash,
+                "assignment": {
+                    str(int(k)): int(v)
+                    for k, v in result.track_to_player.items()
+                    if int(k) > 0  # exclude any synthetic sub-track ids
+                },
+            }
         rally_entries.append(rally_entry)
 
     # Serialize team templates

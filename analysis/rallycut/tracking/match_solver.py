@@ -112,35 +112,66 @@ class MatchSolver:
     def solve(
         self,
         stored_rally_data: list[StoredRallyData],
+        *,
+        pinned_assignments: dict[int, dict[int, int]] | None = None,
     ) -> list[dict[int, int]]:
         """Solve cross-rally identity.
 
         Returns: list of per-rally ``track_to_player`` mappings, one per
         input rally, in the same order. Empty dict for rallies with no
         ``top_tracks``.
+
+        ``pinned_assignments`` (rally_idx → {track_id: cluster_id}) lets a
+        caller anchor specific rallies' assignments. Pinned rallies skip
+        ``_assign_rally`` but still contribute their members to
+        ``members_by_cluster`` so other rallies' Hungarians see them as
+        cluster anchors. This decouples each rally's MatchSolver decision
+        from cross-rally input changes (e.g., re-tracking a different
+        rally) — the canonical fix for the per-rally cascade falsified
+        in Phase 1 (commit 3926cb5). Caller is responsible for validating
+        the anchor still fits the current rally state (track_ids match).
         """
         if not stored_rally_data:
             return []
 
         n_rallies = len(stored_rally_data)
+        pinned: dict[int, dict[int, int]] = (
+            {i: dict(a) for i, a in pinned_assignments.items()}
+            if pinned_assignments else {}
+        )
 
         # Per-rally track_id -> cluster_id (1..NUM_CLUSTERS).
         assignments: list[dict[int, int]] = [{} for _ in range(n_rallies)]
+        for idx, anchor in pinned.items():
+            if 0 <= idx < n_rallies:
+                assignments[idx] = dict(anchor)
 
-        # Seed: Y-sort the rally with the most top_tracks. Matches today's
-        # `_initialize_first_rally` convention so the canonical relabel
-        # downstream (Stage C) sees a layout it can permute.
-        seed_idx = self._select_seed_index(stored_rally_data)
-        assignments[seed_idx] = self._init_from_seed(stored_rally_data[seed_idx])
+        if not pinned:
+            # Seed: Y-sort the rally with the most top_tracks. Matches today's
+            # `_initialize_first_rally` convention so the canonical relabel
+            # downstream (Stage C) sees a layout it can permute. Skipped when
+            # any rally is pinned — pins provide ground-truth members for
+            # subsequent iterations.
+            seed_idx = self._select_seed_index(stored_rally_data)
+            assignments[seed_idx] = self._init_from_seed(stored_rally_data[seed_idx])
+            logger.info(
+                "MatchSolver seed: rally %d (%d top_tracks) → %s",
+                seed_idx,
+                len(stored_rally_data[seed_idx].top_tracks),
+                assignments[seed_idx],
+            )
+        else:
+            logger.info(
+                "MatchSolver pinned: %d/%d rallies anchored from prior solve",
+                len(pinned), n_rallies,
+            )
 
-        logger.info(
-            "MatchSolver seed: rally %d (%d top_tracks) → %s",
-            seed_idx,
-            len(stored_rally_data[seed_idx].top_tracks),
-            assignments[seed_idx],
-        )
+        # All rallies pinned → no iteration needed. Pure cache hit.
+        if len(pinned) == n_rallies:
+            return assignments
 
-        # Coordinate descent.
+        # Coordinate descent. Pinned rallies skip _assign_rally but their
+        # members still contribute to other rallies' cost matrices.
         converged_passes = 0
         for iteration in range(self.max_iterations):
             members_by_cluster = self._collect_members(assignments)
@@ -148,6 +179,9 @@ class MatchSolver:
             changes = 0
             new_assignments: list[dict[int, int]] = []
             for i in range(n_rallies):
+                if i in pinned:
+                    new_assignments.append(assignments[i])
+                    continue
                 new_a = self._assign_rally(
                     rally_idx=i,
                     stored=stored_rally_data[i],
