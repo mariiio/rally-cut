@@ -20,6 +20,7 @@ Idempotent. Safe to re-run. `--dry-run` shows what would change.
 
 Usage:
     uv run python scripts/repair_primary_track_ids.py <video_id> [--dry-run]
+    uv run python scripts/repair_primary_track_ids.py --all [--dry-run]
 """
 from __future__ import annotations
 
@@ -35,31 +36,53 @@ from rallycut.tracking.player_tracker import PlayerPosition
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("video_id")
+    ap.add_argument("video_id", nargs="?", default=None)
+    ap.add_argument("--all", action="store_true",
+                    help="Repair every video that has cached pre_remap_state_json")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+
+    if not args.video_id and not args.all:
+        sys.exit("specify <video_id> or --all")
 
     config = PlayerFilterConfig()
 
     with get_connection() as conn, conn.cursor() as cur:
-        cur.execute(
-            """
-            SELECT pt.rally_id, pt.frame_count, pt.primary_track_ids,
-                   pt.pre_remap_state_json
-            FROM player_tracks pt
-            JOIN rallies r ON pt.rally_id = r.id
-            WHERE r.video_id = %s AND pt.pre_remap_state_json IS NOT NULL
-            ORDER BY r.start_ms
-            """,
-            [args.video_id],
-        )
+        if args.all:
+            cur.execute(
+                """
+                SELECT pt.rally_id, pt.frame_count, pt.primary_track_ids,
+                       pt.pre_remap_state_json, r.video_id
+                FROM player_tracks pt
+                JOIN rallies r ON pt.rally_id = r.id
+                WHERE pt.pre_remap_state_json IS NOT NULL
+                ORDER BY r.video_id, r.start_ms
+                """,
+            )
+        else:
+            cur.execute(
+                """
+                SELECT pt.rally_id, pt.frame_count, pt.primary_track_ids,
+                       pt.pre_remap_state_json, r.video_id
+                FROM player_tracks pt
+                JOIN rallies r ON pt.rally_id = r.id
+                WHERE r.video_id = %s AND pt.pre_remap_state_json IS NOT NULL
+                ORDER BY r.start_ms
+                """,
+                [args.video_id],
+            )
         rows = cur.fetchall()
 
     if not rows:
-        sys.exit(f"no player_tracks rows with pre_remap_state_json for {args.video_id}")
+        sys.exit(
+            "no player_tracks rows with pre_remap_state_json"
+            + (f" for {args.video_id}" if args.video_id else "")
+        )
 
-    repairs: list[tuple[str, list[int] | None, list[int] | None, list[int]]] = []
-    for rally_id, frame_count, current_primary, snap in rows:
+    repairs: list[
+        tuple[str, str, list[int] | None, list[int] | None, list[int]]
+    ] = []
+    for rally_id, frame_count, current_primary, snap, video_id in rows:
         if isinstance(snap, str):
             snap = json.loads(snap)
         positions_data = (snap or {}).get("positions") or []
@@ -86,24 +109,49 @@ def main() -> None:
         cached = sorted(cached_primary) if cached_primary else None
         if fresh == cached:
             continue
-        repairs.append((str(rally_id), cached, list(current_primary or []), fresh))
+
+        # Only auto-repair the unambiguous corruption shapes:
+        #   - negative sentinel ids (BoT-SORT's "unmatched" placeholder)
+        #   - duplicate ids
+        #   - fewer than max_players valid ids when fresh has more
+        #
+        # When cached and fresh are BOTH 4 distinct positive ids that
+        # disagree, that's a filter-behavior diff, not a corruption —
+        # leave it alone. Manual review is the right path there.
+        cached_list = list(cached_primary) if cached_primary else []
+        cached_valid = [t for t in cached_list if isinstance(t, int) and t >= 0]
+        has_corruption = (
+            any(t < 0 for t in cached_list if isinstance(t, int))
+            or len(cached_list) != len(set(cached_list))
+            or len(cached_valid) < len(fresh)
+        )
+        if not has_corruption:
+            print(f"  skipping {str(video_id)[:8]}/{str(rally_id)[:8]}: "
+                  f"cached={cached} vs fresh={fresh} differs but neither "
+                  f"is corrupted — manual review needed")
+            continue
+        repairs.append(
+            (str(video_id), str(rally_id), cached,
+             list(current_primary or []), fresh)
+        )
 
     if not repairs:
-        print("All rallies already have current-filter primary_track_ids. "
-              "Nothing to repair.")
+        print("No corrupted primary_track_ids to repair.")
         return
 
-    print(f"Found {len(repairs)} rallies with stale primary_track_ids:\n")
-    for rid, cached, current, fresh in repairs:
-        print(f"  {rid[:8]}: cached(pre)={cached}  db(post-remap)={current}  "
-              f"→ fresh={fresh}")
+    affected_videos = sorted({r[0] for r in repairs})
+    print(f"Found {len(repairs)} stale rallies across "
+          f"{len(affected_videos)} video(s):\n")
+    for vid, rid, cached, current, fresh in repairs:
+        print(f"  {vid[:8]}/{rid[:8]}: cached(pre)={cached}  "
+              f"db(post-remap)={current}  → fresh={fresh}")
 
     if args.dry_run:
         print("\n[dry-run] no changes written.")
         return
 
     with get_connection() as conn, conn.cursor() as cur:
-        for rally_id, _, _, fresh in repairs:
+        for _, rally_id, _, _, fresh in repairs:
             # Re-load the snapshot, replace primaryTrackIds, write back.
             cur.execute(
                 "SELECT pre_remap_state_json FROM player_tracks WHERE rally_id = %s",
@@ -126,9 +174,12 @@ def main() -> None:
             )
         conn.commit()
 
-    print(f"\nRepaired {len(repairs)} rallies. "
-          f"Re-run `match-players` + `remap-track-ids` to propagate the "
-          f"fix into match_analysis_json and post-remap positions.")
+    print(f"\nRepaired {len(repairs)} rallies across "
+          f"{len(affected_videos)} video(s). For each affected video, "
+          f"re-run with --reset-anchors to propagate the fix:")
+    for vid in affected_videos:
+        print(f"  uv run rallycut match-players {vid} --reset-anchors")
+        print(f"  uv run rallycut remap-track-ids {vid}")
 
 
 if __name__ == "__main__":

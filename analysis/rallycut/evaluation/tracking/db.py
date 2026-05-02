@@ -521,6 +521,33 @@ def load_rallies_for_video(video_id: str) -> list[RallyTrackData]:
                 )
 
     logger.info(f"Loaded {len(results)} tracked rallies for video {video_id}")
+
+    # Defensive check: warn on stale primary_track_ids that contain
+    # negative sentinels or duplicates. Older tracking runs persisted
+    # BoT-SORT's `-1` (unmatched-detection placeholder) into the list,
+    # which causes the matcher to silently emit fewer than 4 PIDs.
+    # Today's filter excludes negatives, so this can only come from
+    # stale data. Point the user at the repair script.
+    stale = [
+        r.rally_id for r in results
+        if r.primary_track_ids and (
+            any(t < 0 for t in r.primary_track_ids)
+            or len(r.primary_track_ids) != len(set(r.primary_track_ids))
+        )
+    ]
+    if stale:
+        logger.warning(
+            "Detected stale primary_track_ids on %d rally/rallies: %s. "
+            "These contain BoT-SORT sentinel ids (-1) or duplicates and "
+            "will cause the matcher to drop PIDs. Run "
+            "`uv run python scripts/repair_primary_track_ids.py %s` "
+            "(or --all) and re-run match-players with --reset-anchors.",
+            len(stale),
+            ", ".join(rid[:8] for rid in stale[:5])
+            + (" …" if len(stale) > 5 else ""),
+            video_id,
+        )
+
     return results
 
 
