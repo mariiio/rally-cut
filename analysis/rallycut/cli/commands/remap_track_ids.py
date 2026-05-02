@@ -692,21 +692,16 @@ def remap_track_ids_cmd(
                 rally_count += n
 
         # Remap primaryTrackIds. Primary track ids have no per-frame
-        # context; if a primary track id is a split parent, the right
-        # behavior is to drop it (mark unlabeled) — its frames carry
-        # per-segment pids in positions. Documented limitation: the array
-        # may be sparser after a split.
+        # context; the array represents "which 4 players are primary in
+        # this rally" for editor display. For split parents, use the
+        # flat (parent-level) mapping rather than UNLABELED — the
+        # parent's frames carry per-segment overrides in positions, but
+        # the editor still needs all 4 primaries listed to render the
+        # full player overlay. The parent's flat-mapped pid (its
+        # MatchSolver assignment) is the natural representative.
         if primary_ids:
             old_ids = cast(list[int], primary_ids)
-            split_parents = {
-                ov["parent_track_id"] for ov in sub_track_overrides
-            }
-            new_ids: list[int] = []
-            for tid in old_ids:
-                if tid in split_parents:
-                    new_ids.append(UNLABELED_TRACK_ID)
-                else:
-                    new_ids.append(mapping.get(tid, tid))
+            new_ids = [mapping.get(tid, tid) for tid in old_ids]
             if new_ids != old_ids:
                 changes["primary_track_ids"] = json.dumps(new_ids)
                 rally_count += 1
