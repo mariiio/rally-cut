@@ -172,13 +172,45 @@ def main() -> None:
                 """,
                 [json.dumps(snap_dict), json.dumps(fresh), rally_id],
             )
+
+        # Strip the assignmentAnchor for each repaired rally from
+        # videos.match_analysis_json. Without this, the next match-players
+        # run would see the prior anchor (computed against the OLD broken
+        # primary_track_ids) and pin the bad assignment instead of
+        # re-solving on the freshly-corrected input. Without this step
+        # the user has to remember `--reset-anchors`; with it, the next
+        # run "just works."
+        affected_rids = {rid for _, rid, _, _, _ in repairs}
+        for vid in affected_videos:
+            cur.execute(
+                "SELECT match_analysis_json FROM videos WHERE id = %s", [vid],
+            )
+            row = cur.fetchone()
+            ma = row[0] if row else None
+            if isinstance(ma, str):
+                ma = json.loads(ma)
+            ma_dict = cast(dict[str, Any], ma or {})
+            stripped = 0
+            for entry in ma_dict.get("rallies", []):
+                rid = entry.get("rallyId") or entry.get("rally_id")
+                if rid in affected_rids and entry.pop("assignmentAnchor", None):
+                    stripped += 1
+            if stripped:
+                cur.execute(
+                    "UPDATE videos SET match_analysis_json = %s WHERE id = %s",
+                    [json.dumps(ma_dict), vid],
+                )
+                print(f"  Stripped {stripped} stale assignmentAnchor "
+                      f"entry/entries from videos {vid[:8]}.")
+
         conn.commit()
 
     print(f"\nRepaired {len(repairs)} rallies across "
-          f"{len(affected_videos)} video(s). For each affected video, "
-          f"re-run with --reset-anchors to propagate the fix:")
+          f"{len(affected_videos)} video(s). Affected anchors stripped, "
+          f"so the next match-players run will re-solve cleanly without "
+          f"--reset-anchors:")
     for vid in affected_videos:
-        print(f"  uv run rallycut match-players {vid} --reset-anchors")
+        print(f"  uv run rallycut match-players {vid}")
         print(f"  uv run rallycut remap-track-ids {vid}")
 
 

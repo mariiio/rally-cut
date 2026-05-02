@@ -3370,6 +3370,26 @@ class MatchPlayersResult:
 # to skip clearly-uncertain assignments. Tunable.
 ANCHOR_MIN_CONFIDENCE = 0.50
 
+# Matcher version stamp written into every persisted `assignmentAnchor`.
+# The anchor cache pins a prior rally's assignment when its
+# `trackStatsHash` matches today's input fingerprint — but trackStatsHash
+# captures only the INPUT to the matcher, not the matcher's logic itself.
+# Without a version stamp, any matcher fix (e.g. seed-init bug, cost-blend
+# tuning, side-classifier change) is silently bypassed for already-anchored
+# rallies, requiring `--reset-anchors` to manifest.
+#
+# Bump this any time MatchSolver, _init_from_seed, _build_appearance_cost,
+# _classify_track_sides, or any other code that affects the per-rally
+# assignment changes meaningfully. The next run will then invalidate stale
+# anchors automatically. The string is opaque — anything unique works.
+#
+# History:
+#   "v1" — initial (post commit `20042b7`).
+#   "v2" — 2026-05-02: bumped after `70ba038` (team-partitioned seed
+#          Y-sort + medoid ReID aggregation) and the matcher_version
+#          mechanism itself shipped. Old "v1" anchors invalidate on read.
+MATCHER_VERSION = "v2"
+
 
 def replay_refine_from_scratchpad(
     scratchpad: dict[str, Any],
@@ -3762,11 +3782,18 @@ def match_players_across_rallies(
                 if rid and isinstance(anchor, dict):
                     prior_anchors_by_rid[rid] = anchor
 
+            stale_version_count = 0
             for i, rally in enumerate(rallies):
                 if i >= len(tracker.stored_rally_data):
                     break
                 anchor = prior_anchors_by_rid.get(rally.rally_id)
                 if not anchor:
+                    continue
+                # Version-key check: anchors written by an older matcher
+                # are silently misleading after any matcher logic change.
+                # Drop them so the rally re-solves cleanly.
+                if anchor.get("matcherVersion") != MATCHER_VERSION:
+                    stale_version_count += 1
                     continue
                 if anchor.get("trackStatsHash") != track_stats_hashes.get(rally.rally_id):
                     continue
@@ -3789,6 +3816,13 @@ def match_players_across_rallies(
                 logger.info(
                     "AssignmentAnchor cache: %d/%d rallies pinned",
                     len(pinned_assignments), len(tracker.stored_rally_data),
+                )
+            if stale_version_count:
+                logger.info(
+                    "AssignmentAnchor cache: invalidated %d rally/rallies "
+                    "with stale matcherVersion (current=%s); they will "
+                    "re-solve from scratch.",
+                    stale_version_count, MATCHER_VERSION,
                 )
 
         cache_hit_count = len(pinned_assignments)

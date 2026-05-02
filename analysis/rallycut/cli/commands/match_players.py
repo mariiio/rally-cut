@@ -790,12 +790,15 @@ def match_players(
         # ANCHOR_MIN_CONFIDENCE re-solve every run instead of locking in
         # an uncertain assignment. Hash is only populated for the blind
         # branch — ref-crop runs leave it empty and no anchor is written.
-        from rallycut.tracking.match_tracker import ANCHOR_MIN_CONFIDENCE
+        from rallycut.tracking.match_tracker import (
+            ANCHOR_MIN_CONFIDENCE, MATCHER_VERSION,
+        )
         ts_hash = match_result.track_stats_hashes.get(rally.rally_id)
         confidence_ok = result.assignment_confidence >= ANCHOR_MIN_CONFIDENCE
         if ts_hash and result.track_to_player and confidence_ok:
             rally_entry["assignmentAnchor"] = {
                 "trackStatsHash": ts_hash,
+                "matcherVersion": MATCHER_VERSION,
                 "assignment": {
                     str(int(k)): int(v)
                     for k, v in result.track_to_player.items()
