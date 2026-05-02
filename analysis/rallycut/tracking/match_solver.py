@@ -18,6 +18,7 @@ change to ``StoredRallyData`` (per brief §5).
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -63,7 +64,11 @@ HARD_TEAM_PAIR_COST = 100.0
 # rally-10 — reverted. Higher weights help one fixture at the cost of
 # others, so within-team disambiguation needs an orthogonal signal
 # (per-frame rescue or pose), not a knob bump.
-POSITION_WEIGHT = 0.30
+#
+# Override via `MATCH_SOLVER_POSITION_WEIGHT` env var when diagnosing
+# fixtures where appearance discrimination is borderline (low-margin
+# Hungarian) and position cost is amplifying noise.
+POSITION_WEIGHT = float(os.environ.get("MATCH_SOLVER_POSITION_WEIGHT", "0.30"))
 
 # Normalization scale for the position distance term. Distances above
 # this value clamp to 1.0 so a single far-away track doesn't dominate

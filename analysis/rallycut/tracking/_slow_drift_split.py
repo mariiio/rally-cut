@@ -125,7 +125,7 @@ def _detect_slow_drift_pid(
             max_shift = shift
             drift_pid = pid
 
-    logger.warning(
+    logger.debug(
         "slow_drift_split scan: shift_max=%.3f drift_pid=%d (n_pids=%d)",
         max_shift, drift_pid, len(by_pid),
     )
@@ -149,13 +149,12 @@ def _detect_slow_drift_pid(
             if frac > max_overlap:
                 max_overlap = frac
 
-    logger.warning(
-        "slow_drift_split scan: shift=%.3f overlap=%.3f drift_pid=%d "
-        "(thresholds: %.2f / %.2f)",
-        max_shift, max_overlap, drift_pid,
-        HALF_SHIFT_THRESHOLD, XRANGE_OVERLAP_THRESHOLD,
-    )
     if max_overlap < XRANGE_OVERLAP_THRESHOLD:
+        logger.debug(
+            "slow_drift_split: skip — shift=%.3f overlap=%.3f below "
+            "XRANGE_OVERLAP_THRESHOLD=%.2f",
+            max_shift, max_overlap, XRANGE_OVERLAP_THRESHOLD,
+        )
         return None
 
     # Find parent_track_id for drift_pid.
@@ -296,7 +295,7 @@ def maybe_emit_slow_drift_split(
         key=lambda q: q.frame_number,
     )
     if len(sorted_pos) < 24:
-        logger.warning(
+        logger.debug(
             "slow_drift_split %s: PID%d on track %d has only %d positions; skip",
             rally_id[:8] if rally_id else "?", drift_pid, parent_tid, len(sorted_pos),
         )
@@ -310,7 +309,7 @@ def maybe_emit_slow_drift_split(
     h_first = _extract_half_region_hists(video_path, rally_start_ms, first_half)
     h_second = _extract_half_region_hists(video_path, rally_start_ms, second_half)
     if h_first is None or h_second is None:
-        logger.warning(
+        logger.info(
             "slow_drift_split %s: PID%d feature extraction failed; skip",
             rally_id[:8] if rally_id else "?", drift_pid,
         )
@@ -318,7 +317,7 @@ def maybe_emit_slow_drift_split(
 
     inter_half, best_region = _best_region_chi2(h_first, h_second)
     if inter_half < MIN_INTER_HALF_CHI2:
-        logger.warning(
+        logger.info(
             "slow_drift_split %s: PID%d halves indistinguishable "
             "(chi2=%.4f best_region=%s < %.2f); skip — sensing limit",
             rally_id[:8] if rally_id else "?", drift_pid, inter_half,
@@ -348,7 +347,7 @@ def maybe_emit_slow_drift_split(
             other_profiles[other_pid] = oh
 
     if not other_profiles:
-        logger.warning(
+        logger.debug(
             "slow_drift_split %s: PID%d no other-PID profiles; skip",
             rally_id[:8] if rally_id else "?", drift_pid,
         )
@@ -366,7 +365,7 @@ def maybe_emit_slow_drift_split(
     best_other_pid = min(distances, key=distances.__getitem__)
     best_other_dist = distances[best_other_pid]
     if best_other_dist >= inter_half:
-        logger.warning(
+        logger.info(
             "slow_drift_split %s: PID%d second-half best other-PID dist (%.4f, "
             "PID%d, region=%s) >= inter-half (%.4f); skip — no clear "
             "re-assignment target",
@@ -375,7 +374,7 @@ def maybe_emit_slow_drift_split(
         )
         return None
 
-    logger.warning(
+    logger.info(
         "slow_drift_split %s: PID%d (track %d) bisect at frame %d → "
         "second-half re-assigned to PID%d "
         "(region=%s inter-half=%.3f target=%.3f shift=%.3f)",
@@ -394,7 +393,7 @@ def maybe_emit_slow_drift_split(
             other_track_id = tid
             break
     if other_track_id < 0:
-        logger.warning(
+        logger.info(
             "slow_drift_split %s: target PID%d has no track in mapping; skip",
             rally_id[:8] if rally_id else "?", best_other_pid,
         )

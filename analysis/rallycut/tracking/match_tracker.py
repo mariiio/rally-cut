@@ -99,7 +99,10 @@ MIN_PROFILE_UPDATE_CONFIDENCE = 0.80
 # When ReID embeddings are available on both profile and track:
 #   blended = reid_cost * REID_BLEND + hsv_cost * (1 - REID_BLEND)
 # When unavailable or below confidence gate, falls back to HSV-only.
-REID_BLEND = 0.50
+# Override via `MATCH_SOLVER_REID_BLEND` env var to favor ReID more
+# heavily on fixtures where HSV is noisy (e.g., uniform-similar players,
+# heavy sand background).
+REID_BLEND = float(os.environ.get("MATCH_SOLVER_REID_BLEND", "0.50"))
 
 # Minimum margin (second_best - best ReID cost) to trust the ReID signal
 # for a given track. When the margin is small, all players look similar
@@ -3045,12 +3048,81 @@ def extract_rally_appearances(
     if not track_positions:
         return {}
 
-    # For each track, pick evenly-spaced sample frames
-    # Collect all (frame_number, track_id, position) tuples to read
+    # Quality filter: drop bad-frame samples before they pollute the
+    # per-track aggregated histograms. Without this, the average HSV
+    # signal is contaminated by occluded / cropped / partial-player
+    # frames (visual feedback 2026-05-02 on 5c756c41), making per-track
+    # features non-discriminative across rallies even when players are
+    # visually distinct. We filter on:
+    #   1. Aspect ratio: full-body player bboxes are tall (h/w >= 1.4).
+    #      Squashed bboxes (zoomed arm, mid-jump w/ legs out) are noise.
+    #   2. Detection confidence (>= 0.5).
+    #   3. Occlusion: max IoU with ANY OTHER primary track's bbox at the
+    #      same frame (>= 0.3 = significant overlap → player obscured).
+    # If fewer than 4 clean positions remain after filtering, fall back
+    # to ANY positions (better some signal than none).
+    bbox_min_aspect_ratio = 1.4
+    bbox_min_confidence = 0.5
+    bbox_max_occlusion_iou = 0.3
+
+    # Build a per-frame index of all primary-track bboxes for IoU lookup.
+    primary_by_frame: dict[int, list[tuple[int, PlayerPosition]]] = {}
+    for p in positions:
+        if p.track_id in primary_set:
+            primary_by_frame.setdefault(p.frame_number, []).append((p.track_id, p))
+
+    def _bbox_iou(a: PlayerPosition, b: PlayerPosition) -> float:
+        ax1, ay1 = a.x - a.width / 2, a.y - a.height / 2
+        ax2, ay2 = a.x + a.width / 2, a.y + a.height / 2
+        bx1, by1 = b.x - b.width / 2, b.y - b.height / 2
+        bx2, by2 = b.x + b.width / 2, b.y + b.height / 2
+        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+        iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+        inter = iw * ih
+        if inter <= 0:
+            return 0.0
+        area_a = (ax2 - ax1) * (ay2 - ay1)
+        area_b = (bx2 - bx1) * (by2 - by1)
+        union = area_a + area_b - inter
+        return float(inter / union) if union > 0 else 0.0
+
+    def _is_clean(tid: int, p: PlayerPosition) -> bool:
+        # Aspect ratio
+        if p.width <= 0 or p.height <= 0:
+            return False
+        if (p.height / p.width) < bbox_min_aspect_ratio:
+            return False
+        # Confidence
+        if (p.confidence or 0.0) < bbox_min_confidence:
+            return False
+        # Occlusion: IoU with any OTHER primary track at this frame
+        other_in_frame = primary_by_frame.get(p.frame_number, [])
+        for other_tid, other_p in other_in_frame:
+            if other_tid == tid:
+                continue
+            if _bbox_iou(p, other_p) >= bbox_max_occlusion_iou:
+                return False
+        return True
+
+    # For each track, pick evenly-spaced sample frames from the CLEAN subset.
     frame_requests: dict[int, list[tuple[int, PlayerPosition]]] = {}
     for tid, pos_list in track_positions.items():
         pos_list.sort(key=lambda p: p.frame_number)
-        n = len(pos_list)
+        clean_pos = [p for p in pos_list if _is_clean(tid, p)]
+        if len(clean_pos) >= 4:
+            source = clean_pos
+        else:
+            # Too few clean frames — fall back to all positions so the
+            # track still contributes some signal.
+            logger.debug(
+                "extract_rally_appearances: track %d has only %d/%d clean "
+                "frames; falling back to all positions",
+                tid, len(clean_pos), len(pos_list),
+            )
+            source = pos_list
+
+        n = len(source)
         if n <= num_samples:
             sample_indices = list(range(n))
         else:
@@ -3059,7 +3131,7 @@ def extract_rally_appearances(
             ]
 
         for idx in sample_indices:
-            p = pos_list[idx]
+            p = source[idx]
             fn = p.frame_number
             if fn not in frame_requests:
                 frame_requests[fn] = []
@@ -3753,7 +3825,7 @@ def match_players_across_rallies(
         # Default OFF.
         from rallycut.tracking import _slow_drift_split as _sds
         if _sds.is_enabled():
-            logger.warning(
+            logger.info(
                 "slow_drift_split: scanning %d rallies (ENABLE_SLOW_DRIFT_SPLIT=1)",
                 len(rallies),
             )
