@@ -1824,6 +1824,38 @@ def identify_primary_tracks(
     return result
 
 
+def validate_primary_track_ids(
+    primary_track_ids: list[int] | set[int], *, context: str = "",
+) -> list[int]:
+    """Enforce the persistence invariant for primary_track_ids.
+
+    Contract: a clean primary_track_ids list contains 0..max_players
+    DISTINCT NON-NEGATIVE integers. BoT-SORT's `-1` sentinel
+    (unmatched detection) and duplicates must never reach the DB —
+    they cause the cross-rally matcher to silently emit fewer than
+    4 PIDs (see commit 0296a7f / scripts/repair_primary_track_ids.py).
+
+    Raises ValueError on violation. Callers must validate at the
+    boundary between in-memory filter state and DB persist; the
+    read path (load_rallies_for_video) auto-cleans defensively for
+    historical data, but newly-tracked rallies must be clean by
+    construction.
+    """
+    ids = list(primary_track_ids)
+    bad_negatives = [t for t in ids if t < 0]
+    duplicates = [t for t in ids if ids.count(t) > 1]
+    if bad_negatives or duplicates:
+        ctx = f" ({context})" if context else ""
+        raise ValueError(
+            f"primary_track_ids invariant violated{ctx}: "
+            f"got {ids}; "
+            f"negatives={sorted(set(bad_negatives))}, "
+            f"duplicates={sorted(set(duplicates))}. "
+            "Must be distinct non-negative ints."
+        )
+    return ids
+
+
 def select_with_track_priority(
     players: list[PlayerPosition],
     k: int,

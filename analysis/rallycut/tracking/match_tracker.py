@@ -442,6 +442,10 @@ class RallyTrackData:
     start_ms: int
     end_ms: int
     positions: list[PlayerPosition]
+    # Invariant: 0..PlayerFilterConfig.max_players DISTINCT NON-NEGATIVE ints.
+    # Validated at write by `validate_primary_track_ids` in player_filter;
+    # auto-cleaned at read by `load_rallies_for_video` for legacy DB rows.
+    # See scripts/repair_primary_track_ids.py for the migration tool.
     primary_track_ids: list[int]
     court_split_y: float | None
     ball_positions: list[BallPosition]

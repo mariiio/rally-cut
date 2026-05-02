@@ -1687,6 +1687,15 @@ class PlayerTracker:
                         f"primary tracks now {primary_track_ids}"
                     )
 
+            # Persistence invariant: distinct non-negative ints. Catches
+            # filter / recover_missing_players regressions before they
+            # corrupt player_tracks rows. See validate_primary_track_ids
+            # docstring for the failure mode this prevents.
+            from rallycut.tracking.player_filter import validate_primary_track_ids
+            validate_primary_track_ids(
+                primary_track_ids, context="player_tracker.track",
+            )
+
             # Step 3: Group positions by frame
             frames: dict[int, list[PlayerPosition]] = {}
             for p in positions:
