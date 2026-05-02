@@ -7,22 +7,23 @@ look up that track's assigned PID in `match_analysis_json`.
 
 REPORTS TWO METRICS:
 
-1. **Direct accuracy**: matcher_pid == gt_pid as-is. Measures both
-   "matcher tracks identity correctly" AND "matcher's canonical PID
-   numbering matches the user's GT labeling convention."
+1. **PERMUTED accuracy** (load-bearing): matcher_pid mapped through
+   the optimal global permutation matcher_pid → gt_pid (Hungarian
+   over the confusion matrix), then compared. Measures whether the
+   matcher tracks identity correctly INDEPENDENT of canonical PID
+   numbering. **This is the quality metric** — the user's GT
+   labeling rule (confirmed 2026-05-02) is "same players same IDs
+   across rallies, no specific convention beyond that," so canonical
+   label disagreement isn't a quality issue.
 
-2. **Permuted accuracy**: matcher_pid mapped through the optimal
-   global permutation matcher_pid → gt_pid (Hungarian over the
-   confusion matrix), then compared. Isolates "matcher tracks identity
-   correctly" from canonical-numbering choices. A high permuted
-   accuracy with low direct accuracy means the matcher works fine but
-   its canonical convention disagrees with how GT crops were labeled
-   on this video — a labeling-convention issue, not a matcher bug.
+2. **Direct accuracy** (diagnostic only): matcher_pid == gt_pid as-is.
+   Useful only as a sanity-check to detect bug-introducing changes:
+   if a code change unintentionally flips canonical labels on a video
+   without affecting identity tracking, DIRECT will show a sudden
+   gap from PERMUTED. Otherwise ignore — direct vs permuted gap is
+   not a defect.
 
-The two metrics together let you tell apart:
-- Real matcher regressions (permuted accuracy drops)
-- Canonical-convention mismatches (direct drops, permuted holds)
-- A mix (both move)
+A code change is good iff PERMUTED holds or improves.
 
 Usage:
     uv run python scripts/measure_pid_accuracy.py <video_id>
@@ -225,23 +226,20 @@ def main() -> None:
     print(f"OVERALL: {permuted_correct}/{total} = {permuted_pct:.1f}%")
 
     print("\n=== INTERPRETATION ===")
+    print(f"• QUALITY METRIC: permuted accuracy = {permuted_pct:.1f}% "
+          f"({permuted_correct}/{total}). User's labeling rule "
+          "(2026-05-02) is internal consistency only, no canonical "
+          "convention — so canonical label disagreement is NOT a "
+          "defect. PERMUTED is the number that should hold or "
+          "improve across changes.")
     if is_identity:
-        print("• Optimal permutation is identity — matcher's canonical "
-              "convention agrees with GT labeling on this video.")
-        print(f"• Residual error ({total - direct_correct}/{total}) is "
-              "real identity-tracking error.")
+        print("• Direct == permuted (identity permutation). Matcher's "
+              "blind-mode convention happens to align with GT labels "
+              "on this video; nothing to read into it.")
     else:
-        print(f"• Permuted accuracy = {permuted_pct:.1f}% measures the "
-              "matcher's identity-tracking quality WITHOUT canonical "
-              "labeling penalty.")
-        print(f"• Direct = {direct_pct:.1f}%; canonicalization gap "
-              f"({canonical_gap:+.1f}pp) is the cost of the matcher's "
-              "convention disagreeing with GT labeling on this video.")
-        if permuted_pct >= 95.0 and direct_pct < 70.0:
-            print("• Strong signal: matcher is doing its job — every "
-                  "real identity-tracking error has been absorbed; the "
-                  "remaining error IS the canonical-convention "
-                  "mismatch, not a matcher bug.")
+        print(f"• Direct = {direct_pct:.1f}% differs from permuted by "
+              f"{canonical_gap:+.1f}pp. Canonical labels disagree on "
+              f"this video; not a defect — see permuted.")
     if permuted_mismatches:
         print(f"\nResidual mismatches AFTER permutation "
               f"({len(permuted_mismatches)} of {total} samples) — these "
