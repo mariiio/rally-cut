@@ -554,18 +554,35 @@ def match_players(
                 console.print(f"  Reference profile P{pid}: {n} crop(s){reid_str}")
             console.print()
 
-    # Load general ReID model if no reference profiles (priority cascade)
-    general_reid_model = None
+    # Load ReID model if no reference profiles (priority cascade).
+    # Backbone selection via RALLYCUT_REID_BACKBONE:
+    #   - "osnet" (default): GeneralReIDModel (OSNet-x1.0 fine-tuned)
+    #   - "dinov2_vits14" / "dinov2_vitl14": DinoV2ReIDModel (frozen)
+    # DINOv2 path doesn't require disk weights — torch.hub fetches.
+    general_reid_model: Any = None
     if reference_profiles is None:
-        from rallycut.tracking.reid_general import WEIGHTS_PATH as REID_WEIGHTS_PATH
+        from rallycut.tracking.reid_dinov2 import (
+            DinoV2ReIDModel,
+            get_backbone_choice,
+            is_dinov2_selected,
+        )
 
-        if REID_WEIGHTS_PATH.exists():
-            from rallycut.tracking.reid_general import GeneralReIDModel
-
-            general_reid_model = GeneralReIDModel(weights_path=REID_WEIGHTS_PATH)
+        backbone = get_backbone_choice()
+        if is_dinov2_selected():
+            general_reid_model = DinoV2ReIDModel(backbone=backbone)
             if not quiet:
-                console.print("  Using general ReID model")
+                console.print(f"  Using ReID backbone: {backbone}")
                 console.print()
+        else:
+            from rallycut.tracking.reid_general import WEIGHTS_PATH as REID_WEIGHTS_PATH
+
+            if REID_WEIGHTS_PATH.exists():
+                from rallycut.tracking.reid_general import GeneralReIDModel
+
+                general_reid_model = GeneralReIDModel(weights_path=REID_WEIGHTS_PATH)
+                if not quiet:
+                    console.print("  Using general ReID model")
+                    console.print()
 
     # Load existing profiles as frozen anchors for single-rally retrack.
     # Uses established profiles from previous full match-players run instead

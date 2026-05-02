@@ -59,7 +59,10 @@ if TYPE_CHECKING:
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.crop_guided_identity import IdentityAnchors
     from rallycut.tracking.player_tracker import PlayerPosition
+    from rallycut.tracking.reid_dinov2 import DinoV2ReIDModel
     from rallycut.tracking.reid_general import GeneralReIDModel
+
+    ReIDModel = GeneralReIDModel | DinoV2ReIDModel
 
 logger = logging.getLogger(__name__)
 
@@ -602,6 +605,50 @@ def _stored_rally_data_hash(data: StoredRallyData) -> str:
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, default=str).encode()
     ).hexdigest()
+
+
+def _aggregate_reid_embeddings(embeddings: np.ndarray) -> np.ndarray | None:
+    """Aggregate per-frame ReID embeddings into one per-track embedding.
+
+    Default: MEDOID — the embedding most similar (highest mean cosine
+    similarity) to all other frames. Robust to outlier frames (back-
+    facing, occluded, motion-blurred) that would pull a mean away from
+    the player's true identity centroid.
+
+    The discrimination probe on 5c756c41 (2026-05-02) showed fine-tuned
+    OSNet has near-zero off-diagonal similarity (0.05 mean) on
+    single-frame embeddings — the model is working. The bug was at this
+    aggregation site: `mean(axis=0)` over 12 frames collapsed
+    discrimination because some sampled frames were noisy poses. Medoid
+    naturally rejects those.
+
+    Override via `RALLYCUT_REID_AGGREGATION` env var:
+      - "medoid" (default): outlier-robust single-frame representative.
+      - "mean": legacy behavior (backward compat).
+    """
+    if embeddings is None or embeddings.size == 0:
+        return None
+    if embeddings.shape[0] == 1:
+        return np.asarray(embeddings[0], dtype=np.float32)
+
+    mode = os.environ.get("RALLYCUT_REID_AGGREGATION", "medoid").lower()
+    if mode == "mean":
+        agg = embeddings.mean(axis=0)
+        norm = float(np.linalg.norm(agg))
+        if norm > 0:
+            agg = agg / norm
+        return np.asarray(agg, dtype=np.float32)
+
+    # Medoid: pick the embedding with highest mean cosine similarity to
+    # the rest. Embeddings come in already L2-normalized, so cosine
+    # similarity is just the dot product.
+    sim = embeddings @ embeddings.T  # (N, N)
+    # Exclude self-similarity by zeroing the diagonal before the mean.
+    n = sim.shape[0]
+    mask = 1.0 - np.eye(n, dtype=sim.dtype)
+    mean_sim = (sim * mask).sum(axis=1) / max(1, n - 1)
+    medoid_idx = int(np.argmax(mean_sim))
+    return np.asarray(embeddings[medoid_idx], dtype=np.float32)
 
 
 def _team_match_cost(
@@ -3263,11 +3310,7 @@ def extract_rally_appearances(
                     if not crops or tid not in stats:
                         continue
                     embeddings = reid_model.extract_embeddings(crops)
-                    mean_emb = embeddings.mean(axis=0)
-                    norm = np.linalg.norm(mean_emb)
-                    if norm > 0:
-                        mean_emb /= norm
-                    stats[tid].reid_embedding = mean_emb
+                    stats[tid].reid_embedding = _aggregate_reid_embeddings(embeddings)
             else:
                 # Per-video: raw DINOv2 backbone features (384-dim)
                 from rallycut.tracking.reid_embeddings import extract_backbone_features
@@ -3276,11 +3319,7 @@ def extract_rally_appearances(
                     if not crops or tid not in stats:
                         continue
                     embeddings = extract_backbone_features(crops)
-                    mean_emb = embeddings.mean(axis=0)
-                    norm = np.linalg.norm(mean_emb)
-                    if norm > 0:
-                        mean_emb /= norm
-                    stats[tid].reid_embedding = mean_emb
+                    stats[tid].reid_embedding = _aggregate_reid_embeddings(embeddings)
         except Exception:
             logger.warning(
                 "ReID embedding extraction failed, falling back to HSV-only",

@@ -261,30 +261,59 @@ class MatchSolver:
         self,
         rally: StoredRallyData,
     ) -> dict[int, int]:
-        """Y-sort the seed rally's REAL top_tracks into cluster ids 1..N.
+        """Y-sort the seed rally's REAL top_tracks into cluster ids 1..N
+        respecting the canonical {team_near → 1, 2} {team_far → 3, 4}
+        partition.
+
+        Without the team-partition step (the prior bug), a simple
+        whole-court Y-sort could place near-court and far-court players
+        in interleaved cluster ids when their bbox y-coordinates
+        overlapped. The Pass-2 re-anchoring permutation
+        (`_within_team_permutation_from_seed` in match_tracker.py) only
+        swaps WITHIN team, so a cross-team mis-partition at the seed
+        was never recoverable downstream — the entire match would be
+        labeled with PIDs 1↔3, 2↔4 swapped (verified 2026-05-02 against
+        `videos.player_matching_gt_json` ground truth on 5c756c41:
+        matcher 10% accuracy collapsing to a deterministic global
+        cross-team swap).
 
         Synthetic sub-track ids in the seed rally (negative) are skipped
         so the seed pid layout matches the baseline (no-split) convention
         verbatim. Synth ids in the seed get assigned by the iterative
         Hungarian in subsequent passes once cluster members are populated.
 
-        Falls back to track_id order when ``early_positions`` is missing.
-        Cluster ids start at 1 to match the existing player_id convention
-        used downstream (Stage C, ``_apply_within_team_permutation``).
+        Falls back to whole-court Y-sort when court sides are not
+        classified.
         """
         real_tracks = [t for t in rally.top_tracks if t >= 0]
         if not real_tracks:
             return {}
 
-        if rally.early_positions:
+        if not rally.early_positions:
+            # No positions → fall back to track_id order.
+            return {tid: i + 1 for i, tid in enumerate(sorted(real_tracks))}
+
+        sides = rally.track_court_sides or {}
+        near = [t for t in real_tracks if sides.get(t) == 0]
+        far = [t for t in real_tracks if sides.get(t) == 1]
+        unclassified = [t for t in real_tracks if t not in near and t not in far]
+
+        # If side classification is degenerate (not exactly 2 per side),
+        # fall through to whole-court Y-sort.
+        if len(near) != 2 or len(far) != 2 or unclassified:
             sorted_tracks = sorted(
                 real_tracks,
                 key=lambda t: rally.early_positions.get(t, (0.0, 0.0))[1],
             )
-        else:
-            sorted_tracks = sorted(real_tracks)
+            return {tid: i + 1 for i, tid in enumerate(sorted_tracks)}
 
-        return {tid: i + 1 for i, tid in enumerate(sorted_tracks)}
+        # Y-sort within each team. Lower y = first cluster of the team.
+        near_sorted = sorted(near, key=lambda t: rally.early_positions[t][1])
+        far_sorted = sorted(far, key=lambda t: rally.early_positions[t][1])
+        return {
+            near_sorted[0]: 1, near_sorted[1]: 2,
+            far_sorted[0]: 3, far_sorted[1]: 4,
+        }
 
     def _collect_members(
         self,
