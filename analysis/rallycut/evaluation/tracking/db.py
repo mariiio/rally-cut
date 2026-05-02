@@ -435,8 +435,7 @@ def load_rallies_for_video(video_id: str) -> list[RallyTrackData]:
             pt.primary_track_ids,
             pt.court_split_y,
             pt.ball_positions_json,
-            pt.actions_json,
-            r.gt_side_switch
+            pt.actions_json
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         WHERE r.video_id = %s
@@ -462,7 +461,6 @@ def load_rallies_for_video(video_id: str) -> list[RallyTrackData]:
                     court_split_y,
                     ball_positions_json,
                     actions_json,
-                    gt_side_switch,
                 ) = row
 
                 # Parse positions
@@ -519,7 +517,6 @@ def load_rallies_for_video(video_id: str) -> list[RallyTrackData]:
                         court_split_y=cast(float | None, court_split_y),
                         ball_positions=ball_positions,
                         team_assignments=team_assignments,
-                        gt_side_switch=cast(bool | None, gt_side_switch),
                     )
                 )
 

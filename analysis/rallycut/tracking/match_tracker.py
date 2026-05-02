@@ -446,14 +446,6 @@ class RallyTrackData:
     court_split_y: float | None
     ball_positions: list[BallPosition]
     team_assignments: dict[int, int] | None = None  # track_id -> team (0=near, 1=far)
-    # Score-GT side-switch label: True if THIS rally is the boundary at
-    # which players exchanged sides (e.g. rally i means "from i onward,
-    # near/far are flipped relative to i-1"). None when unlabeled.
-    # When any rally in the match carries a non-None value, the matcher
-    # uses these labels as ground truth and skips the combinatorial
-    # detector — the detector can be off-by-one when serve direction is
-    # ambiguous, and labeled GT is authoritative.
-    gt_side_switch: bool | None = None
 
 
 def _compute_track_positions(
@@ -516,11 +508,6 @@ class StoredRallyData:
     # persisted by ``to_dict`` — solver runs in-memory only on the blind
     # path; relabel-with-crops replay never sees this field.
     late_positions: dict[int, tuple[float, float]] = field(default_factory=dict)
-    # Score-GT side-switch label for this rally. None when unlabeled. When
-    # any rally in the match has a non-None value, refine_assignments
-    # builds the switch list from these labels instead of running the
-    # combinatorial detector.
-    gt_side_switch: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the replay-relevant subset to a JSON-compatible dict.
@@ -805,7 +792,6 @@ class MatchPlayerTracker:
         team_assignments: dict[int, int] | None = None,
         start_ms: int = 0,
         end_ms: int = 0,
-        gt_side_switch: bool | None = None,
     ) -> RallyTrackingResult:
         """
         Process a single rally and assign consistent player IDs.
@@ -1080,7 +1066,6 @@ class MatchPlayerTracker:
             sides_from_calibration=self._sides_from_calibration,
             sides_by_bbox=sides_by_bbox,
             late_positions=late_positions,
-            gt_side_switch=gt_side_switch,
         ))
 
         return RallyTrackingResult(
@@ -2701,26 +2686,8 @@ class MatchPlayerTracker:
         if len(initial_results) <= 1:
             return initial_results
 
-        # Stage 0: Decide side switches.
-        # Prefer score-GT labels when present (any rally with a non-None
-        # gt_side_switch in this match): the combinatorial detector can be
-        # off-by-one when serve direction is ambiguous, and labeled GT is
-        # authoritative. Treat unlabeled (None) rallies as False —
-        # score-GT covers every rally for labeled videos.
-        gt_present = any(
-            d.gt_side_switch is not None for d in self.stored_rally_data
-        )
-        if gt_present:
-            switches = [
-                i for i, d in enumerate(self.stored_rally_data)
-                if d.gt_side_switch is True and i > 0
-            ]
-            logger.info(
-                "Side-switch source: score-GT labels (switches at %s)",
-                switches,
-            )
-        else:
-            switches = self._detect_side_switches_combinatorial()
+        # Stage 0: Detect side switches and update stored side assignments
+        switches = self._detect_side_switches_combinatorial()
         switch_set = set(switches)
         # Expose the partition so the relabel scratchpad can carry it forward.
         self.last_side_switches = sorted(switch_set)
@@ -3739,7 +3706,6 @@ def match_players_across_rallies(
             team_assignments=rally.team_assignments,
             start_ms=rally.start_ms,
             end_ms=rally.end_ms,
-            gt_side_switch=rally.gt_side_switch,
         )
 
         results.append(result)
