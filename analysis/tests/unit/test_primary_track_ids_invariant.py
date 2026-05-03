@@ -82,7 +82,10 @@ class TestLoadRalliesAutoClean:
         # primary_track_ids, court_split_y, ball_positions_json, actions_json)
         synth_rows = [(
             "rally-1", "video-1", 0, 1000,
+            # Positions for both T1 and T10 (the two valid primaries).
             [{"frameNumber": 0, "trackId": 1, "x": 0.5, "y": 0.5,
+              "width": 0.1, "height": 0.2, "confidence": 0.9},
+             {"frameNumber": 0, "trackId": 10, "x": 0.6, "y": 0.4,
               "width": 0.1, "height": 0.2, "confidence": 0.9}],
             [1, -1, -1, 10],  # corrupted: 2 sentinels
             0.5, None, None,
@@ -124,6 +127,47 @@ class TestLoadRalliesAutoClean:
             for rec in caplog.records
         )
 
+    def test_strips_orphan_primary_with_no_positions(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        # Bug seen on 7d77980f / d934f57a: cached primaryTrackIds
+        # contained a track id (T4) that had no positions in the
+        # snapshot's positions data. Matcher silently dropped it and
+        # emitted only 3 PIDs.
+        from rallycut.evaluation.tracking import db as db_mod
+
+        synth_rows = [(
+            "rally-1", "video-1", 0, 1000,
+            # Only T1 has a position; T999 is an "orphan" primary id
+            # that doesn't exist in the positions data.
+            [{"frameNumber": 0, "trackId": 1, "x": 0.5, "y": 0.5,
+              "width": 0.1, "height": 0.2, "confidence": 0.9}],
+            [1, 999],  # primary T999 has no positions
+            0.5, None, None,
+        )]
+
+        class FakeCursor:
+            def execute(self, *_a: Any, **_k: Any) -> None: pass
+            def fetchall(self) -> list[tuple[Any, ...]]: return synth_rows
+            def __enter__(self) -> "FakeCursor": return self
+            def __exit__(self, *_a: Any) -> None: pass
+
+        class FakeConn:
+            def cursor(self) -> FakeCursor: return FakeCursor()
+            def __enter__(self) -> "FakeConn": return self
+            def __exit__(self, *_a: Any) -> None: pass
+
+        monkeypatch.setattr(db_mod, "get_connection", lambda: FakeConn())
+
+        with caplog.at_level("WARNING", logger="rallycut.evaluation.tracking.db"):
+            results = db_mod.load_rallies_for_video("video-1")
+
+        # Orphan T999 stripped; only T1 (which has positions) remains.
+        assert results[0].primary_track_ids == [1]
+        assert any(
+            "Auto-cleaned" in rec.message for rec in caplog.records
+        )
+
     def test_clean_rows_are_passthrough(
         self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
     ) -> None:
@@ -131,8 +175,10 @@ class TestLoadRalliesAutoClean:
 
         synth_rows = [(
             "rally-1", "video-1", 0, 1000,
-            [{"frameNumber": 0, "trackId": 1, "x": 0.5, "y": 0.5,
-              "width": 0.1, "height": 0.2, "confidence": 0.9}],
+            # Positions for all 4 valid primaries.
+            [{"frameNumber": 0, "trackId": tid, "x": 0.5, "y": 0.5,
+              "width": 0.1, "height": 0.2, "confidence": 0.9}
+             for tid in (1, 3, 9, 10)],
             [1, 3, 9, 10],
             0.5, None, None,
         )]

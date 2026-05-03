@@ -85,8 +85,13 @@ def main() -> None:
     for rally_id, frame_count, current_primary, snap, video_id in rows:
         if isinstance(snap, str):
             snap = json.loads(snap)
-        positions_data = (snap or {}).get("positions") or []
-        cached_primary = (snap or {}).get("primaryTrackIds")
+        snap_obj: dict[str, Any] = (
+            cast(dict[str, Any], snap) if isinstance(snap, dict) else {}
+        )
+        positions_data: list[dict[str, Any]] = (
+            snap_obj.get("positions") or []
+        )
+        cached_primary = snap_obj.get("primaryTrackIds")
 
         positions = [
             PlayerPosition(
@@ -98,15 +103,22 @@ def main() -> None:
         if not positions:
             continue
 
+        total_frames = (
+            int(cast(int, frame_count)) if frame_count
+            else max(p.frame_number for p in positions) + 1
+        )
         pf = PlayerFilter(
             ball_positions=None,
-            total_frames=frame_count or max(p.frame_number for p in positions) + 1,
+            total_frames=total_frames,
             config=config,
         )
         pf.analyze_tracks(positions)
         fresh = sorted(pf.primary_tracks)
 
-        cached = sorted(cached_primary) if cached_primary else None
+        cached_list_for_sort = (
+            cast(list[int], cached_primary) if cached_primary else None
+        )
+        cached = sorted(cached_list_for_sort) if cached_list_for_sort else None
         if fresh == cached:
             continue
 
@@ -114,25 +126,39 @@ def main() -> None:
         #   - negative sentinel ids (BoT-SORT's "unmatched" placeholder)
         #   - duplicate ids
         #   - fewer than max_players valid ids when fresh has more
+        #   - primary id that doesn't exist in the cached positions data
+        #     (silent corruption — matcher will drop the track and emit
+        #     fewer than 4 PIDs)
         #
         # When cached and fresh are BOTH 4 distinct positive ids that
-        # disagree, that's a filter-behavior diff, not a corruption —
-        # leave it alone. Manual review is the right path there.
+        # disagree AND every cached id exists in positions, that's a
+        # filter-behavior diff, not corruption — leave it alone.
         cached_list = list(cached_primary) if cached_primary else []
         cached_valid = [t for t in cached_list if isinstance(t, int) and t >= 0]
+        positions_track_ids = {p["trackId"] for p in positions_data}
+        orphan_primaries = [
+            t for t in cached_valid if t not in positions_track_ids
+        ]
         has_corruption = (
             any(t < 0 for t in cached_list if isinstance(t, int))
             or len(cached_list) != len(set(cached_list))
             or len(cached_valid) < len(fresh)
+            or bool(orphan_primaries)
         )
         if not has_corruption:
             print(f"  skipping {str(video_id)[:8]}/{str(rally_id)[:8]}: "
                   f"cached={cached} vs fresh={fresh} differs but neither "
                   f"is corrupted — manual review needed")
             continue
+        if orphan_primaries:
+            print(f"  {str(video_id)[:8]}/{str(rally_id)[:8]}: cached "
+                  f"primaries {sorted(orphan_primaries)} have no positions "
+                  f"in the snapshot — corruption, will repair")
+        current_list = (
+            list(cast(list[int], current_primary)) if current_primary else []
+        )
         repairs.append(
-            (str(video_id), str(rally_id), cached,
-             list(current_primary or []), fresh)
+            (str(video_id), str(rally_id), cached, current_list, fresh),
         )
 
     if not repairs:

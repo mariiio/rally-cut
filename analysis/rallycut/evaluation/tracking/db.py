@@ -522,17 +522,25 @@ def load_rallies_for_video(video_id: str) -> list[RallyTrackData]:
 
     logger.info(f"Loaded {len(results)} tracked rallies for video {video_id}")
 
-    # Defensive auto-clean: older tracking runs persisted BoT-SORT's
-    # `-1` (unmatched-detection placeholder) into primary_track_ids,
-    # which causes the matcher to silently emit fewer than 4 PIDs.
-    # Strip negatives and dedupe in-memory so the matcher sees clean
-    # input regardless of stale persisted state. Warn loudly so the
-    # operator runs the repair script (which fixes the snapshot too).
+    # Defensive auto-clean. Three corruption shapes seen in legacy data:
+    #   (a) negative sentinel ids (BoT-SORT's "unmatched" placeholder)
+    #   (b) duplicate ids
+    #   (c) "orphan" primaries — track ids that don't appear in the
+    #       rally's positions data at all (the persisted primary list
+    #       was written by an older filter version, but those tracks
+    #       were dropped from positions by a subsequent remap or
+    #       retracking pass)
+    # All three cause the matcher to silently emit fewer than 4 PIDs.
+    # Strip in-memory; warn loudly so the operator runs the repair script.
     stale_rallies: list[str] = []
     for r in results:
         if not r.primary_track_ids:
             continue
-        cleaned = list(dict.fromkeys(t for t in r.primary_track_ids if t >= 0))
+        positions_tids = {p.track_id for p in r.positions}
+        cleaned = list(dict.fromkeys(
+            t for t in r.primary_track_ids
+            if t >= 0 and t in positions_tids
+        ))
         if cleaned != list(r.primary_track_ids):
             stale_rallies.append(r.rally_id)
             r.primary_track_ids = cleaned
