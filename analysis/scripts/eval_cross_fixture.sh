@@ -70,9 +70,13 @@ for vid in "${VIDEO_IDS[@]}"; do
     # Step 3: Run remap-track-ids.
     uv run rallycut remap-track-ids "$vid" > /tmp/eval_remap.log 2>&1
 
-    # Step 4: Measure + print summary.
-    uv run python scripts/measure_pid_accuracy.py "$vid" 2>&1 \
-        | grep -E "OVERALL|permutation|QUALITY METRIC|distinct matcher PID|AVERAGE distinct"
+    # Step 4: Measure + print summary. Tolerate per-video failures
+    # (e.g., GT not yet loaded) so the panel run completes for the
+    # videos that ARE measurable.
+    if ! uv run python scripts/measure_pid_accuracy.py "$vid" 2>&1 \
+            | grep -E "OVERALL|permutation|QUALITY METRIC|distinct matcher PID|AVERAGE distinct|no player_matching"; then
+        echo "  (measure_pid_accuracy.py failed for $vid — likely no GT loaded)"
+    fi
 done
 
 echo ""

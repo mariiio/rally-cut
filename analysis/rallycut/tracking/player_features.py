@@ -48,15 +48,13 @@ V_RANGES = [0, 256]
 PROFILE_EMA_ALPHA: float = 0.10
 
 
-def _drop_profile_ema() -> bool:
-    """Phase-1 counterfactual gate: when ``EXPERIMENTAL_DROP_PROFILE_EMA=1``,
-    each per-field EMA branch in ``update_from_features`` becomes a no-op
-    after first-sample init. First-sample init still runs so cluster
-    profiles bootstrap normally; subsequent rallies' EMA updates are
-    skipped, freezing each field to its first-sample value. Probed via
-    ``_profile_drift_probe`` sidecars; default OFF (no behavior change).
-    """
-    return os.environ.get("EXPERIMENTAL_DROP_PROFILE_EMA", "0") == "1"
+# Phase-1 counterfactual gate `EXPERIMENTAL_DROP_PROFILE_EMA` removed
+# 2026-05-03 after the EMA-cascade hypothesis was falsified
+# (see `phase1_ema_cascade_FALSIFIED_2026_05_01.md`). The flag-gated
+# code path was kept for ~1 day as a "documented NO-GO" but per the
+# dormant-flag audit (`dormant_flag_audit_2026_05_03.md`) memory entries
+# are sufficient documentation; carrying dormant code adds cognitive
+# overhead and footgun risk without value.
 
 # Tighter skin range for clothing mask — avoids removing red/orange clothing.
 # Real skin: H=5-20, moderate S (40-170), moderate V (70-230).
@@ -233,20 +231,11 @@ class PlayerAppearanceProfile:
 
     def update_from_features(self, features: PlayerAppearanceFeatures) -> None:
         """Update profile with new appearance features."""
-        # Phase-1 counterfactual: when EXPERIMENTAL_DROP_PROFILE_EMA=1, each
-        # per-field EMA branch becomes a no-op after first-sample init.
-        # First-sample (avg is None) always runs so profiles bootstrap;
-        # subsequent samples' EMA updates are skipped to freeze the field.
-        # Counts continue to increment so callers/tests can still observe
-        # how many samples were observed; freeze is detected via the
-        # avg_* checksums in `_profile_drift_probe`.
-        ema_frozen = _drop_profile_ema()
-
         # Update skin tone
         if features.skin_tone_hsv is not None and features.skin_pixel_count >= MIN_SKIN_PIXELS:
             if self.avg_skin_tone_hsv is None:
                 self.avg_skin_tone_hsv = features.skin_tone_hsv
-            elif not ema_frozen:
+            else:
                 weight = self._ema_weight(self.skin_sample_count)
                 h1, s1, v1 = self.avg_skin_tone_hsv
                 h2, s2, v2 = features.skin_tone_hsv
@@ -260,7 +249,7 @@ class PlayerAppearanceProfile:
         if features.upper_body_hist is not None:
             if self.avg_upper_hist is None:
                 self.avg_upper_hist = features.upper_body_hist.copy()
-            elif not ema_frozen:
+            else:
                 weight = self._ema_weight(self.upper_hist_count)
                 self.avg_upper_hist = (
                     self.avg_upper_hist * (1 - weight)
@@ -272,7 +261,7 @@ class PlayerAppearanceProfile:
         if features.lower_body_hist is not None:
             if self.avg_lower_hist is None:
                 self.avg_lower_hist = features.lower_body_hist.copy()
-            elif not ema_frozen:
+            else:
                 weight = self._ema_weight(self.lower_hist_count)
                 self.avg_lower_hist = (
                     self.avg_lower_hist * (1 - weight)
@@ -284,7 +273,7 @@ class PlayerAppearanceProfile:
         if features.upper_body_v_hist is not None:
             if self.avg_upper_v_hist is None:
                 self.avg_upper_v_hist = features.upper_body_v_hist.copy()
-            elif not ema_frozen:
+            else:
                 weight = self._ema_weight(self.upper_v_hist_count)
                 self.avg_upper_v_hist = (
                     self.avg_upper_v_hist * (1 - weight)
@@ -296,7 +285,7 @@ class PlayerAppearanceProfile:
         if features.lower_body_v_hist is not None:
             if self.avg_lower_v_hist is None:
                 self.avg_lower_v_hist = features.lower_body_v_hist.copy()
-            elif not ema_frozen:
+            else:
                 weight = self._ema_weight(self.lower_v_hist_count)
                 self.avg_lower_v_hist = (
                     self.avg_lower_v_hist * (1 - weight)
@@ -308,7 +297,7 @@ class PlayerAppearanceProfile:
         if features.dominant_color_hsv is not None:
             if self.avg_dominant_color_hsv is None:
                 self.avg_dominant_color_hsv = features.dominant_color_hsv
-            elif not ema_frozen:
+            else:
                 weight = self._ema_weight(self.dominant_color_count)
                 h1, s1, v1 = self.avg_dominant_color_hsv
                 h2, s2, v2 = features.dominant_color_hsv
@@ -322,7 +311,7 @@ class PlayerAppearanceProfile:
         if features.head_hist is not None:
             if self.avg_head_hist is None:
                 self.avg_head_hist = features.head_hist.copy()
-            elif not ema_frozen:
+            else:
                 weight = self._ema_weight(self.head_hist_count)
                 self.avg_head_hist = (
                     self.avg_head_hist * (1 - weight)

@@ -43,7 +43,6 @@ from rallycut.tracking.identity_anchor import (
 from rallycut.tracking.player_features import (
     PlayerAppearanceProfile,
     TrackAppearanceStats,
-    _drop_profile_ema,
     compute_appearance_similarity,
     compute_track_similarity,
     extract_appearance_features,
@@ -2118,14 +2117,10 @@ class MatchPlayerTracker:
                 profile.update_from_features(features)
 
             # Update ReID embedding (per-track average, not per-sample).
-            # The same EXPERIMENTAL_DROP_PROFILE_EMA gate applied in
-            # PlayerAppearanceProfile.update_from_features applies here:
-            # first-sample init runs; subsequent EMA updates skip when
-            # the flag is set so the embedding freezes to first-sample.
             if stats.reid_embedding is not None:
                 if profile.reid_embedding is None:
                     profile.reid_embedding = stats.reid_embedding.copy()
-                elif not _drop_profile_ema():
+                else:
                     alpha = profile._ema_weight(profile.reid_embedding_count)
                     profile.reid_embedding = (
                         profile.reid_embedding * (1 - alpha)

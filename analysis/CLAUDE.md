@@ -388,7 +388,6 @@ Without this, sequential runs are non-deterministic relative to a clean baseline
 ### Diagnostic env flags
 
 - `MATCH_PLAYERS_PROBE=1` — write per-(iteration, rally) sidecar JSON to `analysis/reports/profile_drift_probe/` capturing MatchSolver iteration state + post-solve `_update_profiles` snapshots. Default OFF; used to falsify hypotheses about cross-rally cascade.
-- `EXPERIMENTAL_DROP_PROFILE_EMA=1` — freeze every per-field EMA in `PlayerAppearanceProfile.update_from_features()` after first sample. Documented falsification artifact (Phase 1 falsified that EMA is the cascade source); kept in code so future sessions don't re-attempt without reading `phase1_ema_cascade_FALSIFIED_2026_05_01.md`.
 
 ## Ground Truth Labeling
 

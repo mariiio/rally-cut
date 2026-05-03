@@ -31,7 +31,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 ENV_FLAG = "MATCH_PLAYERS_PROBE"
-ENV_DROP_EMA_FLAG = "EXPERIMENTAL_DROP_PROFILE_EMA"
 
 
 def is_enabled() -> bool:
@@ -219,7 +218,6 @@ def finalize_probe() -> Path | None:
         "rally_ids": _state["rally_ids"],
         "started_at": started_at,
         "finished_at": time.time(),
-        ENV_DROP_EMA_FLAG: os.environ.get(ENV_DROP_EMA_FLAG, "0"),
         "extra": _state["extra"],
         "track_stats_input": _state.get("track_stats_input", []),
         "iter_records": _state["iter_records"],
@@ -229,8 +227,7 @@ def finalize_probe() -> Path | None:
     output_dir.mkdir(parents=True, exist_ok=True)
     ts = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(started_at))
     short = video_id[:8] if len(video_id) >= 8 else video_id
-    drop_tag = "dropema" if payload[ENV_DROP_EMA_FLAG] == "1" else "baseline"
-    path = output_dir / f"{short}_{drop_tag}_{ts}.json"
+    path = output_dir / f"{short}_{ts}.json"
     path.write_text(json.dumps(payload, indent=2))
     logger.info(
         "ProfileDriftProbe sidecar: %s (iter=%d, update=%d)",
