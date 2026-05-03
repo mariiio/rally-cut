@@ -595,6 +595,23 @@ export async function extractVideoSegmentFromLocal(
 /**
  * Save tracking results to the database.
  * Shared by single-rally sync tracking and batch tracking.
+ *
+ * Track IDs change when (re)tracking, so any matcher state keyed on the
+ * previous run's track IDs is now stale. This function clears them
+ * atomically with the new tracking write so the next match-players +
+ * remap-track-ids cycle starts from a clean baseline:
+ *
+ *   - PlayerTrack.preRemapStateJson  (snapshot of pre-remap state used by
+ *     remap-track-ids as the idempotency anchor; references old track IDs)
+ *   - Video.matchAnalysisJson.rallies[<this rally>].appliedFullMapping
+ *   - Video.matchAnalysisJson.rallies[<this rally>].remapApplied
+ *   - Video.matchAnalysisJson.rallies[<this rally>].assignmentAnchor
+ *   - Video.canonicalPidMapJson (rally-keyed; entries reference dead IDs)
+ *
+ * Without this invalidation, retrack can leave positions_json out of sync
+ * with the matcher snapshot, and the next remap operates on stale data —
+ * the same shape as the Pattern E corruption fixed in remap_track_ids.py.
+ * See `pattern_e_corruption_2026_05_03.md` in the analysis memory dir.
  */
 export async function saveTrackingResult(
   rallyId: string,
@@ -602,53 +619,82 @@ export async function saveTrackingResult(
   trackerResult: PlayerTrackerOutput,
   processingTimeMs: number,
 ): Promise<void> {
-  // Save to database
-  await prisma.playerTrack.upsert({
-    where: { rallyId },
-    create: {
-      rallyId,
-      status: 'COMPLETED',
-      needsRetrack: false,
-      frameCount: trackerResult.frameCount,
-      fps: trackerResult.fps,
-      detectionRate: trackerResult.detectionRate,
-      avgConfidence: trackerResult.avgConfidence,
-      avgPlayerCount: trackerResult.avgPlayerCount,
-      uniqueTrackCount: trackerResult.uniqueTrackCount,
-      courtSplitY: trackerResult.courtSplitY,
-      primaryTrackIds: trackerResult.primaryTrackIds as unknown as number[],
-      positionsJson: trackerResult.positions as unknown as object[],
-      rawPositionsJson: trackerResult.rawPositions as unknown as object[],
-      ballPositionsJson: trackerResult.ballPositions as unknown as object[],
-      contactsJson: trackerResult.contacts as unknown as object,
-      actionsJson: trackerResult.actions as unknown as object,
-      qualityReportJson: trackerResult.qualityReport as unknown as object,
-      processingTimeMs,
-      modelVersion: 'yolo11s',
-      completedAt: new Date(),
-    },
-    update: {
-      status: 'COMPLETED',
-      needsRetrack: false,
-      frameCount: trackerResult.frameCount,
-      fps: trackerResult.fps,
-      detectionRate: trackerResult.detectionRate,
-      avgConfidence: trackerResult.avgConfidence,
-      avgPlayerCount: trackerResult.avgPlayerCount,
-      uniqueTrackCount: trackerResult.uniqueTrackCount,
-      courtSplitY: trackerResult.courtSplitY,
-      primaryTrackIds: trackerResult.primaryTrackIds as unknown as number[],
-      positionsJson: trackerResult.positions as unknown as object[],
-      rawPositionsJson: trackerResult.rawPositions as unknown as object[],
-      ballPositionsJson: trackerResult.ballPositions as unknown as object[],
-      contactsJson: trackerResult.contacts as unknown as object,
-      actionsJson: trackerResult.actions as unknown as object,
-      qualityReportJson: trackerResult.qualityReport as unknown as object,
-      processingTimeMs,
-      modelVersion: 'yolo11s',
-      completedAt: new Date(),
-      error: null,
-    },
+  await prisma.$transaction(async (tx) => {
+    await tx.playerTrack.upsert({
+      where: { rallyId },
+      create: {
+        rallyId,
+        status: 'COMPLETED',
+        needsRetrack: false,
+        frameCount: trackerResult.frameCount,
+        fps: trackerResult.fps,
+        detectionRate: trackerResult.detectionRate,
+        avgConfidence: trackerResult.avgConfidence,
+        avgPlayerCount: trackerResult.avgPlayerCount,
+        uniqueTrackCount: trackerResult.uniqueTrackCount,
+        courtSplitY: trackerResult.courtSplitY,
+        primaryTrackIds: trackerResult.primaryTrackIds as unknown as number[],
+        positionsJson: trackerResult.positions as unknown as object[],
+        rawPositionsJson: trackerResult.rawPositions as unknown as object[],
+        ballPositionsJson: trackerResult.ballPositions as unknown as object[],
+        contactsJson: trackerResult.contacts as unknown as object,
+        actionsJson: trackerResult.actions as unknown as object,
+        qualityReportJson: trackerResult.qualityReport as unknown as object,
+        processingTimeMs,
+        modelVersion: 'yolo11s',
+        completedAt: new Date(),
+      },
+      update: {
+        status: 'COMPLETED',
+        needsRetrack: false,
+        frameCount: trackerResult.frameCount,
+        fps: trackerResult.fps,
+        detectionRate: trackerResult.detectionRate,
+        avgConfidence: trackerResult.avgConfidence,
+        avgPlayerCount: trackerResult.avgPlayerCount,
+        uniqueTrackCount: trackerResult.uniqueTrackCount,
+        courtSplitY: trackerResult.courtSplitY,
+        primaryTrackIds: trackerResult.primaryTrackIds as unknown as number[],
+        positionsJson: trackerResult.positions as unknown as object[],
+        rawPositionsJson: trackerResult.rawPositions as unknown as object[],
+        ballPositionsJson: trackerResult.ballPositions as unknown as object[],
+        contactsJson: trackerResult.contacts as unknown as object,
+        actionsJson: trackerResult.actions as unknown as object,
+        qualityReportJson: trackerResult.qualityReport as unknown as object,
+        processingTimeMs,
+        modelVersion: 'yolo11s',
+        completedAt: new Date(),
+        error: null,
+        preRemapStateJson: Prisma.JsonNull,
+      },
+    });
+
+    // Strip stale matcher caches keyed on old track IDs.
+    const video = await tx.video.findUnique({
+      where: { id: videoId },
+      select: { matchAnalysisJson: true, canonicalPidMapJson: true },
+    });
+    if (video?.matchAnalysisJson) {
+      const ma = video.matchAnalysisJson as { rallies?: Array<Record<string, unknown>> };
+      let dirty = false;
+      for (const entry of ma.rallies ?? []) {
+        if (entry.rallyId === rallyId) {
+          if ('appliedFullMapping' in entry) { delete entry.appliedFullMapping; dirty = true; }
+          if ('remapApplied' in entry) { delete entry.remapApplied; dirty = true; }
+          if ('assignmentAnchor' in entry) { delete entry.assignmentAnchor; dirty = true; }
+        }
+      }
+      const canonicalNeedsClear = video.canonicalPidMapJson != null;
+      if (dirty || canonicalNeedsClear) {
+        await tx.video.update({
+          where: { id: videoId },
+          data: {
+            ...(dirty ? { matchAnalysisJson: ma as unknown as Prisma.InputJsonValue } : {}),
+            ...(canonicalNeedsClear ? { canonicalPidMapJson: Prisma.JsonNull } : {}),
+          },
+        });
+      }
+    }
   });
 
   // Auto-populate Rally.servingTeam from detected serve team
