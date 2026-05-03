@@ -257,27 +257,42 @@ def _reassign_split_halves(
 ) -> tuple[int, int] | None:
     """Decide which PID each half of the parent track should take.
 
-    Strategy: compute appearance distance from each half to every other
-    PID's whole-track features. The half closer to the parent's
-    original PID keeps it; the other half gets the second-closest
-    available PID — but only if the second-closest is strictly closer
-    than the parent's PID (otherwise the split would degrade matcher
-    quality and we should reject it).
+    Conservative strategy: ONE half re-assigns to its best-matching
+    other-track's PID; the other half KEEPS parent_pid.
+
+    Choice of which half re-assigns: the half with the LOWER cost to
+    its best other-track is the more confident match → it re-assigns.
+    The other half is "more distinctive" relative to other tracks and
+    therefore better trusted to carry the parent's identity.
+
+    Why this conservative shape:
+      - The "always re-assign both halves to their best others" variant
+        regressed PERMUTED by 11 frames on 7d77980f (cross-fixture
+        validation 2026-05-03). When the best other-track for a half
+        is borderline, re-assigning blindly causes more errors than
+        it fixes.
+      - A "tie-break to second-best" variant when both halves point
+        to the same other track also regressed (8 frames on 7d77980f).
+        Same root cause: the second-best is often unreliable.
+      - The original logic (what we revert to here) had clean PERMUTED
+        on all 4 fixtures.
+
+    Trade-off: this won't fully resolve cases like 7d77980f / 09553ef1
+    where both halves point to the same other track — the second half
+    keeps the parent's (contaminated) PID, leading to a residual
+    visual inconsistency. Phase 2's clip/drop handles the duplicate-
+    PID-per-frame artifact that would otherwise result. The proper
+    full fix for the 09553ef1 case is cross-track merge (Phase 3),
+    not aggressive within-rally re-assignment.
 
     Returns (first_half_pid, second_half_pid) or None when no safe
     re-assignment exists.
     """
     if not other_track_stats:
         return None
-    # Sanity gate: halves must actually differ from each other. Without
-    # this, two visually-identical halves (caller mis-flagged) would
-    # still produce (parent, other) re-assignment — corrupting an
-    # otherwise-correct track. Threshold matches the gate margin used
-    # in `_detect_split_candidates`.
     inter_half = _pairwise_cost(first_half_stats, second_half_stats)
     if inter_half < 1e-3:
         return None
-    # Compute distances from each half to every other track's features.
     first_dists = {
         other_tid: _pairwise_cost(first_half_stats, ts)
         for other_tid, ts in other_track_stats.items()
@@ -286,29 +301,26 @@ def _reassign_split_halves(
         other_tid: _pairwise_cost(second_half_stats, ts)
         for other_tid, ts in other_track_stats.items()
     }
-    # Best other-track for each half.
     first_best_other = min(first_dists, key=first_dists.__getitem__)
     second_best_other = min(second_dists, key=second_dists.__getitem__)
+    first_min = first_dists[first_best_other]
+    second_min = second_dists[second_best_other]
 
-    # Determine which half "owns" the parent PID (the one less similar
-    # to other PIDs — i.e., more distinctive in the parent's cluster).
-    first_min_other = first_dists[first_best_other]
-    second_min_other = second_dists[second_best_other]
     first_half_pid: int | None
     second_half_pid: int | None
-    if first_min_other >= second_min_other:
-        # First half is more distinctive vs others → keep parent PID.
-        # Second half should re-assign to its closest other-track's PID.
-        first_half_pid = parent_pid
-        second_half_pid = other_track_pids.get(second_best_other)
-    else:
+    if first_min <= second_min:
+        # First half is the more confident match → it re-assigns.
         first_half_pid = other_track_pids.get(first_best_other)
         second_half_pid = parent_pid
+    else:
+        first_half_pid = parent_pid
+        second_half_pid = other_track_pids.get(second_best_other)
 
     if first_half_pid is None or second_half_pid is None:
         return None
     if first_half_pid == second_half_pid:
-        # Both halves prefer the same PID — nothing to gain by splitting.
+        # Re-assigned half's other-track shares parent's PID — split
+        # would be a no-op (or worse). Reject.
         return None
     return first_half_pid, second_half_pid
 

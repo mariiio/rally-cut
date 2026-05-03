@@ -188,39 +188,42 @@ class TestDetectSplitCandidates:
 
 
 class TestReassignSplitHalves:
-    """The re-assignment Hungarian decides which half keeps the parent
-    PID and which gets re-assigned. A clean re-assignment requires the
-    halves to be distinguishable from each other AND from at least one
-    other track."""
+    """Conservative re-Hungarian: the half closer to its best other
+    track re-assigns; the other half keeps parent_pid.
 
-    def test_returns_distinct_pids(
+    The aggressive "always re-assign both halves" variant regressed
+    11 frames on 7d77980f (cross-fixture validation 2026-05-03), so
+    we keep parent for the more-distinctive (less-confident-match)
+    half. A tie-break only kicks in when both halves point to the
+    same other track (the 09553ef1 case).
+    """
+
+    def test_more_confident_half_reassigns(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # First half (key=1) matches T11 (key=30) at cost 0.6 (far) and
-        # T10 (key=20) at cost 0.6 (far) → distinctive vs others.
-        # Second half (key=2) matches T10 (key=20) at cost 0.1 (close).
-        # → First half keeps parent PID (1); second re-assigns to T10's
-        # PID (4).
+        # First half (key=1) is FAR from all others (distinctive).
+        # Second half (key=2) is CLOSE to T10 (key=20) at cost 0.1.
+        # → second half re-assigns to T10's PID 4; first keeps parent.
         first = _empty_stats(1)
         second = _empty_stats(2)
         other_stats = {10: _empty_stats(20), 11: _empty_stats(30)}
         other_pids = {10: 4, 11: 3}
 
         _patch_costs(monkeypatch, {
-            (1, 2): 0.5,  # Halves differ — passes the inter_half sanity gate.
-            (1, 20): 0.6, (1, 30): 0.6,
-            (2, 20): 0.1, (2, 30): 0.6,
+            (1, 2): 0.5,
+            (1, 20): 0.6, (1, 30): 0.6,  # first half distinctive
+            (2, 20): 0.1, (2, 30): 0.6,  # second half closest to T10 → PID 4
         })
         out = _reassign_split_halves(
-            parent_tid=5, parent_pid=1,
+            parent_tid=5, parent_pid=1,  # parent's PID
             first_half_stats=first, second_half_stats=second,
             other_track_pids=other_pids,
             other_track_stats=other_stats,
         )
         assert out is not None
         first_pid, second_pid = out
-        assert first_pid != second_pid
-        assert second_pid == 4, f"Second half should map to PID 4; got {second_pid}"
+        assert first_pid == 1, f"First half (distinctive) should keep parent PID 1; got {first_pid}"
+        assert second_pid == 4, f"Second half should re-assign to PID 4 (T10); got {second_pid}"
 
     def test_no_other_tracks_returns_none(
         self, monkeypatch: pytest.MonkeyPatch,
@@ -238,8 +241,7 @@ class TestReassignSplitHalves:
     def test_both_halves_prefer_same_pid_returns_none(
         self, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        # Both halves equally close to T10 → both prefer the same
-        # re-assignment → no useful split.
+        # Both halves identical → inter_half sanity gate trips → reject.
         same = _empty_stats(1)
         other_stats = {10: _empty_stats(20)}
         _patch_costs(monkeypatch, {(1, 20): 0.5})
@@ -247,6 +249,56 @@ class TestReassignSplitHalves:
             parent_tid=5, parent_pid=1,
             first_half_stats=same, second_half_stats=same,
             other_track_pids={10: 4}, other_track_stats=other_stats,
+        )
+        assert out is None
+
+    def test_both_halves_share_best_other_lower_cost_wins(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # Both halves' best other = T8. Conservative logic: the half
+        # with the LOWER cost re-assigns to T8's PID; the other half
+        # keeps parent_pid. No tie-break to second-best — empirically
+        # tie-break regressed cross-fixture PERMUTED. The trade-off is
+        # the second half stays with parent's PID, which may leave a
+        # residual artifact (Phase 2 clip/drop handles the worst case).
+        first = _empty_stats(1)
+        second = _empty_stats(2)
+        other_stats = {8: _empty_stats(80), 6: _empty_stats(60)}
+        other_pids = {8: 1, 6: 4}
+        _patch_costs(monkeypatch, {
+            (1, 2): 0.5,
+            (1, 80): 0.18, (1, 60): 0.50,  # first close to T8
+            (2, 80): 0.30, (2, 60): 0.45,  # second also close to T8 (but farther)
+        })
+        out = _reassign_split_halves(
+            parent_tid=5, parent_pid=2,  # parent's PID
+            first_half_stats=first, second_half_stats=second,
+            other_track_pids=other_pids, other_track_stats=other_stats,
+        )
+        assert out is not None
+        first_pid, second_pid = out
+        # First half (lower cost to T8) re-assigns to PID 1.
+        # Second half keeps parent PID 2.
+        assert first_pid == 1
+        assert second_pid == 2
+
+    def test_re_assignment_collides_with_parent_pid_returns_none(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # If the re-assigned half's best other-track has the SAME PID
+        # as the parent, the split is a no-op (both halves end up with
+        # parent's PID). Reject to avoid emitting useless sub-tracks.
+        first = _empty_stats(1)
+        second = _empty_stats(2)
+        other_stats = {8: _empty_stats(80)}
+        other_pids = {8: 99}  # T8 has same PID as parent
+        _patch_costs(monkeypatch, {
+            (1, 2): 0.5, (1, 80): 0.1, (2, 80): 0.5,
+        })
+        out = _reassign_split_halves(
+            parent_tid=5, parent_pid=99,
+            first_half_stats=first, second_half_stats=second,
+            other_track_pids=other_pids, other_track_stats=other_stats,
         )
         assert out is None
 
