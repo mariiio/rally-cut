@@ -355,6 +355,36 @@ Status: detection + override mechanism work end-to-end (verified on 5c756c41/r07
 
 Default OFF until user visual verification confirms the within-rally swap shape is acceptable.
 
+### Within-rally appearance-based ID-switch repair (Phase 1+2, 2026-05-03)
+
+`ENABLE_WITHIN_RALLY_REPAIR=1` activates an appearance-consistency-based detector for within-rally identity drift. Per-track 3-window split, relative-gate trigger (`max intra-window cost > k × median inter-track cost`), changepoint localization, conservative re-Hungarian (more confident half re-assigns to its best other-track; other half keeps parent's matcher PID), then Phase 2 cross-track overlap clipping (sub-tracks yield to other tracks with the same PID). Module: `tracking/_within_rally_id_switch.py`. Tests: `tests/unit/test_within_rally_id_switch.py` + `tests/integration/test_within_rally_repair_e2e.py`.
+
+Default OFF — addresses the BoT-SORT track-jump pattern but provides no measurable PERMUTED gain on the current 4-fixture panel. Cross-track merge (Phase 3) is the proper full fix for cases like 7d77980f / 09553ef1 where two BoT-SORT tracks represent the same physical player. See `feedback_validation_clean_state.md` for the validation protocol that revealed Phase 1+2 is no-regression but no-improvement.
+
+### Cross-rally matcher validation protocol (MANDATORY)
+
+The matcher's behavior depends on persistent caches (`assignmentAnchor`, `canonical_pid_map_json`). Stale state from prior runs contaminates measurements. **For ANY A/B comparison between matcher configurations, reset state before each measurement:**
+
+```bash
+# Reset state for a single video
+uv run python scripts/reset_matcher_state.py <video_id>
+
+# Reset all GT-labeled videos
+uv run python scripts/reset_matcher_state.py --all-with-gt
+
+# Wrapper script that resets + measures (preferred)
+scripts/eval_cross_fixture.sh                # baseline (no flags)
+scripts/eval_cross_fixture.sh --flag-on      # ENABLE_WITHIN_RALLY_REPAIR=1
+scripts/eval_cross_fixture.sh <vid> <vid>    # custom panel
+```
+
+Without this, sequential runs are non-deterministic relative to a clean baseline — see `feedback_validation_clean_state.md` for the original incident (a session of failed iterations chasing a "regression" that turned out to be stale state).
+
+`scripts/measure_pid_accuracy.py` reports THREE metrics:
+1. **DIRECT** (matcher_pid == gt_pid as-is) — diagnostic only.
+2. **PERMUTED** (Hungarian-permuted matcher → gt) — load-bearing quality metric. User has no canonical convention (`feedback_no_canonical_pid_convention.md`).
+3. **ID-stability** (distinct matcher PIDs per GT player across the video) — surfaces user-perceived "PID flicker" that PERMUTED hides. 1.0 = perfectly stable; ≥1.5 = significant flicker.
+
 ### Diagnostic env flags
 
 - `MATCH_PLAYERS_PROBE=1` — write per-(iteration, rally) sidecar JSON to `analysis/reports/profile_drift_probe/` capturing MatchSolver iteration state + post-solve `_update_profiles` snapshots. Default OFF; used to falsify hypotheses about cross-rally cascade.

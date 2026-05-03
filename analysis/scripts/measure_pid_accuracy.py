@@ -249,6 +249,50 @@ def main() -> None:
             print(f"  {rs} frame={fr}: GT=PID{gp}, "
                   f"matcher=PID{mp} → permuted PID{mapped}")
 
+    # --- ID-stability metric (distinct matcher-PIDs per GT player) ---
+    # Per-physical-player measure: for each GT-identified player,
+    # count how many DISTINCT matcher-PIDs end up labeling their
+    # bboxes across all GT-labeled frames in the video. 1 = perfectly
+    # stable (same matcher-PID always). >1 = the matcher gives the
+    # same physical player different PIDs at different times — what
+    # the user perceives as "PID flicker" or "1 and 4 swap" patterns.
+    #
+    # This is the user-facing analog to standard MOT IDSW: standard
+    # IDSW counts per-track transitions, but in our post-remap world
+    # each track ID has a single PID, so the flicker happens at the
+    # PHYSICAL PLAYER level when BoT-SORT splits a player into two
+    # tracks with different PIDs.
+    #
+    # Interpretation:
+    #   1.0 = perfectly stable (every GT player has one matcher PID)
+    #   1.X = average of X distinct PIDs per player; the further from
+    #         1.0, the more the matcher disagrees with itself about
+    #         which PID a given physical player should have.
+    print("\n=== ID-stability per GT player ===")
+    print("(How many distinct matcher PIDs label each physical player "
+          "across the whole video. 1 = stable; >1 = flicker / cross-"
+          "rally inconsistency.)")
+    pids_per_gt_player: dict[int, set[int]] = {}
+    samples_per_gt_player: dict[int, int] = {}
+    for _rid_short, _frame, gt_pid, matcher_pid in samples:
+        pids_per_gt_player.setdefault(gt_pid, set()).add(matcher_pid)
+        samples_per_gt_player[gt_pid] = (
+            samples_per_gt_player.get(gt_pid, 0) + 1
+        )
+    total_distinct = 0
+    for gt_pid in sorted(pids_per_gt_player):
+        n_distinct = len(pids_per_gt_player[gt_pid])
+        n_samples = samples_per_gt_player[gt_pid]
+        marker = "" if n_distinct == 1 else "  ←"
+        print(f"  GT PID{gt_pid}: {n_distinct} distinct matcher PID(s) "
+              f"({sorted(pids_per_gt_player[gt_pid])}) across "
+              f"{n_samples} samples{marker}")
+        total_distinct += n_distinct
+    if pids_per_gt_player:
+        avg = total_distinct / len(pids_per_gt_player)
+        print(f"AVERAGE distinct PIDs per GT player: {avg:.2f} "
+              f"(1.00 = perfectly stable; ≥1.5 = significant flicker)")
+
 
 if __name__ == "__main__":
     main()
