@@ -852,8 +852,18 @@ def match_players(
             # Pass cross-rally match-players assignment so canonical can
             # defer to it on borderline per-rally disagreements (see
             # CANONICAL_PID_DEFER_TO_MATCH_PLAYERS_GAP in match_tracker).
+            # Strip synthetic sub-track ids (negative) so the canonical
+            # pid map only contains real BoT-SORT track IDs. Sub-track
+            # PIDs are carried separately via match_analysis_json.subTracks
+            # (frame-conditional override). Including the synth ids here
+            # would leak them into appliedFullMapping at remap time and
+            # break the bijective-mapping invariant on the next match-players
+            # run. (Phase 1 within-rally split surfaced this when the
+            # sub-track's PID matched another full track's PID.)
             track_to_player_per_rally = {
-                rally.rally_id: dict(result.track_to_player)
+                rally.rally_id: {
+                    k: v for k, v in result.track_to_player.items() if k > 0
+                }
                 for rally, result in zip(rallies, results)
             }
             canonical_map = compute_canonical_pid_map(

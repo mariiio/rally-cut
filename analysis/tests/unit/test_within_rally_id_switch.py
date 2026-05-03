@@ -14,12 +14,15 @@ import numpy as np
 import pytest
 
 from rallycut.tracking import _within_rally_id_switch as wris
+from rallycut.tracking._subtrack import SubTrackCandidate
 from rallycut.tracking._within_rally_id_switch import (
     NUM_WINDOWS,
+    _clip_overlapping_sub_tracks,
     _detect_split_candidates,
     _reassign_split_halves,
 )
 from rallycut.tracking.player_features import TrackAppearanceStats
+from rallycut.tracking.player_tracker import PlayerPosition
 
 
 @dataclass
@@ -246,3 +249,178 @@ class TestReassignSplitHalves:
             other_track_pids={10: 4}, other_track_stats=other_stats,
         )
         assert out is None
+
+
+def _make_subtrack(
+    parent: int, segment: int, f_start: int, f_end: int, pid: int,
+) -> SubTrackCandidate:
+    return SubTrackCandidate(
+        parent_track_id=parent,
+        segment_index=segment,
+        f_start=f_start,
+        f_end=f_end,
+        appearance_stats=_empty_stats(parent * 100 + segment),
+        aggregated_argmax_pid=pid,
+    )
+
+
+def _make_pos(track_id: int, frame: int) -> PlayerPosition:
+    return PlayerPosition(
+        track_id=track_id, frame_number=frame,
+        x=0.5, y=0.5, width=0.1, height=0.2, confidence=0.9,
+    )
+
+
+class TestClipOverlappingSubTracks:
+    """Phase 2: cross-track same-PID overlap deduplication.
+
+    The bug pattern: Phase 1 splits T1 into halves; T1's first-half
+    sub-track gets PID K via re-Hungarian; another track T8 already has
+    PID K via the matcher's whole-track assignment; T1-first-half and
+    T8 overlap in some frame range. Without dedup, two bboxes labeled
+    PID K render in the overlap window — visible identity duplication.
+    """
+
+    def test_subtrack_clipped_when_other_track_overlaps_at_end(self) -> None:
+        # The 09553ef1 case: T1-seg0 = [0, 209] PID 1; T8 = [181, 315]
+        # PID 1. They overlap in [181, 209]. Sub-track yields → clipped
+        # to [0, 180].
+        emitted = [_make_subtrack(parent=1, segment=0,
+                                  f_start=0, f_end=209, pid=1)]
+        track_pids = {1: 2, 8: 1}  # T1's matcher pid, T8's pid
+        positions = {
+            1: [_make_pos(1, f) for f in range(0, 316)],
+            8: [_make_pos(8, f) for f in range(181, 316)],
+        }
+        out = _clip_overlapping_sub_tracks(
+            emitted=emitted, track_pids=track_pids,
+            by_track_positions=positions, rally_id="test",
+        )
+        assert len(out) == 1
+        assert out[0].f_start == 0
+        assert out[0].f_end == 180  # T8 starts at 181
+
+    def test_subtrack_clipped_when_other_track_overlaps_at_start(self) -> None:
+        # T1-seg1 = [100, 200] PID 1; T8 = [0, 150] PID 1.
+        # Overlap [100, 150]. Sub-track clipped to [151, 200].
+        emitted = [_make_subtrack(parent=1, segment=1,
+                                  f_start=100, f_end=200, pid=1)]
+        track_pids = {1: 2, 8: 1}
+        positions = {
+            1: [_make_pos(1, f) for f in range(0, 201)],
+            8: [_make_pos(8, f) for f in range(0, 151)],
+        }
+        out = _clip_overlapping_sub_tracks(
+            emitted=emitted, track_pids=track_pids,
+            by_track_positions=positions, rally_id="test",
+        )
+        assert len(out) == 1
+        assert out[0].f_start == 151
+        assert out[0].f_end == 200
+
+    def test_subtrack_dropped_when_fully_overlapped(self) -> None:
+        # Sub-track fully inside another track's range with same PID.
+        emitted = [_make_subtrack(parent=1, segment=0,
+                                  f_start=100, f_end=200, pid=1)]
+        track_pids = {1: 2, 8: 1}
+        positions = {
+            1: [_make_pos(1, f) for f in range(0, 316)],
+            8: [_make_pos(8, f) for f in range(0, 316)],
+        }
+        out = _clip_overlapping_sub_tracks(
+            emitted=emitted, track_pids=track_pids,
+            by_track_positions=positions, rally_id="test",
+        )
+        # Sub-track gets dropped entirely.
+        assert out == []
+
+    def test_subtrack_split_into_two_when_other_track_in_middle(self) -> None:
+        # T1-seg0 = [0, 300] PID 1; T8 = [100, 200] PID 1.
+        # Sub-track must split into [0, 99] and [201, 300].
+        emitted = [_make_subtrack(parent=1, segment=0,
+                                  f_start=0, f_end=300, pid=1)]
+        track_pids = {1: 2, 8: 1}
+        positions = {
+            1: [_make_pos(1, f) for f in range(0, 301)],
+            8: [_make_pos(8, f) for f in range(100, 201)],
+        }
+        out = _clip_overlapping_sub_tracks(
+            emitted=emitted, track_pids=track_pids,
+            by_track_positions=positions, rally_id="test",
+        )
+        assert len(out) == 2
+        ranges = sorted((s.f_start, s.f_end) for s in out)
+        assert ranges == [(0, 99), (201, 300)]
+        # Synthetic track ids must be distinct (uses segment_index).
+        assert out[0].synthetic_track_id != out[1].synthetic_track_id
+
+    def test_no_overlap_passes_through(self) -> None:
+        # Sub-track and other-track frame ranges disjoint → no clip.
+        emitted = [_make_subtrack(parent=1, segment=0,
+                                  f_start=0, f_end=100, pid=1)]
+        track_pids = {1: 2, 8: 1}
+        positions = {
+            1: [_make_pos(1, f) for f in range(0, 101)],
+            8: [_make_pos(8, f) for f in range(200, 301)],
+        }
+        out = _clip_overlapping_sub_tracks(
+            emitted=emitted, track_pids=track_pids,
+            by_track_positions=positions, rally_id="test",
+        )
+        assert len(out) == 1
+        assert (out[0].f_start, out[0].f_end) == (0, 100)
+
+    def test_other_track_with_different_pid_no_clip(self) -> None:
+        # PID mismatch → no conflict even if frame ranges overlap.
+        emitted = [_make_subtrack(parent=1, segment=0,
+                                  f_start=0, f_end=200, pid=1)]
+        track_pids = {1: 2, 8: 3}  # T8 has PID 3, sub-track has PID 1
+        positions = {
+            1: [_make_pos(1, f) for f in range(0, 201)],
+            8: [_make_pos(8, f) for f in range(50, 151)],
+        }
+        out = _clip_overlapping_sub_tracks(
+            emitted=emitted, track_pids=track_pids,
+            by_track_positions=positions, rally_id="test",
+        )
+        assert len(out) == 1
+        assert (out[0].f_start, out[0].f_end) == (0, 200)
+
+    def test_parent_track_excluded_from_other_set(self) -> None:
+        # The split parent T1 itself shouldn't count as an "other track"
+        # against its own sub-track. (T1's matcher PID was 1, but its
+        # sub-track gets PID 1 too — without this exclusion the
+        # sub-track would be self-conflicting and dropped erroneously.)
+        emitted = [_make_subtrack(parent=1, segment=0,
+                                  f_start=0, f_end=200, pid=1)]
+        track_pids = {1: 1}  # T1 mapped to PID 1 (the same as its sub-track)
+        positions = {
+            1: [_make_pos(1, f) for f in range(0, 201)],
+        }
+        out = _clip_overlapping_sub_tracks(
+            emitted=emitted, track_pids=track_pids,
+            by_track_positions=positions, rally_id="test",
+        )
+        assert len(out) == 1
+        assert (out[0].f_start, out[0].f_end) == (0, 200)
+
+    def test_multiple_other_tracks_merged_correctly(self) -> None:
+        # Two other tracks with same PID, both in sub-track's range.
+        # Their conflict ranges should merge correctly when overlapping.
+        emitted = [_make_subtrack(parent=1, segment=0,
+                                  f_start=0, f_end=300, pid=1)]
+        track_pids = {1: 2, 8: 1, 9: 1}
+        positions = {
+            1: [_make_pos(1, f) for f in range(0, 301)],
+            8: [_make_pos(8, f) for f in range(100, 201)],
+            9: [_make_pos(9, f) for f in range(180, 251)],  # overlaps T8
+        }
+        out = _clip_overlapping_sub_tracks(
+            emitted=emitted, track_pids=track_pids,
+            by_track_positions=positions, rally_id="test",
+        )
+        # Merged conflict range = [100, 250]. Kept fragments: [0, 99]
+        # and [251, 300].
+        assert len(out) == 2
+        ranges = sorted((s.f_start, s.f_end) for s in out)
+        assert ranges == [(0, 99), (251, 300)]

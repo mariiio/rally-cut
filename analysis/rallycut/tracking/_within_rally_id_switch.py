@@ -467,4 +467,161 @@ def maybe_emit_within_rally_split(
             first_pid, second_pid, track_pids[tid],
         )
 
+    if not emitted:
+        return None
+
+    # Phase 2: deduplicate cross-track same-PID frame overlap.
+    # When a sub-track's PID matches another non-parent track's PID and
+    # their frame ranges overlap, two bboxes would be labeled the same
+    # PID in the overlap window — visible as duplicate identity in the
+    # editor. Resolve by CLIPPING the sub-track's range to yield to the
+    # other track. The resolver returns UNLABELED for parent frames
+    # outside any segment, so the parent's bbox in the clipped frames
+    # is suppressed; the other track's bbox is the sole carrier of
+    # that PID in those frames.
+    #
+    # Direction of clipping: yield to the other track's frame range
+    # entirely. We never EXTEND the sub-track; we only shrink it.
+    # Drop sub-tracks that get clipped to empty.
+    emitted = _clip_overlapping_sub_tracks(
+        emitted=emitted,
+        track_pids=track_pids,
+        by_track_positions=by_track_positions,
+        rally_id=rally_id,
+    )
     return emitted or None
+
+
+def _track_frame_range(positions: list[PlayerPosition]) -> tuple[int, int]:
+    """Min/max frame number for a track. Caller must ensure non-empty."""
+    return positions[0].frame_number, positions[-1].frame_number
+
+
+def _clip_overlapping_sub_tracks(
+    *,
+    emitted: list[SubTrackCandidate],
+    track_pids: dict[int, int],
+    by_track_positions: dict[int, list[PlayerPosition]],
+    rally_id: str,
+) -> list[SubTrackCandidate]:
+    """Phase 2: clip each sub-track's range against other tracks that
+    share its assigned PID with overlapping frames.
+
+    Resolution rule: when sub-track S (parent=P, pid=K, range [a, b])
+    and another track O (not P, mapped to pid=K via track_pids, range
+    [c, d]) have overlapping frame ranges, the sub-track YIELDS the
+    overlap to O.
+
+    Why yield, not the inverse: the sub-track is a "rescued" segment of
+    a contaminated parent track. The other track O is BoT-SORT's primary
+    identity for that PID — it's the more authoritative carrier. Yielding
+    means S's parent's bbox is suppressed (UNLABELED via the resolver);
+    O's bbox is the sole label for those frames.
+
+    A sub-track may be clipped at either end (or both) depending on how
+    O's range overlaps. If O's range fully contains S's, S is dropped.
+    If O sits strictly inside S, we'd need to split S into two segments
+    flanking O — emitted as two clipped sub-tracks with the same
+    parent + pid. Rare but handled.
+
+    Sub-tracks that get clipped to empty are dropped from the result.
+    Sub-tracks unaffected by any conflict pass through unchanged.
+    """
+    # Index other tracks (non-parent) by pid → list of (track_id, range).
+    pid_to_other_tracks: dict[int, list[tuple[int, int, int]]] = defaultdict(list)
+    parent_tids = {st.parent_track_id for st in emitted}
+    for other_tid, other_pid in track_pids.items():
+        if other_tid in parent_tids:
+            continue
+        pts = by_track_positions.get(other_tid, [])
+        if not pts:
+            continue
+        f_lo, f_hi = _track_frame_range(pts)
+        pid_to_other_tracks[other_pid].append((other_tid, f_lo, f_hi))
+
+    out: list[SubTrackCandidate] = []
+    for st in emitted:
+        st_pid = st.aggregated_argmax_pid
+        if st_pid is None:
+            out.append(st)
+            continue
+        pid: int = st_pid
+        conflicts = [
+            (other_tid, c_lo, c_hi)
+            for other_tid, c_lo, c_hi in pid_to_other_tracks.get(pid, [])
+            if not (c_hi < st.f_start or c_lo > st.f_end)  # overlap
+        ]
+        if not conflicts:
+            out.append(st)
+            continue
+        # Build the set of frame ranges OWNED by other tracks for this PID,
+        # within st's range. Clip st to the complement.
+        # We treat conflicts as inclusive ranges and compute the
+        # complement of their union within [st.f_start, st.f_end].
+        conflict_ranges = sorted(
+            (max(st.f_start, c_lo), min(st.f_end, c_hi))
+            for _, c_lo, c_hi in conflicts
+        )
+        # Merge overlapping conflicts.
+        merged: list[tuple[int, int]] = []
+        for lo, hi in conflict_ranges:
+            if merged and lo <= merged[-1][1] + 1:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], hi))
+            else:
+                merged.append((lo, hi))
+        # Now produce st-fragments outside the merged conflict ranges.
+        kept_fragments: list[tuple[int, int]] = []
+        cursor = st.f_start
+        for lo, hi in merged:
+            if cursor < lo:
+                kept_fragments.append((cursor, lo - 1))
+            cursor = max(cursor, hi + 1)
+        if cursor <= st.f_end:
+            kept_fragments.append((cursor, st.f_end))
+
+        if not kept_fragments:
+            logger.info(
+                "within_rally_repair %s: sub-track parent=%d seg=%d "
+                "pid=%d range [%d, %d] DROPPED — fully overlapped by "
+                "other tracks %s with same pid",
+                rally_id[:8] if rally_id else "?",
+                st.parent_track_id, st.segment_index, pid,
+                st.f_start, st.f_end,
+                [t for t, _, _ in conflicts],
+            )
+            continue
+
+        if (
+            len(kept_fragments) == 1
+            and kept_fragments[0] == (st.f_start, st.f_end)
+        ):
+            # No actual change (shouldn't happen given conflicts != []).
+            out.append(st)
+            continue
+
+        # Emit one sub-track per kept fragment.
+        for frag_idx, (frag_lo, frag_hi) in enumerate(kept_fragments):
+            out.append(SubTrackCandidate(
+                parent_track_id=st.parent_track_id,
+                # Use a derived segment_index that stays unique across
+                # the rally: hash original segment + fragment offset
+                # into a small range. Synthetic_track_id depends on
+                # segment_index, so it must be unique per emitted
+                # sub-track for the same parent.
+                segment_index=st.segment_index * 10 + frag_idx,
+                f_start=frag_lo,
+                f_end=frag_hi,
+                appearance_stats=st.appearance_stats,
+                aggregated_argmax_pid=pid,
+            ))
+            if (frag_lo, frag_hi) != (st.f_start, st.f_end):
+                logger.info(
+                    "within_rally_repair %s: sub-track parent=%d seg=%d "
+                    "pid=%d clipped from [%d, %d] to [%d, %d] (yielded "
+                    "to overlapping tracks with same pid)",
+                    rally_id[:8] if rally_id else "?",
+                    st.parent_track_id, st.segment_index, pid,
+                    st.f_start, st.f_end, frag_lo, frag_hi,
+                )
+
+    return out
