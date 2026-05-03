@@ -593,25 +593,83 @@ export async function extractVideoSegmentFromLocal(
 }
 
 /**
+ * Invalidate matcher caches keyed on this rally's old track-ID space.
+ *
+ * Anything that mutates `PlayerTrack.positionsJson` or
+ * `PlayerTrack.primaryTrackIds` in a way that changes the track-ID set
+ * or the per-frame track-ID-to-physical-player mapping must call this.
+ * Specifically:
+ *   - Re-tracking (saveTrackingResult): brand-new BoT-SORT IDs.
+ *   - Manual swap (swapPlayerTracks): per-frame ID swap from a frame on.
+ *   - Manual promote (promoteRawTrack): replaces a track's positions
+ *     with another's from a frame on.
+ *
+ * Cleared:
+ *   - PlayerTrack.preRemapStateJson  (snapshot used by remap-track-ids
+ *     as the idempotency anchor; references the old positions verbatim)
+ *   - Video.matchAnalysisJson.rallies[<rally>].appliedFullMapping
+ *   - Video.matchAnalysisJson.rallies[<rally>].remapApplied
+ *   - Video.matchAnalysisJson.rallies[<rally>].assignmentAnchor
+ *   - Video.canonicalPidMapJson (rally-keyed; references the old
+ *     per-rally mapping the matcher derived)
+ *
+ * Without this, the next match-players + remap-track-ids cycle reads
+ * stale snapshots / mappings and silently corrupts positions_json —
+ * the same Pattern E shape fixed in remap_track_ids.py
+ * (see `pattern_e_corruption_2026_05_03.md`).
+ *
+ * Other rallies' state on Video.matchAnalysisJson is left untouched.
+ */
+async function invalidateMatcherCachesForRally(
+  tx: PrismaTransaction,
+  rallyId: string,
+  videoId: string,
+): Promise<void> {
+  await tx.playerTrack.updateMany({
+    where: { rallyId },
+    data: { preRemapStateJson: Prisma.JsonNull },
+  });
+
+  const video = await tx.video.findUnique({
+    where: { id: videoId },
+    select: { matchAnalysisJson: true, canonicalPidMapJson: true },
+  });
+  if (!video) return;
+
+  let dirty = false;
+  let updatedMa: { rallies?: Array<Record<string, unknown>> } | undefined;
+  if (video.matchAnalysisJson) {
+    const ma = video.matchAnalysisJson as { rallies?: Array<Record<string, unknown>> };
+    for (const entry of ma.rallies ?? []) {
+      if (entry.rallyId === rallyId) {
+        if ('appliedFullMapping' in entry) { delete entry.appliedFullMapping; dirty = true; }
+        if ('remapApplied' in entry) { delete entry.remapApplied; dirty = true; }
+        if ('assignmentAnchor' in entry) { delete entry.assignmentAnchor; dirty = true; }
+      }
+    }
+    updatedMa = ma;
+  }
+
+  const canonicalNeedsClear = video.canonicalPidMapJson != null;
+  if (dirty || canonicalNeedsClear) {
+    await tx.video.update({
+      where: { id: videoId },
+      data: {
+        ...(dirty && updatedMa
+          ? { matchAnalysisJson: updatedMa as unknown as Prisma.InputJsonValue }
+          : {}),
+        ...(canonicalNeedsClear ? { canonicalPidMapJson: Prisma.JsonNull } : {}),
+      },
+    });
+  }
+}
+
+/**
  * Save tracking results to the database.
  * Shared by single-rally sync tracking and batch tracking.
  *
- * Track IDs change when (re)tracking, so any matcher state keyed on the
- * previous run's track IDs is now stale. This function clears them
- * atomically with the new tracking write so the next match-players +
- * remap-track-ids cycle starts from a clean baseline:
- *
- *   - PlayerTrack.preRemapStateJson  (snapshot of pre-remap state used by
- *     remap-track-ids as the idempotency anchor; references old track IDs)
- *   - Video.matchAnalysisJson.rallies[<this rally>].appliedFullMapping
- *   - Video.matchAnalysisJson.rallies[<this rally>].remapApplied
- *   - Video.matchAnalysisJson.rallies[<this rally>].assignmentAnchor
- *   - Video.canonicalPidMapJson (rally-keyed; entries reference dead IDs)
- *
- * Without this invalidation, retrack can leave positions_json out of sync
- * with the matcher snapshot, and the next remap operates on stale data —
- * the same shape as the Pattern E corruption fixed in remap_track_ids.py.
- * See `pattern_e_corruption_2026_05_03.md` in the analysis memory dir.
+ * Calls `invalidateMatcherCachesForRally` because every (re)track changes
+ * the track-ID set.
  */
 export async function saveTrackingResult(
   rallyId: string,
@@ -665,36 +723,10 @@ export async function saveTrackingResult(
         modelVersion: 'yolo11s',
         completedAt: new Date(),
         error: null,
-        preRemapStateJson: Prisma.JsonNull,
       },
     });
 
-    // Strip stale matcher caches keyed on old track IDs.
-    const video = await tx.video.findUnique({
-      where: { id: videoId },
-      select: { matchAnalysisJson: true, canonicalPidMapJson: true },
-    });
-    if (video?.matchAnalysisJson) {
-      const ma = video.matchAnalysisJson as { rallies?: Array<Record<string, unknown>> };
-      let dirty = false;
-      for (const entry of ma.rallies ?? []) {
-        if (entry.rallyId === rallyId) {
-          if ('appliedFullMapping' in entry) { delete entry.appliedFullMapping; dirty = true; }
-          if ('remapApplied' in entry) { delete entry.remapApplied; dirty = true; }
-          if ('assignmentAnchor' in entry) { delete entry.assignmentAnchor; dirty = true; }
-        }
-      }
-      const canonicalNeedsClear = video.canonicalPidMapJson != null;
-      if (dirty || canonicalNeedsClear) {
-        await tx.video.update({
-          where: { id: videoId },
-          data: {
-            ...(dirty ? { matchAnalysisJson: ma as unknown as Prisma.InputJsonValue } : {}),
-            ...(canonicalNeedsClear ? { canonicalPidMapJson: Prisma.JsonNull } : {}),
-          },
-        });
-      }
-    }
+    await invalidateMatcherCachesForRally(tx, rallyId, videoId);
   });
 
   // Auto-populate Rally.servingTeam from detected serve team
@@ -925,9 +957,12 @@ export async function swapPlayerTracks(
     }
   }
 
-  await prisma.playerTrack.update({
-    where: { rallyId },
-    data: { positionsJson: positions as unknown as object[] },
+  await prisma.$transaction(async (tx) => {
+    await tx.playerTrack.update({
+      where: { rallyId },
+      data: { positionsJson: positions as unknown as object[] },
+    });
+    await invalidateMatcherCachesForRally(tx, rallyId, rally.video.id);
   });
 
   console.log(`[PLAYER_TRACK] Swapped tracks ${trackA} ↔ ${trackB} from frame ${fromFrame}: ${swappedCount} positions updated`);
@@ -1018,11 +1053,14 @@ export async function promoteRawTrack(
   updatedPositions.sort((a, b) => a.frameNumber - b.frameNumber);
 
   // primaryTrackIds stays the same — we kept the demoted track's ID
-  await prisma.playerTrack.update({
-    where: { rallyId },
-    data: {
-      positionsJson: updatedPositions as unknown as object[],
-    },
+  await prisma.$transaction(async (tx) => {
+    await tx.playerTrack.update({
+      where: { rallyId },
+      data: {
+        positionsJson: updatedPositions as unknown as object[],
+      },
+    });
+    await invalidateMatcherCachesForRally(tx, rallyId, rally.video.id);
   });
 
   console.log(`[PLAYER_TRACK] Promoted raw track ${promoteTrackId} → primary slot ${demoteTrackId} from frame ${fromFrame}: ${promotedPositions.length} positions replaced`);
