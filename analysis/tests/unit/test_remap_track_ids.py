@@ -12,11 +12,13 @@ from rallycut.cli.commands.remap_track_ids import (
     _capture_snapshot,
     _deepcopy_json,
     _invert_mapping,
+    _load_canonical_per_rally,
     _remap_actions,
     _remap_contacts,
     _remap_positions,
     _should_reverse,
 )
+from rallycut.tracking.match_tracker import MATCHER_VERSION
 
 
 class TestInvertMapping:
@@ -314,6 +316,81 @@ class TestRemapIdempotent:
         # Fresh data should remain as-is (identity mapping applied = no change)
         assert [p["trackId"] for p in fresh_positions] == [1, 2, 3, 4]
         assert fresh_primary == [1, 2, 3, 4]
+
+
+class TestLoadCanonicalPerRally:
+    """`_load_canonical_per_rally` must invalidate stale-version canonical
+    maps so a `MATCHER_VERSION` bump auto-clears the cache. Mirrors the
+    assignmentAnchor stale-version pattern (commit `2df8af4`)."""
+
+    def test_none_input_returns_empty(self) -> None:
+        out, stale = _load_canonical_per_rally(None)
+        assert out == {}
+        assert stale is None
+
+    def test_empty_dict_returns_empty(self) -> None:
+        out, stale = _load_canonical_per_rally({})
+        assert out == {}
+        assert stale is None
+
+    def test_current_version_loads_normally(self) -> None:
+        payload = {
+            "version": 1,
+            "matcherVersion": MATCHER_VERSION,
+            "rallies": {
+                "rid-a": {"1": 2, "2": 1, "3": 4, "4": 3},
+                "rid-b": {"1": 1, "2": 2, "3": 3, "4": 4},
+            },
+        }
+        out, stale = _load_canonical_per_rally(payload)
+        assert stale is None
+        assert out == {
+            "rid-a": {1: 2, 2: 1, 3: 4, 4: 3},
+            "rid-b": {1: 1, 2: 2, 3: 3, 4: 4},
+        }
+
+    def test_stale_version_invalidates(self) -> None:
+        payload = {
+            "version": 1,
+            "matcherVersion": "v0-ancient",
+            "rallies": {"rid-a": {"1": 2, "2": 1}},
+        }
+        out, stale = _load_canonical_per_rally(payload)
+        assert out == {}
+        assert stale == "v0-ancient"
+
+    def test_missing_version_with_data_treated_as_stale(self) -> None:
+        """Pre-2026-05-03 canonical maps lack matcherVersion. Treat them
+        as stale so the next remap-track-ids run falls through to the
+        fresh trackToPlayer instead of trusting a possibly-wrong override."""
+        payload = {
+            "version": 1,
+            "rallies": {"rid-a": {"1": 2}},
+        }
+        out, stale = _load_canonical_per_rally(payload)
+        assert out == {}
+        assert stale == "<unset>"
+
+    def test_missing_version_without_data_is_noop(self) -> None:
+        """No rallies entries → nothing to load AND nothing to warn about."""
+        payload = {"version": 1, "rallies": {}}
+        out, stale = _load_canonical_per_rally(payload)
+        assert out == {}
+        assert stale is None
+
+    def test_skips_empty_rally_entries(self) -> None:
+        payload = {
+            "version": 1,
+            "matcherVersion": MATCHER_VERSION,
+            "rallies": {
+                "rid-a": {"1": 2},
+                "rid-b": {},          # empty mapping → skipped
+                "": {"1": 1},         # empty rally id → skipped
+            },
+        }
+        out, stale = _load_canonical_per_rally(payload)
+        assert stale is None
+        assert out == {"rid-a": {1: 2}}
 
 
 class TestSnapshotIdempotent:

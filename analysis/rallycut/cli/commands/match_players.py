@@ -76,7 +76,17 @@ def _canonical_pid_map_payload(
     sha — Phase 5's invalidation can compare without re-fetching the crops.
     Hashing the tuples (not the JPEG bytes) costs zero S3 reads and is
     sufficient because the tuple uniquely identifies the crop content.
+
+    `matcherVersion` records the matcher logic version that produced this
+    map. The remap-track-ids read path invalidates entries with stale
+    versions so a `MATCHER_VERSION` bump auto-clears the canonical cache —
+    mirrors the assignmentAnchor invalidation pattern (see
+    `phase2_assignment_anchor_SHIPPED_2026_05_01` memory). Without this,
+    a code change that affects matcher behavior would still let the
+    canonical map override the new decision via `appliedFullMapping`.
     """
+    from rallycut.tracking.match_tracker import MATCHER_VERSION
+
     sortable = sorted(
         (
             (
@@ -92,6 +102,7 @@ def _canonical_pid_map_payload(
     return {
         "version": CANONICAL_PID_MAP_VERSION,
         "sourceRefCropsSha": sha,
+        "matcherVersion": MATCHER_VERSION,
         "rallies": {
             rid: {str(tid): pid for tid, pid in rally_map.items()}
             for rid, rally_map in canonical_map.items()
@@ -778,7 +789,8 @@ def match_players(
         # an uncertain assignment. Hash is only populated for the blind
         # branch — ref-crop runs leave it empty and no anchor is written.
         from rallycut.tracking.match_tracker import (
-            ANCHOR_MIN_CONFIDENCE, MATCHER_VERSION,
+            ANCHOR_MIN_CONFIDENCE,
+            MATCHER_VERSION,
         )
         ts_hash = match_result.track_stats_hashes.get(rally.rally_id)
         confidence_ok = result.assignment_confidence >= ANCHOR_MIN_CONFIDENCE

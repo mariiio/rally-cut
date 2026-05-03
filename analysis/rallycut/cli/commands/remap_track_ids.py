@@ -432,6 +432,49 @@ def _deepcopy_json(value: Any) -> Any:
     return json.loads(json.dumps(value))
 
 
+def _load_canonical_per_rally(
+    canonical_pid_map_json: dict[str, Any] | None,
+) -> tuple[dict[str, dict[int, int]], str | None]:
+    """Parse `canonical_pid_map_json` into per-rally mappings, with a
+    stale-version invalidation gate.
+
+    When `matcherVersion` on the persisted map doesn't match the current
+    `MATCHER_VERSION` constant, the map was written by older matcher logic
+    and any decisions it overrides could be wrong relative to today's
+    matcher. We treat the whole map as absent and let downstream callers
+    fall through to `trackToPlayer` (recomputed every match-players run).
+
+    Returns:
+        ``(canonical_per_rally, stale_version_str_or_none)``.
+        - ``canonical_per_rally`` maps rally_id → {track_id: pid}; empty
+          when the map is absent OR stale OR has no usable rallies.
+        - ``stale_version_str_or_none`` is the version string from the
+          persisted map when it differs from current ``MATCHER_VERSION``;
+          callers can surface it to the user as a warning. ``None``
+          otherwise.
+    """
+    out: dict[str, dict[int, int]] = {}
+    if not isinstance(canonical_pid_map_json, dict):
+        return out, None
+
+    # Lazy import: match_tracker pulls heavy deps; keep CLI import lean.
+    from rallycut.tracking.match_tracker import MATCHER_VERSION
+
+    persisted_version = canonical_pid_map_json.get("matcherVersion")
+    # `matcherVersion` is missing on canonical maps written before its
+    # introduction (2026-05-03). Pre-existing maps could have been
+    # produced by any matcher version, so we treat them as stale too.
+    if persisted_version is not None and persisted_version != MATCHER_VERSION:
+        return out, str(persisted_version)
+    if persisted_version is None and canonical_pid_map_json.get("rallies"):
+        return out, "<unset>"
+
+    for rid_c, m in canonical_pid_map_json.get("rallies", {}).items():
+        if rid_c and m:
+            out[rid_c] = {int(k): int(v) for k, v in m.items()}
+    return out, None
+
+
 @handle_errors
 def remap_track_ids_cmd(
     video_id: str = typer.Argument(
@@ -501,11 +544,21 @@ def remap_track_ids_cmd(
     # into one and prevents the legacy Hungarian permutation from drifting
     # the displayed pid badge across re-runs after the user has uploaded
     # ref crops.
-    canonical_per_rally: dict[str, dict[int, int]] = {}
-    if isinstance(canonical_pid_map_json, dict):
-        for rid_c, m in canonical_pid_map_json.get("rallies", {}).items():
-            if rid_c and m:
-                canonical_per_rally[rid_c] = {int(k): int(v) for k, v in m.items()}
+    #
+    # Stale-version invalidation handled by `_load_canonical_per_rally`:
+    # if `matcherVersion` on the persisted map doesn't match the current
+    # `MATCHER_VERSION` constant, the map was written by older matcher
+    # logic and we treat it as absent — falling through to `trackToPlayer`.
+    canonical_per_rally, stale_version = _load_canonical_per_rally(
+        canonical_pid_map_json,
+    )
+    if stale_version is not None and not quiet:
+        console.print(
+            f"  [yellow]canonical_pid_map_json was written by "
+            f"matcherVersion={stale_version!r} (current matcher version "
+            f"differs); ignoring stale entries and falling through to "
+            f"trackToPlayer.[/yellow]"
+        )
 
     # Build per-rally track→player mappings and index rally entries.
     # Source priority: canonical_per_rally → matchAnalysisJson.trackToPlayer.

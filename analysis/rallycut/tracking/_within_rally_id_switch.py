@@ -227,7 +227,7 @@ def _detect_split_candidates(
             if not left or not right:
                 continue
             cross = [
-                _pairwise_cost(l.stats, r.stats) for l in left for r in right
+                _pairwise_cost(lw.stats, rw.stats) for lw in left for rw in right
             ]
             if not cross:
                 continue
