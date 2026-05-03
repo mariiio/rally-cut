@@ -58,10 +58,9 @@ if TYPE_CHECKING:
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.crop_guided_identity import IdentityAnchors
     from rallycut.tracking.player_tracker import PlayerPosition
-    from rallycut.tracking.reid_dinov2 import DinoV2ReIDModel
     from rallycut.tracking.reid_general import GeneralReIDModel
 
-    ReIDModel = GeneralReIDModel | DinoV2ReIDModel
+    ReIDModel = GeneralReIDModel
 
 logger = logging.getLogger(__name__)
 

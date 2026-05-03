@@ -177,23 +177,15 @@ def main() -> None:
     offdiag_b = [cm_b[i, j] for i in range(len(pids)) for j in range(len(pids)) if i != j]
     print(f"    OFF-DIAG: min={min(offdiag_b):.3f} mean={sum(offdiag_b)/len(offdiag_b):.3f} max={max(offdiag_b):.3f}")
 
-    # ===== (c) DINOv2 ViT-L/14 (1024-dim, frozen) =====
-    print("\n=== (c) DINOv2 ViT-L/14 (1024-dim, frozen) ===")
-    from rallycut.tracking.reid_dinov2 import DinoV2ReIDModel
-    m_dino = DinoV2ReIDModel(backbone="dinov2_vitl14")
-    emb_c = m_dino.extract_embeddings(crop_list)
-    cm_c = _cos_matrix(emb_c)
-    print(f"    PIDs: {pids}")
-    for i, pid_a in enumerate(pids):
-        print(f"    PID{pid_a}: " + "  ".join(f"{cm_c[i, j]:+.3f}" for j in range(len(pids))))
-    offdiag_c = [cm_c[i, j] for i in range(len(pids)) for j in range(len(pids)) if i != j]
-    print(f"    OFF-DIAG: min={min(offdiag_c):.3f} mean={sum(offdiag_c)/len(offdiag_c):.3f} max={max(offdiag_c):.3f}")
-
+    # (c) DINOv2 alternative removed 2026-05-03; per
+    # `dormant_flag_audit_2026_05_03.md` it benchmarked WORSE than
+    # fine-tuned OSNet on this task (mean off-diagonal cosine 0.70
+    # vs 0.05). The probe's two-backbone comparison is sufficient to
+    # judge OSNet's projection-head behavior.
     print("\n=== INTERPRETATION ===")
     print("  Lower OFF-DIAG = better discrimination between different players.")
     print("  If (a) much higher than (b): the projection head is destroying signal.")
-    print("  If (a) and (b) both high but (c) low: OSNet is wrong; switch to DINOv2.")
-    print("  If all three high: bbox/background is dominating the embeddings.")
+    print("  If both high: bbox/background is dominating the embeddings.")
 
 
 if __name__ == "__main__":
