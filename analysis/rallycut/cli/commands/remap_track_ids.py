@@ -654,13 +654,20 @@ def remap_track_ids_cmd(
         if write_snapshot:
             changes["pre_remap_state_json"] = json.dumps(snapshot_payload)
 
-        # Check if mapping is all identity AND there are no sub-track
-        # overrides (which always force a remap). Clear stale
-        # appliedFullMapping/remapApplied so they don't trigger spurious
-        # reversals on future runs (e.g. after re-tracking).
+        # Identity mapping means no track ID rewriting is needed. Skip the
+        # remap-and-rewrite work, but STILL record `appliedFullMapping` +
+        # `remapApplied` (Step 4 below) so a future match-players run can
+        # see "this rally has been processed; positions are in PID space"
+        # rather than mistaking it for raw BoT-SORT output and looping back
+        # into corruption. `_should_reverse(pos_dicts, applied)` already
+        # gates reverse-remap on the current track-ID set matching the
+        # applied mapping's values, so an identity entry carrying forward
+        # is a no-op (its inverse is identity).
         if not any(k != v for k, v in mapping.items()) and not sub_track_overrides:
-            rally_entry.pop("appliedFullMapping", None)
-            rally_entry.pop("remapApplied", None)
+            rally_entry["appliedFullMapping"] = {
+                str(k): v for k, v in mapping.items()
+            }
+            rally_entry["remapApplied"] = True
             if changes:
                 updates.append((pt_id, changes))
             if not quiet:
