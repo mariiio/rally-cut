@@ -1,0 +1,470 @@
+"""Appearance-based within-rally ID-switch detector (Phase 1, split-only).
+
+Targets the same failure pattern as `_slow_drift_split` but uses appearance
+consistency over time as the trigger signal instead of position drift.
+Robust on cases where position shift is borderline (sub-threshold for the
+drift detector) but appearance changes dramatically — which happens when
+BoT-SORT loses a player during occlusion and continues the track on a
+different physical player whose position happens to be similar.
+
+Algorithm:
+  1. Split each post-MatchSolver primary track into N=3 contiguous time
+     windows.
+  2. Compute per-window appearance features via the same aggregation
+     the matcher uses (`extract_rally_appearances`).
+  3. For each track, compute pairwise appearance distance between its
+     windows. The track is a SPLIT CANDIDATE when the max inter-window
+     cost exceeds a RELATIVE gate: `k * median(inter-track-cost)`.
+     Relative (not absolute) so the gate adapts to videos with similar
+     vs distinct uniforms.
+  4. For each candidate, find the changepoint window boundary that
+     maximizes the inter-group cost (W0|W1+W2 or W0+W1|W2). Bisect at
+     the boundary frame.
+  5. Re-Hungarian: each half's appearance features are scored against
+     the OTHER tracks' whole-track features; each half is assigned the
+     lowest-cost PID consistent with the constraint that distinct
+     halves of one parent can't both keep the parent's original PID
+     (the parent is being split because its appearance is inconsistent).
+  6. Emit `SubTrackCandidate` for the half that gets re-assigned;
+     parent keeps the unchanged half via the existing per-frame override
+     resolver.
+
+Default OFF behind `ENABLE_WITHIN_RALLY_REPAIR=1`. Phase 1 is
+split-only — it doesn't merge sub-tracks back across track boundaries.
+That's Phase 2 work; without it, a duplicate-track BoT-SORT failure
+(cyan-shirt re-acquired as a new track ID after occlusion) won't fully
+collapse to one PID — but the matcher's per-track decisions on the
+clean halves should still be more accurate than on the contaminated
+whole-track features.
+"""
+from __future__ import annotations
+
+import logging
+import os
+from collections import defaultdict
+from dataclasses import dataclass
+from itertools import combinations
+from typing import TYPE_CHECKING, Any
+
+import numpy as np
+
+from rallycut.tracking._subtrack import SubTrackCandidate
+from rallycut.tracking.match_tracker import extract_rally_appearances
+from rallycut.tracking.player_features import (
+    TrackAppearanceStats,
+    compute_track_similarity,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from rallycut.tracking.player_tracker import PlayerPosition
+
+logger = logging.getLogger(__name__)
+
+ENV_FLAG = "ENABLE_WITHIN_RALLY_REPAIR"
+
+# Number of contiguous windows per track. Three is the minimum that
+# permits both "switch in W2" and "switch in W0" detection without
+# blowing up the per-track feature-extraction cost.
+NUM_WINDOWS = 3
+
+# Minimum samples per window for the gate to fire. Below this the
+# appearance features are too noisy to trust.
+MIN_SAMPLES_PER_WINDOW = 8
+
+# Relative gate: a track is a split candidate when its max inter-window
+# cost exceeds `RELATIVE_GATE_K * median(inter-track-cost)`. Picked at
+# 0.95 from the 09553ef1 probe (`probe_within_rally_appearance_split.py`):
+# the suspect track scored 0.491 / 0.420 = 1.17 (above gate); borderline
+# tracks scored 0.50–0.54 (below gate). Conservative — favors no-action
+# on ambiguous cases.
+RELATIVE_GATE_K = 0.95
+
+# ReID blend used for cost computation. Mirrors MatchSolver's default.
+REID_BLEND = 0.5
+
+
+def is_enabled() -> bool:
+    return os.environ.get(ENV_FLAG, "0") == "1"
+
+
+@dataclass
+class _WindowStats:
+    track_id: int
+    window_idx: int
+    f_start: int
+    f_end: int
+    n_frames: int
+    stats: TrackAppearanceStats
+
+
+def _build_windows(
+    positions: list[PlayerPosition],
+    track_id: int,
+    n_windows: int = NUM_WINDOWS,
+) -> list[list[PlayerPosition]] | None:
+    """Split a track's positions into N contiguous time windows.
+
+    Returns None when the track has too few samples to support N
+    windows of MIN_SAMPLES_PER_WINDOW each.
+    """
+    pts = sorted(
+        (p for p in positions if int(p.track_id) == track_id),
+        key=lambda q: q.frame_number,
+    )
+    if len(pts) < n_windows * MIN_SAMPLES_PER_WINDOW:
+        return None
+    window_size = len(pts) // n_windows
+    windows: list[list[PlayerPosition]] = []
+    for i in range(n_windows):
+        start = i * window_size
+        end = start + window_size if i < n_windows - 1 else len(pts)
+        windows.append(pts[start:end])
+    return windows
+
+
+def _extract_window_stats(
+    track_id: int,
+    windows: list[list[PlayerPosition]],
+    *,
+    video_path: Path,
+    rally_start_ms: int,
+    rally_end_ms: int,
+    reid_model: Any,
+) -> list[_WindowStats]:
+    """Extract per-window appearance stats via the canonical aggregator.
+
+    Calls `extract_rally_appearances` once per window, restricted to
+    this track's frames in that window. Reuses the matcher's medoid
+    aggregation so the resulting cost numbers are directly comparable
+    to the cross-rally Hungarian's costs.
+    """
+    out: list[_WindowStats] = []
+    for w_idx, w_positions in enumerate(windows):
+        if len(w_positions) < MIN_SAMPLES_PER_WINDOW:
+            continue
+        ts = extract_rally_appearances(
+            video_path=video_path,
+            positions=w_positions,
+            primary_track_ids=[track_id],
+            start_ms=rally_start_ms,
+            end_ms=rally_end_ms,
+            num_samples=min(12, len(w_positions)),
+            extract_reid=reid_model is not None,
+            reid_model=reid_model,
+        )
+        if track_id not in ts:
+            continue
+        out.append(_WindowStats(
+            track_id=track_id,
+            window_idx=w_idx,
+            f_start=int(w_positions[0].frame_number),
+            f_end=int(w_positions[-1].frame_number),
+            n_frames=len(w_positions),
+            stats=ts[track_id],
+        ))
+    return out
+
+
+def _pairwise_cost(stats_a: TrackAppearanceStats, stats_b: TrackAppearanceStats) -> float:
+    return float(compute_track_similarity(stats_a, stats_b, reid_blend=REID_BLEND))
+
+
+def _detect_split_candidates(
+    by_track_windows: dict[int, list[_WindowStats]],
+) -> dict[int, tuple[float, int]]:
+    """Return {track_id: (intra_max_cost, changepoint_window_idx)} for
+    tracks whose intra-window cost exceeds the relative gate.
+
+    The gate is `RELATIVE_GATE_K * median(inter-track cost)` — relative
+    so it adapts to per-video discriminability. The changepoint window
+    is the boundary index (1 means "split between W0 and W1+W2"; 2
+    means "split between W0+W1 and W2") that MAXIMIZES inter-group
+    distance — picks the most informative split.
+    """
+    # Inter-track baseline: median cost across all distinct (track,track)
+    # window pairs (one window per track to keep weights uniform).
+    track_ids = sorted(by_track_windows.keys())
+    if len(track_ids) < 2:
+        return {}
+    inter_costs: list[float] = []
+    for tid_a, tid_b in combinations(track_ids, 2):
+        for ws_a in by_track_windows[tid_a]:
+            for ws_b in by_track_windows[tid_b]:
+                inter_costs.append(_pairwise_cost(ws_a.stats, ws_b.stats))
+    if not inter_costs:
+        return {}
+    inter_median = float(np.median(inter_costs))
+    gate = RELATIVE_GATE_K * inter_median
+
+    candidates: dict[int, tuple[float, int]] = {}
+    for tid, windows in by_track_windows.items():
+        if len(windows) < NUM_WINDOWS:
+            continue
+        # Intra-window pairwise costs.
+        intra: dict[tuple[int, int], float] = {}
+        for ws_a, ws_b in combinations(windows, 2):
+            c = _pairwise_cost(ws_a.stats, ws_b.stats)
+            intra[(ws_a.window_idx, ws_b.window_idx)] = c
+        intra_max = max(intra.values()) if intra else 0.0
+        if intra_max < gate:
+            logger.debug(
+                "within_rally_repair: T%d intra_max=%.3f < gate=%.3f "
+                "(median inter=%.3f) — skip",
+                tid, intra_max, gate, inter_median,
+            )
+            continue
+        # Find changepoint that maximizes inter-group distance.
+        # For NUM_WINDOWS=3 there are 2 binary splits: {W0}|{W1,W2}
+        # and {W0,W1}|{W2}. Pick the one with the larger inter-group
+        # cost (mean of all cross-group window-pair costs).
+        best_split = -1
+        best_inter_group = -1.0
+        for boundary in range(1, NUM_WINDOWS):
+            left = [w for w in windows if w.window_idx < boundary]
+            right = [w for w in windows if w.window_idx >= boundary]
+            if not left or not right:
+                continue
+            cross = [
+                _pairwise_cost(l.stats, r.stats) for l in left for r in right
+            ]
+            if not cross:
+                continue
+            mean_cross = float(np.mean(cross))
+            if mean_cross > best_inter_group:
+                best_inter_group = mean_cross
+                best_split = boundary
+        if best_split < 0:
+            continue
+        logger.info(
+            "within_rally_repair: T%d split candidate — intra_max=%.3f "
+            "(gate=%.3f, median inter=%.3f), changepoint at window %d "
+            "(inter-group=%.3f)",
+            tid, intra_max, gate, inter_median, best_split, best_inter_group,
+        )
+        candidates[tid] = (intra_max, best_split)
+    return candidates
+
+
+def _reassign_split_halves(
+    parent_tid: int,
+    parent_pid: int,
+    first_half_stats: TrackAppearanceStats,
+    second_half_stats: TrackAppearanceStats,
+    other_track_pids: dict[int, int],
+    other_track_stats: dict[int, TrackAppearanceStats],
+) -> tuple[int, int] | None:
+    """Decide which PID each half of the parent track should take.
+
+    Strategy: compute appearance distance from each half to every other
+    PID's whole-track features. The half closer to the parent's
+    original PID keeps it; the other half gets the second-closest
+    available PID — but only if the second-closest is strictly closer
+    than the parent's PID (otherwise the split would degrade matcher
+    quality and we should reject it).
+
+    Returns (first_half_pid, second_half_pid) or None when no safe
+    re-assignment exists.
+    """
+    if not other_track_stats:
+        return None
+    # Sanity gate: halves must actually differ from each other. Without
+    # this, two visually-identical halves (caller mis-flagged) would
+    # still produce (parent, other) re-assignment — corrupting an
+    # otherwise-correct track. Threshold matches the gate margin used
+    # in `_detect_split_candidates`.
+    inter_half = _pairwise_cost(first_half_stats, second_half_stats)
+    if inter_half < 1e-3:
+        return None
+    # Compute distances from each half to every other track's features.
+    first_dists = {
+        other_tid: _pairwise_cost(first_half_stats, ts)
+        for other_tid, ts in other_track_stats.items()
+    }
+    second_dists = {
+        other_tid: _pairwise_cost(second_half_stats, ts)
+        for other_tid, ts in other_track_stats.items()
+    }
+    # Best other-track for each half.
+    first_best_other = min(first_dists, key=first_dists.__getitem__)
+    second_best_other = min(second_dists, key=second_dists.__getitem__)
+
+    # Determine which half "owns" the parent PID (the one less similar
+    # to other PIDs — i.e., more distinctive in the parent's cluster).
+    first_min_other = first_dists[first_best_other]
+    second_min_other = second_dists[second_best_other]
+    first_half_pid: int | None
+    second_half_pid: int | None
+    if first_min_other >= second_min_other:
+        # First half is more distinctive vs others → keep parent PID.
+        # Second half should re-assign to its closest other-track's PID.
+        first_half_pid = parent_pid
+        second_half_pid = other_track_pids.get(second_best_other)
+    else:
+        first_half_pid = other_track_pids.get(first_best_other)
+        second_half_pid = parent_pid
+
+    if first_half_pid is None or second_half_pid is None:
+        return None
+    if first_half_pid == second_half_pid:
+        # Both halves prefer the same PID — nothing to gain by splitting.
+        return None
+    return first_half_pid, second_half_pid
+
+
+def maybe_emit_within_rally_split(
+    *,
+    rally_id: str,
+    video_path: Path,
+    rally_start_ms: int,
+    rally_end_ms: int,
+    positions: list[PlayerPosition],
+    track_to_player: dict[int, int],
+    reid_model: Any,
+) -> list[SubTrackCandidate] | None:
+    """Detect within-rally ID switches by appearance and emit split
+    sub-tracks. Returns a list of TWO sub-tracks per affected parent
+    (first half + second half). Empty when no track triggers the gate.
+
+    No-op when `ENABLE_WITHIN_RALLY_REPAIR=1` is unset.
+    """
+    if not is_enabled():
+        return None
+    if not track_to_player:
+        return None
+
+    # Build per-track windows.
+    by_track_windows: dict[int, list[_WindowStats]] = {}
+    track_pids = {int(k): int(v) for k, v in track_to_player.items() if int(k) > 0}
+    for tid in track_pids:
+        windows = _build_windows(positions, tid)
+        if windows is None:
+            continue
+        ws = _extract_window_stats(
+            tid, windows,
+            video_path=video_path,
+            rally_start_ms=rally_start_ms,
+            rally_end_ms=rally_end_ms,
+            reid_model=reid_model,
+        )
+        if len(ws) == NUM_WINDOWS:
+            by_track_windows[tid] = ws
+
+    if len(by_track_windows) < 2:
+        return None
+
+    candidates = _detect_split_candidates(by_track_windows)
+    if not candidates:
+        return None
+
+    # Build whole-track stats for the OTHER tracks (used as PID profiles
+    # for the re-assignment Hungarian).
+    other_track_whole_stats: dict[int, TrackAppearanceStats] = {}
+    by_track_positions: dict[int, list[PlayerPosition]] = defaultdict(list)
+    for p in positions:
+        if int(p.track_id) > 0:
+            by_track_positions[int(p.track_id)].append(p)
+    for tid in track_pids:
+        if tid in candidates:
+            continue
+        pts = by_track_positions.get(tid, [])
+        if len(pts) < MIN_SAMPLES_PER_WINDOW:
+            continue
+        ts = extract_rally_appearances(
+            video_path=video_path,
+            positions=pts,
+            primary_track_ids=[tid],
+            start_ms=rally_start_ms,
+            end_ms=rally_end_ms,
+            num_samples=12,
+            extract_reid=reid_model is not None,
+            reid_model=reid_model,
+        )
+        if tid in ts:
+            other_track_whole_stats[tid] = ts[tid]
+
+    emitted: list[SubTrackCandidate] = []
+    for tid, (_intra_max, boundary) in candidates.items():
+        ws_list = by_track_windows[tid]
+        first_half_windows = [w for w in ws_list if w.window_idx < boundary]
+        second_half_windows = [w for w in ws_list if w.window_idx >= boundary]
+        if not first_half_windows or not second_half_windows:
+            continue
+        # Aggregate halves: re-extract with the union of frames in each
+        # half so the half-stats reflect the canonical aggregation over
+        # the full half (not just one window).
+        first_pos = [
+            p for p in by_track_positions[tid]
+            if first_half_windows[0].f_start <= p.frame_number
+            <= first_half_windows[-1].f_end
+        ]
+        second_pos = [
+            p for p in by_track_positions[tid]
+            if second_half_windows[0].f_start <= p.frame_number
+            <= second_half_windows[-1].f_end
+        ]
+        first_ts = extract_rally_appearances(
+            video_path=video_path, positions=first_pos,
+            primary_track_ids=[tid],
+            start_ms=rally_start_ms, end_ms=rally_end_ms,
+            num_samples=12,
+            extract_reid=reid_model is not None, reid_model=reid_model,
+        )
+        second_ts = extract_rally_appearances(
+            video_path=video_path, positions=second_pos,
+            primary_track_ids=[tid],
+            start_ms=rally_start_ms, end_ms=rally_end_ms,
+            num_samples=12,
+            extract_reid=reid_model is not None, reid_model=reid_model,
+        )
+        if tid not in first_ts or tid not in second_ts:
+            continue
+
+        reassign = _reassign_split_halves(
+            parent_tid=tid,
+            parent_pid=track_pids[tid],
+            first_half_stats=first_ts[tid],
+            second_half_stats=second_ts[tid],
+            other_track_pids={
+                ot: track_pids[ot] for ot in other_track_whole_stats
+            },
+            other_track_stats=other_track_whole_stats,
+        )
+        if reassign is None:
+            logger.info(
+                "within_rally_repair: T%d split rejected — no safe "
+                "re-assignment found",
+                tid,
+            )
+            continue
+        first_pid, second_pid = reassign
+
+        f_start = int(by_track_positions[tid][0].frame_number)
+        boundary_frame = int(first_half_windows[-1].f_end)
+        f_end = int(by_track_positions[tid][-1].frame_number)
+
+        emitted.append(SubTrackCandidate(
+            parent_track_id=tid,
+            segment_index=0,
+            f_start=f_start,
+            f_end=boundary_frame,
+            appearance_stats=first_ts[tid],
+            aggregated_argmax_pid=first_pid,
+        ))
+        emitted.append(SubTrackCandidate(
+            parent_track_id=tid,
+            segment_index=1,
+            f_start=boundary_frame + 1,
+            f_end=f_end,
+            appearance_stats=second_ts[tid],
+            aggregated_argmax_pid=second_pid,
+        ))
+        logger.info(
+            "within_rally_repair %s: T%d split at frame %d → "
+            "first_half→PID%d, second_half→PID%d (was PID%d)",
+            rally_id[:8] if rally_id else "?", tid, boundary_frame,
+            first_pid, second_pid, track_pids[tid],
+        )
+
+    return emitted or None

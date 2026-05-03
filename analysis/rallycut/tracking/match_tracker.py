@@ -3951,6 +3951,51 @@ def match_players_across_rallies(
                     n_emitted,
                 )
 
+    # Within-rally appearance-based ID-switch detector (Phase 1, 2026-05-03).
+    # Detects within-rally identity drift via per-track appearance
+    # consistency: split each track into 3 windows, flag when intra-
+    # window cost exceeds RELATIVE_GATE_K × median(inter-track cost).
+    # Robust on cases where position shift is borderline but appearance
+    # changes dramatically (BoT-SORT continuing a track on a different
+    # physical player after occlusion). Default OFF; enable via
+    # ENABLE_WITHIN_RALLY_REPAIR=1.
+    #
+    # Runs AFTER both the frozen-profiles and blind paths so it applies
+    # uniformly — slow-drift's blind-only placement is a known limitation.
+    from rallycut.tracking import _within_rally_id_switch as _wris
+    if _wris.is_enabled():
+        logger.info(
+            "within_rally_repair: scanning %d rallies "
+            "(ENABLE_WITHIN_RALLY_REPAIR=1)",
+            len(rallies),
+        )
+        n_wris_emitted = 0
+        for i, (rally, r) in enumerate(zip(rallies, results)):
+            overrides = _wris.maybe_emit_within_rally_split(
+                rally_id=rally.rally_id,
+                video_path=video_path,
+                rally_start_ms=rally.start_ms,
+                rally_end_ms=rally.end_ms,
+                positions=rally.positions,
+                track_to_player=r.track_to_player,
+                reid_model=reid_model,
+            )
+            if not overrides:
+                continue
+            for ov in overrides:
+                r.sub_tracks.append(ov)
+                if ov.aggregated_argmax_pid is not None:
+                    r.track_to_player[ov.synthetic_track_id] = (
+                        ov.aggregated_argmax_pid
+                    )
+            n_wris_emitted += 1
+        if n_wris_emitted:
+            logger.info(
+                "within_rally_repair: emitted split sub-tracks "
+                "for %d rallies",
+                n_wris_emitted,
+            )
+
     # Build team templates from canonical-aware positional team membership.
     # Each diagnostic carries the per-rally `track_court_sides` produced by
     # `_classify_track_sides`; pairing with each rally's `track_to_player`
