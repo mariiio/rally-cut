@@ -512,6 +512,14 @@ class StoredRallyData:
     # persisted by ``to_dict`` — solver runs in-memory only on the blind
     # path; relabel-with-crops replay never sees this field.
     late_positions: dict[int, tuple[float, float]] = field(default_factory=dict)
+    # Upstream tracking-pipeline team labels: track_id -> 0 (near) / 1 (far),
+    # computed by `compute_court_split` / `classify_teams` from bbox-size
+    # clustering. Independent of the y-position and bbox-height side
+    # signals computed inside this module — used as a 3rd vote by the
+    # multi-signal team-pair partition determination in MatchSolver
+    # (`_propose_team_partitions`). Empty dict when upstream couldn't
+    # produce assignments.
+    team_assignments: dict[int, int] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the replay-relevant subset to a JSON-compatible dict.
@@ -1070,6 +1078,7 @@ class MatchPlayerTracker:
             sides_from_calibration=self._sides_from_calibration,
             sides_by_bbox=sides_by_bbox,
             late_positions=late_positions,
+            team_assignments=dict(team_assignments) if team_assignments else {},
         ))
 
         return RallyTrackingResult(
@@ -3388,7 +3397,14 @@ ANCHOR_MIN_CONFIDENCE = 0.50
 #   "v2" — 2026-05-02: bumped after `70ba038` (team-partitioned seed
 #          Y-sort + medoid ReID aggregation) and the matcher_version
 #          mechanism itself shipped. Old "v1" anchors invalidate on read.
-MATCHER_VERSION = "v2"
+#   "v3" — 2026-05-03: multi-signal team-pair partition determination.
+#          Replaces unanimity gate with candidate-partition enumeration
+#          (each side signal proposes its own 2v2; cost-decided
+#          Hungarian picks the lowest). Fixes silent partition violations
+#          on rallies where y-side and bbox-side disagreed even on a
+#          single track. Old "v2" anchors invalidate on read so the
+#          fix actually takes effect on previously-anchored rallies.
+MATCHER_VERSION = "v3"
 
 
 def replay_refine_from_scratchpad(

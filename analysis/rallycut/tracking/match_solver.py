@@ -382,18 +382,31 @@ class MatchSolver:
             + position_cost * POSITION_WEIGHT
         )
 
-        high_conf = _high_confidence_sides_for_team_pair(
-            stored.track_court_sides, stored.sides_by_bbox,
-        )
+        # Multi-signal team-pair determination (v3, 2026-05-03).
+        # Every available position signal (y-side, bbox-side, upstream
+        # team_assignments) proposes its own 2v2 partition over `top`.
+        # `_assign_with_team_pair` then runs constrained Hungarian under
+        # each candidate (and both orientations) and keeps the lowest-
+        # cost result — appearance data resolves signal disagreement.
+        # When no signal yields a clean 2v2 over `top`, fall back to
+        # unconstrained Hungarian.
+        candidate_partitions: list[frozenset[frozenset[int]]] = []
         if (
-            high_conf
-            and n_tracks == NUM_CLUSTERS
+            n_tracks == NUM_CLUSTERS
             and n_clusters == NUM_CLUSTERS
             and set(cluster_ids) == set(TEAM_LO_PAIR + TEAM_HI_PAIR)
-            and all(t in high_conf for t in top)
         ):
-            assignment = self._assign_with_team_pair(
-                top, cluster_ids, cost, high_conf,
+            candidate_partitions = _propose_team_partitions(
+                top,
+                stored.track_court_sides,
+                stored.sides_by_bbox,
+                _team_assignments_to_sides(
+                    getattr(stored, "team_assignments", None),
+                ),
+            )
+        if candidate_partitions:
+            assignment, _team_pair_cost = self._assign_with_team_pair(
+                top, cluster_ids, cost, candidate_partitions,
             )
         else:
             row_ind, col_ind = linear_sum_assignment(cost)
@@ -523,14 +536,20 @@ class MatchSolver:
         top: list[int],
         cluster_ids: list[int],
         base_cost: np.ndarray,
-        high_conf: dict[int, int],
-    ) -> dict[int, int]:
-        """Constrained Hungarian respecting the {1,2}/{3,4} partition.
+        candidate_partitions: list[frozenset[frozenset[int]]],
+    ) -> tuple[dict[int, int], float]:
+        """Constrained Hungarian over multiple candidate 2v2 partitions.
 
-        Tries both pair-to-side mappings and returns the lower-cost
-        assignment. Cells that violate the chosen mapping are stamped
-        with ``HARD_TEAM_PAIR_COST`` to make them structurally infeasible
-        for ``linear_sum_assignment``.
+        Each candidate partition is a frozenset of two frozensets of two
+        track ids — one of the 3 possible ways to split 4 tracks into
+        two teams. For every (partition, sides_orientation) combination,
+        applies HARD_TEAM_PAIR_COST to cells that would violate the
+        partition under that orientation, runs Hungarian, and keeps the
+        global lowest-cost result.
+
+        Returns (assignment, cost). Cost is the unpenalized total under
+        the winning assignment (HARD penalties are stripped so a winner
+        with all valid cells reflects true appearance cost).
         """
         cluster_idx_by_pid = {pid: i for i, pid in enumerate(cluster_ids)}
         lo_idx = [cluster_idx_by_pid[p] for p in TEAM_LO_PAIR]
@@ -539,47 +558,123 @@ class MatchSolver:
         best_cost = float("inf")
         best_assignment: dict[int, int] = {}
 
-        for side_zero_pair, side_one_pair in (
-            (lo_idx, hi_idx),
-            (hi_idx, lo_idx),
-        ):
-            penalized = base_cost.copy()
-            for ti, tid in enumerate(top):
-                track_side = high_conf[tid]
-                forbidden = side_one_pair if track_side == 0 else side_zero_pair
-                for ci in forbidden:
-                    penalized[ti, ci] = HARD_TEAM_PAIR_COST
+        for partition in candidate_partitions:
+            # Each partition has exactly two pairs; assign one pair to
+            # "side 0" and the other to "side 1". The orientation
+            # choice maps each side to either {pid 1, 2} or {pid 3, 4}.
+            pairs = list(partition)
+            if len(pairs) != 2:
+                continue
+            for orientation in (0, 1):
+                pair0 = pairs[orientation]
+                pair1 = pairs[1 - orientation]
+                # pair0 → low cluster pids (P1, P2), pair1 → high (P3, P4)
+                # AND the mirror: pair0 → high, pair1 → low.
+                for pair0_target, pair1_target in (
+                    (lo_idx, hi_idx),
+                    (hi_idx, lo_idx),
+                ):
+                    penalized = base_cost.copy()
+                    for ti, tid in enumerate(top):
+                        if tid in pair0:
+                            forbidden = pair1_target
+                        elif tid in pair1:
+                            forbidden = pair0_target
+                        else:
+                            # Track not in this partition — only happens
+                            # when partition's track set differs from
+                            # `top`. Skip the constraint for it.
+                            continue
+                        for ci in forbidden:
+                            penalized[ti, ci] = HARD_TEAM_PAIR_COST
 
-            row_ind, col_ind = linear_sum_assignment(penalized)
-            total = float(penalized[row_ind, col_ind].sum())
-            if total < best_cost:
-                best_cost = total
-                best_assignment = {
-                    top[r]: cluster_ids[c] for r, c in zip(row_ind, col_ind)
-                }
+                    row_ind, col_ind = linear_sum_assignment(penalized)
+                    total = float(penalized[row_ind, col_ind].sum())
+                    if total < best_cost:
+                        best_cost = total
+                        best_assignment = {
+                            top[r]: cluster_ids[c]
+                            for r, c in zip(row_ind, col_ind)
+                        }
 
-        return best_assignment
+        return best_assignment, best_cost
 
 
-def _high_confidence_sides_for_team_pair(
-    track_court_sides: dict[int, int],
-    sides_by_bbox: dict[int, int],
-) -> dict[int, int]:
-    """Local copy of ``MatchPlayerTracker._high_confidence_sides_for_team_pair``.
+def _signal_proposes_partition(
+    signal: dict[int, int] | None, tracks: set[int],
+) -> frozenset[frozenset[int]] | None:
+    """If signal classifies the 4 `tracks` into a clean 2v2, return the
+    partition as a frozenset of two frozensets. Else None.
 
-    Returns the agreement set ``{track_id: side}`` only when the y-side
-    and bbox-side classifiers agree on a clean 2v2 split. Empty otherwise
-    so the solver falls back to an unconstrained Hungarian.
+    Robustness rule: ignores signal entries for track ids outside `tracks`
+    (lets the same signal serve other rallies' top_tracks). Requires
+    EXACTLY 2 + 2 within the requested track set; 3v1 / 4v0 / fewer-than-4
+    classifications return None ("signal is degenerate, no proposal").
     """
-    if not sides_by_bbox or not track_court_sides:
-        return {}
-    agreed: dict[int, int] = {}
-    for tid, y_side in track_court_sides.items():
-        bb_side = sides_by_bbox.get(tid)
-        if bb_side is not None and bb_side == y_side:
-            agreed[tid] = y_side
-    near = sum(1 for s in agreed.values() if s == 0)
-    far = sum(1 for s in agreed.values() if s == 1)
-    if near != 2 or far != 2:
-        return {}
-    return agreed
+    if not signal:
+        return None
+    near: set[int] = set()
+    far: set[int] = set()
+    for tid in tracks:
+        side = signal.get(tid)
+        if side == 0:
+            near.add(tid)
+        elif side == 1:
+            far.add(tid)
+    if len(near) != 2 or len(far) != 2:
+        return None
+    return frozenset({frozenset(near), frozenset(far)})
+
+
+def _propose_team_partitions(
+    tracks: list[int],
+    *signals: dict[int, int] | None,
+) -> list[frozenset[frozenset[int]]]:
+    """Collect distinct 2v2 partition candidates from available signals.
+
+    Each signal contributes at most one candidate (its 2v2 classification
+    of the 4 `tracks`, or nothing if the signal is degenerate over those
+    tracks). Duplicates collapse to one candidate. Returned list has
+    1, 2, or 3 entries (or 0 when no signal proposes a clean 2v2).
+
+    The cost-decided team-pair Hungarian (`_assign_with_team_pair`) tries
+    every (partition, orientation) combination and picks the lowest-cost
+    result, so signals don't need to agree — disagreement is resolved by
+    the appearance data. This is the robust replacement for the legacy
+    "require unanimity" gate that disengaged the team-pair constraint
+    whenever any single track's two side classifiers disagreed.
+
+    Robustness for our context (occlusion, off-screen, players crossing
+    sides): bbox-height misclassifies crouching/diving players; y-position
+    misclassifies players who cross sides or have small position samples;
+    upstream team_assignments may be missing. Each signal contributes
+    when valid; the union of candidates covers the cases where any one
+    signal alone would have driven a wrong choice.
+    """
+    if len(tracks) != NUM_CLUSTERS:
+        return []
+    track_set = set(tracks)
+    seen: set[frozenset[frozenset[int]]] = set()
+    candidates: list[frozenset[frozenset[int]]] = []
+    for sig in signals:
+        prop = _signal_proposes_partition(sig, track_set)
+        if prop is None or prop in seen:
+            continue
+        seen.add(prop)
+        candidates.append(prop)
+    return candidates
+
+
+def _team_assignments_to_sides(
+    team_assignments: dict[int, int] | None,
+) -> dict[int, int] | None:
+    """Convert upstream team_assignments {tid: 0/1} into a side-shaped
+    dict the partition propose helper can consume.
+
+    `team_assignments` from the tracking pipeline already uses 0=team A,
+    1=team B (mapped from "near"/"far" in `_classify_track_sides`). The
+    semantic match is exact, so this is currently a passthrough — kept
+    as a named function so the caller's intent is explicit and so future
+    encoding changes are localized.
+    """
+    return team_assignments

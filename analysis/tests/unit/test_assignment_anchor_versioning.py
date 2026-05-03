@@ -134,5 +134,12 @@ class TestMatcherVersionConstant:
         # anchors written without the field — which we treat as stale —
         # would conflict if anyone manually wrote {"matcherVersion": "v1"}.
         # Bumping past "v1" makes the contract: "no version field" or
-        # "matcherVersion=v1" both invalidate.
-        assert MATCHER_VERSION != "v1"
+        # "matcherVersion=v1" both invalidate. Same logic extends to all
+        # historical published versions — once the constant moves on, any
+        # anchor pinned by a prior version's logic must invalidate.
+        for legacy in ("v1", "v2"):
+            assert MATCHER_VERSION != legacy, (
+                f"MATCHER_VERSION must differ from prior published "
+                f"value {legacy!r} so anchors written by that version's "
+                f"matcher logic invalidate on read."
+            )
