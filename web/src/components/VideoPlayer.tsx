@@ -167,16 +167,43 @@ export function VideoPlayer() {
     return findRallyAtTime(sortedRallies, currentTime);
   }, [rallies, sortedRallies, currentTime, selectedRallyId]);
 
-  // Compute player number mapping (trackId → display number 1-4) for primary tracks
+  // Compute player number mapping (trackId → display PID 1-4) for primary tracks.
+  // Per-track priority:
+  //   1. matcher's trackToPlayer (post-remap identity OR pre-remap Hungarian)
+  //   2. appliedFullMapping (preserved Hungarian when trackToPlayer was collapsed to identity)
+  //   3. positional sort (final fallback for rallies that haven't been match-analyzed)
   const labelingPlayerNumbers = useMemo(() => {
     if (!currentRally?._backendId) return undefined;
     const trackData = playerTracks[currentRally._backendId]?.tracksJson;
     if (!trackData?.tracks?.length) return undefined;
-    const sorted = [...trackData.tracks].sort((a, b) => a.trackId - b.trackId);
+
+    const analysis = activeMatchId ? matchAnalysis[activeMatchId] : undefined;
+    const rallyEntry = rallyMatchEntry(analysis, currentRally._backendId);
+    const ttp = rallyEntry?.trackToPlayer;
+    const afm = rallyEntry?.appliedFullMapping;
+    const hasMatcherMapping =
+      (ttp && Object.keys(ttp).length > 0) ||
+      (afm && Object.keys(afm).length > 0);
+
     const map = new Map<number, number>();
-    sorted.forEach((t, i) => map.set(t.trackId, i + 1));
+    if (hasMatcherMapping) {
+      for (const t of trackData.tracks) {
+        const fromTtp = ttp?.[String(t.trackId)];
+        if (typeof fromTtp === 'number' && Number.isFinite(fromTtp)) {
+          map.set(t.trackId, fromTtp);
+          continue;
+        }
+        const fromAfm = afm?.[String(t.trackId)];
+        if (typeof fromAfm === 'number' && Number.isFinite(fromAfm)) {
+          map.set(t.trackId, fromAfm);
+        }
+      }
+    } else {
+      const sorted = [...trackData.tracks].sort((a, b) => a.trackId - b.trackId);
+      sorted.forEach((t, i) => map.set(t.trackId, i + 1));
+    }
     return map;
-  }, [currentRally, playerTracks]);
+  }, [currentRally, playerTracks, activeMatchId, matchAnalysis]);
 
   // Match stats for landing overlay. Refreshes on activeMatchId change AND
   // on `match-analysis-updated` events so the landing-zone overlay reflects
