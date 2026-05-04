@@ -285,7 +285,7 @@ export function PlayerMatchingDialog({ open, videoId, onClose }: PlayerMatchingD
         // Override with existing GT if available. GT is bbox-keyed; we
         // fetch each rally's current positions in parallel and IoU-resolve
         // the labels to the current track ids the dialog uses internally.
-        if (existingGt) {
+        if (existingGt?.rallies) {
           const entries = Object.entries(existingGt.rallies);
           await Promise.all(
             entries.map(async ([rid]) => {
