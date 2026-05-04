@@ -13,10 +13,21 @@
 # This script is the bulk version of `eval_cross_fixture.sh` minus the
 # GT-measurement step (so it works on videos without GT labels).
 #
+# Pending-edit contract: per `api/CLAUDE.md`, rally edits queue markers in
+# `Video.pendingAnalysisEditsJson` and the API service `runMatchAnalysis`
+# consumes them via `consumePendingEdits` before re-running stages. This
+# CLI path bypasses that. To prevent silent stale state (editor showing
+# extended bounds while DB AFM reflects pre-extend), the script aborts if
+# the video has un-consumed `extend|create|merge|refCrop` edits — those
+# need the full pipeline (retrack + repair-identities + reattribute) and
+# cannot be applied here. CLI-safe edits (scalar/shorten/delete/split)
+# are cleared after a successful refresh.
+#
 # Usage:
 #   scripts/refresh_videos.sh <video_id> [<video_id> ...]
 #   scripts/refresh_videos.sh --all-with-gt
 #   scripts/refresh_videos.sh --measure-gt <video_id> ...    # also run measure_pid_accuracy
+#   scripts/refresh_videos.sh --skip-pending-check <video_id>  # bypass the pending-edits gate (dangerous)
 set -euo pipefail
 
 usage() {
@@ -27,11 +38,13 @@ usage() {
 MEASURE_GT=0
 VIDEO_IDS=()
 USE_GT_VIDEOS=0
+SKIP_PENDING_CHECK=0
 for arg in "$@"; do
     case "$arg" in
         --help|-h) usage ;;
         --measure-gt) MEASURE_GT=1 ;;
         --all-with-gt) USE_GT_VIDEOS=1 ;;
+        --skip-pending-check) SKIP_PENDING_CHECK=1 ;;
         *) VIDEO_IDS+=("$arg") ;;
     esac
 done
@@ -64,14 +77,29 @@ for vid in "${VIDEO_IDS[@]}"; do
     short=${vid:0:8}
     echo "==================== ${short} ===================="
 
+    if [ "$SKIP_PENDING_CHECK" != "1" ]; then
+        echo "[${short}] Checking pendingAnalysisEditsJson..."
+        if ! uv run python scripts/check_and_consume_pending_edits.py --check "$vid"; then
+            echo ""
+            echo "[${short}] ABORTING: pending edits require the full match-analysis pipeline."
+            echo "Use --skip-pending-check to override (will leave queue un-consumed)."
+            exit 1
+        fi
+    fi
+
     echo "[${short}] Resetting matcher state..."
     uv run python scripts/reset_matcher_state.py "$vid"
 
-    echo "[${short}] Running match-players..."
-    uv run rallycut match-players "$vid"
+    echo "[${short}] Running match-players (blind, --no-ref-crops)..."
+    uv run rallycut match-players --no-ref-crops "$vid"
 
     echo "[${short}] Running remap-track-ids..."
     uv run rallycut remap-track-ids "$vid"
+
+    if [ "$SKIP_PENDING_CHECK" != "1" ]; then
+        echo "[${short}] Consuming CLI-safe pending edits..."
+        uv run python scripts/check_and_consume_pending_edits.py --consume "$vid" || true
+    fi
 
     if [ "$MEASURE_GT" = "1" ]; then
         echo "[${short}] Measuring PID accuracy (requires GT)..."

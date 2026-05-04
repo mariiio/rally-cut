@@ -2175,3 +2175,219 @@ class TestReplayFromScratchpad:
             for b, s in zip(baseline_replay, swapped_replay)
         )
         assert any_diff, "swapped profiles should change at least one rally"
+
+
+class TestIdentityFirstPartialPass:
+    """Bug D fix: gallery-anchored re-assignment for partial-cardinality
+    rallies (N<4 primary tracks). Default OFF — flag-gated.
+    """
+
+    @staticmethod
+    def _profile(
+        pid: int,
+        upper_hue: float,
+        lower_hue: float,
+        skin_h: float = 20.0,
+    ) -> PlayerAppearanceProfile:
+        """Build a per-PID gallery profile with a distinctive HS signature."""
+        upper = _make_histogram(upper_hue, 200.0)
+        lower = _make_histogram(lower_hue, 200.0)
+        return PlayerAppearanceProfile(
+            player_id=pid,
+            team=0 if pid in (1, 2) else 1,
+            rally_count=4,
+            avg_upper_hist=upper,
+            avg_lower_hist=lower,
+            avg_upper_v_hist=_make_v_histogram(180.0),
+            avg_lower_v_hist=_make_v_histogram(180.0),
+            avg_skin_tone_hsv=(skin_h, 150.0, 180.0),
+            avg_dominant_color_hsv=(lower_hue, 200.0, 180.0),
+            upper_hist_count=4, lower_hist_count=4,
+            upper_v_hist_count=4, lower_v_hist_count=4,
+            skin_sample_count=4, dominant_color_count=4,
+        )
+
+    @staticmethod
+    def _build(
+        gallery: dict[int, PlayerAppearanceProfile],
+        rally_top_tracks: list[int],
+        rally_track_stats: dict[int, TrackAppearanceStats],
+        track_to_player: dict[int, int],
+        court_sides: dict[int, int] | None = None,
+    ) -> tuple[MatchPlayerTracker, list[RallyTrackingResult]]:
+        tracker = MatchPlayerTracker()
+        tracker.state.players = dict(gallery)
+        tracker.stored_rally_data.append(
+            StoredRallyData(
+                track_stats=dict(rally_track_stats),
+                track_court_sides=court_sides or {},
+                early_positions={},
+                top_tracks=list(rally_top_tracks),
+            )
+        )
+        results = [RallyTrackingResult(
+            rally_index=0,
+            track_to_player=dict(track_to_player),
+            server_player_id=None,
+            side_switch_detected=False,
+            assignment_confidence=0.5,
+        )]
+        return tracker, results
+
+    def test_disabled_by_default_flag(self) -> None:
+        """Default OFF — partial rally is left unchanged."""
+        gallery = {
+            1: self._profile(1, upper_hue=10.0, lower_hue=50.0),
+            2: self._profile(2, upper_hue=30.0, lower_hue=70.0),
+            3: self._profile(3, upper_hue=120.0, lower_hue=140.0),
+            4: self._profile(4, upper_hue=160.0, lower_hue=20.0),
+        }
+        stats = {
+            10: _make_stats(10, upper_hue=10.0, lower_hue=50.0),
+            11: _make_stats(11, upper_hue=120.0, lower_hue=140.0),
+            12: _make_stats(12, upper_hue=160.0, lower_hue=20.0),
+        }
+        tracker, results = self._build(gallery, [10, 11, 12], stats,
+                                       {10: 2, 11: 1, 12: 3})
+        out = tracker._identity_first_partial_pass(results)
+        assert out[0].track_to_player == {10: 2, 11: 1, 12: 3}
+
+    def test_enabled_corrects_partial_via_gallery(
+        self, monkeypatch: Any,
+    ) -> None:
+        """When enabled, a 3-track rally with mismatched AFM is re-identified
+        from the gallery — visible tracks get their gallery-best PIDs and
+        the missing PID slot is left out of the result.
+        """
+        monkeypatch.setattr(
+            "rallycut.tracking.match_tracker.ENABLE_IDENTITY_FIRST_PARTIAL",
+            True,
+        )
+        gallery = {
+            1: self._profile(1, upper_hue=10.0, lower_hue=50.0),
+            2: self._profile(2, upper_hue=30.0, lower_hue=70.0),
+            3: self._profile(3, upper_hue=120.0, lower_hue=140.0),
+            4: self._profile(4, upper_hue=160.0, lower_hue=20.0),
+        }
+        stats = {
+            10: _make_stats(10, upper_hue=10.0, lower_hue=50.0),
+            11: _make_stats(11, upper_hue=120.0, lower_hue=140.0),
+            12: _make_stats(12, upper_hue=160.0, lower_hue=20.0),
+        }
+        tracker, results = self._build(gallery, [10, 11, 12], stats,
+                                       {10: 2, 11: 1, 12: 3})
+        out = tracker._identity_first_partial_pass(results)
+        afm = out[0].track_to_player
+        assert afm == {10: 1, 11: 3, 12: 4}, f"got {afm}"
+        assert 2 not in afm.values()
+
+    def test_full_rally_unchanged(self, monkeypatch: Any) -> None:
+        """4-track rally is NOT touched even when flag is on."""
+        monkeypatch.setattr(
+            "rallycut.tracking.match_tracker.ENABLE_IDENTITY_FIRST_PARTIAL",
+            True,
+        )
+        gallery = {
+            1: self._profile(1, upper_hue=10.0, lower_hue=50.0),
+            2: self._profile(2, upper_hue=30.0, lower_hue=70.0),
+            3: self._profile(3, upper_hue=120.0, lower_hue=140.0),
+            4: self._profile(4, upper_hue=160.0, lower_hue=20.0),
+        }
+        stats = {
+            10: _make_stats(10, upper_hue=10.0, lower_hue=50.0),
+            11: _make_stats(11, upper_hue=30.0, lower_hue=70.0),
+            12: _make_stats(12, upper_hue=120.0, lower_hue=140.0),
+            13: _make_stats(13, upper_hue=160.0, lower_hue=20.0),
+        }
+        tracker, results = self._build(
+            gallery, [10, 11, 12, 13], stats,
+            {10: 1, 11: 2, 12: 3, 13: 4},
+        )
+        out = tracker._identity_first_partial_pass(results)
+        assert out[0].track_to_player == {10: 1, 11: 2, 12: 3, 13: 4}
+
+    def test_frozen_player_ids_blocks(self, monkeypatch: Any) -> None:
+        monkeypatch.setattr(
+            "rallycut.tracking.match_tracker.ENABLE_IDENTITY_FIRST_PARTIAL",
+            True,
+        )
+        gallery = {
+            1: self._profile(1, upper_hue=10.0, lower_hue=50.0),
+            2: self._profile(2, upper_hue=30.0, lower_hue=70.0),
+            3: self._profile(3, upper_hue=120.0, lower_hue=140.0),
+            4: self._profile(4, upper_hue=160.0, lower_hue=20.0),
+        }
+        stats = {
+            10: _make_stats(10, upper_hue=10.0, lower_hue=50.0),
+            11: _make_stats(11, upper_hue=120.0, lower_hue=140.0),
+            12: _make_stats(12, upper_hue=160.0, lower_hue=20.0),
+        }
+        tracker, results = self._build(gallery, [10, 11, 12], stats,
+                                       {10: 2, 11: 1, 12: 3})
+        tracker.frozen_player_ids = {1, 2, 3, 4}
+        out = tracker._identity_first_partial_pass(results)
+        assert out[0].track_to_player == {10: 2, 11: 1, 12: 3}
+
+    def test_incomplete_gallery_blocks(self, monkeypatch: Any) -> None:
+        monkeypatch.setattr(
+            "rallycut.tracking.match_tracker.ENABLE_IDENTITY_FIRST_PARTIAL",
+            True,
+        )
+        gallery = {
+            1: self._profile(1, upper_hue=10.0, lower_hue=50.0),
+            2: self._profile(2, upper_hue=30.0, lower_hue=70.0),
+            3: self._profile(3, upper_hue=120.0, lower_hue=140.0),
+        }
+        stats = {
+            10: _make_stats(10, upper_hue=10.0, lower_hue=50.0),
+            11: _make_stats(11, upper_hue=120.0, lower_hue=140.0),
+            12: _make_stats(12, upper_hue=160.0, lower_hue=20.0),
+        }
+        tracker, results = self._build(gallery, [10, 11, 12], stats,
+                                       {10: 2, 11: 1, 12: 3})
+        out = tracker._identity_first_partial_pass(results)
+        assert out[0].track_to_player == {10: 2, 11: 1, 12: 3}
+
+    def test_two_track_rally_handled(self, monkeypatch: Any) -> None:
+        """N=2 — 2 visible tracks get gallery-best PIDs."""
+        monkeypatch.setattr(
+            "rallycut.tracking.match_tracker.ENABLE_IDENTITY_FIRST_PARTIAL",
+            True,
+        )
+        gallery = {
+            1: self._profile(1, upper_hue=10.0, lower_hue=50.0),
+            2: self._profile(2, upper_hue=30.0, lower_hue=70.0),
+            3: self._profile(3, upper_hue=120.0, lower_hue=140.0),
+            4: self._profile(4, upper_hue=160.0, lower_hue=20.0),
+        }
+        stats = {
+            10: _make_stats(10, upper_hue=10.0, lower_hue=50.0),
+            11: _make_stats(11, upper_hue=120.0, lower_hue=140.0),
+        }
+        tracker, results = self._build(gallery, [10, 11], stats,
+                                       {10: 3, 11: 4})
+        out = tracker._identity_first_partial_pass(results)
+        afm = out[0].track_to_player
+        assert afm == {10: 1, 11: 3}
+        assert len(afm) == 2
+
+    def test_no_change_when_already_correct(self, monkeypatch: Any) -> None:
+        monkeypatch.setattr(
+            "rallycut.tracking.match_tracker.ENABLE_IDENTITY_FIRST_PARTIAL",
+            True,
+        )
+        gallery = {
+            1: self._profile(1, upper_hue=10.0, lower_hue=50.0),
+            2: self._profile(2, upper_hue=30.0, lower_hue=70.0),
+            3: self._profile(3, upper_hue=120.0, lower_hue=140.0),
+            4: self._profile(4, upper_hue=160.0, lower_hue=20.0),
+        }
+        stats = {
+            10: _make_stats(10, upper_hue=10.0, lower_hue=50.0),
+            11: _make_stats(11, upper_hue=120.0, lower_hue=140.0),
+            12: _make_stats(12, upper_hue=160.0, lower_hue=20.0),
+        }
+        tracker, results = self._build(gallery, [10, 11, 12], stats,
+                                       {10: 1, 11: 3, 12: 4})
+        out = tracker._identity_first_partial_pass(results)
+        assert out[0].track_to_player == {10: 1, 11: 3, 12: 4}

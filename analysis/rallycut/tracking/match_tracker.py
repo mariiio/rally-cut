@@ -105,6 +105,30 @@ MIN_PROFILE_UPDATE_CONFIDENCE = 0.80
 # heavy sand background).
 REID_BLEND = float(os.environ.get("MATCH_SOLVER_REID_BLEND", "0.50"))
 
+# Identity-first matching for partial-cardinality rallies (Bug D, 2026-05-04).
+# When a rally has fewer than 4 primary tracks (e.g., near-side server
+# physically occludes the partner the entire rally), the existing path's
+# formation-seed Y-sort + side-penalty can misassign the visible tracks'
+# PIDs because the partition is degenerate (1v2 instead of 2v2). The
+# identity-first path skips formation/side bias and identifies each
+# visible track by appearance similarity to the cross-rally per-PID
+# gallery profiles (`self.state.players`). Output is a sparse
+# track→PID mapping; the missing PID slots are explicitly empty.
+#
+# Default OFF. Validation precedent: Layer 1 LORO on 4 GT fixtures was
+# 97.8% (44/45), with 7/7 side-switch rallies correct — confirms the
+# gallery primitive is sound and side-switch invariant. Flag stays OFF
+# until visual validation on dd042609 r13/r18 + GT-fixture PERMUTED
+# baselines hold.
+ENABLE_IDENTITY_FIRST_PARTIAL = (
+    os.environ.get("ENABLE_IDENTITY_FIRST_MATCHING", "0") == "1"
+)
+# Minimum anchor rallies needed in the video before we trust the gallery
+# enough to use it for partial-rally identity. Below this we fall back to
+# the existing path (which may be wrong for partial cardinality, but at
+# least doesn't depend on a sparse gallery).
+IDENTITY_FIRST_MIN_ANCHORS = 3
+
 # Minimum margin (second_best - best ReID cost) to trust the ReID signal
 # for a given track. When the margin is small, all players look similar
 # to the track → ReID isn't discriminative → fall back to HSV only.
@@ -2619,6 +2643,133 @@ class MatchPlayerTracker:
         ]
         return new_results
 
+    def _identity_first_partial_pass(
+        self,
+        results: list[RallyTrackingResult],
+    ) -> list[RallyTrackingResult]:
+        """Bug D fix (2026-05-04): gallery-anchored re-assignment for
+        rallies with fewer than 4 primary tracks (partial cardinality).
+
+        Triggers per-rally only when N<4 primary tracks. For each visible
+        track, computes appearance distance against every per-PID profile
+        in `self.state.players` (the cross-rally gallery), then runs a
+        rectangular Hungarian over [N tracks × 4 PIDs]. Output is a
+        sparse track→PID mapping; the 4-N PIDs the matcher cannot
+        identify in this rally are explicitly absent from the result.
+
+        Why this is needed: when a near-side server physically occludes
+        their partner for the entire rally, only 3 tracks reach the
+        primary-tracks filter. The default 4×4 path's formation-seed
+        Y-sort produces a degenerate 1v2 partition; the side-penalty
+        and position-continuity costs then bias the visible 3 tracks'
+        assignments away from gallery-best. Identity-first removes both
+        biases — every visible track is identified by its cross-rally
+        appearance signature alone.
+
+        Conservative gates:
+        - Flag enabled (`ENABLE_IDENTITY_FIRST_MATCHING=1`).
+        - Rally has 1 ≤ N < 4 primary tracks with track_stats.
+        - At least IDENTITY_FIRST_MIN_ANCHORS (3) per-PID profiles in
+          state.players, each with valid appearance features.
+        - frozen_player_ids is empty (ref-crop labels are authoritative).
+
+        When any gate fails the rally falls through unchanged.
+        """
+        if not ENABLE_IDENTITY_FIRST_PARTIAL:
+            return results
+        if self.frozen_player_ids:
+            return results
+        if len(self.state.players) < IDENTITY_FIRST_MIN_ANCHORS:
+            return results
+        # All 4 PIDs must be present in the gallery for a valid
+        # rectangular Hungarian. Sparse galleries (e.g., only PIDs 1+2
+        # learned so far in a 2-rally bootstrap) can't safely identify
+        # which of the 4 the visible tracks are.
+        gallery_pids = sorted(self.state.players.keys())
+        if gallery_pids != [1, 2, 3, 4]:
+            return results
+
+        if len(self.stored_rally_data) != len(results):
+            return results
+
+        new_results: list[RallyTrackingResult] = []
+        changes = 0
+        for i, (data, result) in enumerate(
+            zip(self.stored_rally_data, results)
+        ):
+            top = [t for t in data.top_tracks if t in data.track_stats]
+            if not (1 <= len(top) < 4):
+                new_results.append(result)
+                continue
+
+            # Build cost matrix [N tracks × 4 PIDs]. HSV+ReID blend mirrors
+            # `_assign_tracks_to_players_global` (production primitive),
+            # but without side-penalty or position-continuity — pure
+            # appearance-against-gallery.
+            n_tracks = len(top)
+            n_pids = 4
+            cost_matrix = np.full((n_tracks, n_pids), 1.0, dtype=np.float32)
+            for ti, tid in enumerate(top):
+                stats = data.track_stats[tid]
+                for pj, pid in enumerate(gallery_pids):
+                    profile = self.state.players[pid]
+                    hsv_cost = compute_appearance_similarity(profile, stats)
+                    track_emb = stats.reid_embedding
+                    profile_emb = profile.reid_embedding
+                    if (
+                        track_emb is not None
+                        and profile_emb is not None
+                        and profile_emb.shape == track_emb.shape
+                    ):
+                        reid_cost = 1.0 - float(np.dot(profile_emb, track_emb))
+                        appearance_cost = (
+                            reid_cost * REID_BLEND
+                            + hsv_cost * (1 - REID_BLEND)
+                        )
+                    else:
+                        appearance_cost = hsv_cost
+                    cost_matrix[ti, pj] = appearance_cost
+
+            row_ind, col_ind = linear_sum_assignment(cost_matrix)
+            new_track_to_player: dict[int, int] = {}
+            for r, c in zip(row_ind, col_ind):
+                if r < n_tracks and c < n_pids:
+                    new_track_to_player[top[r]] = gallery_pids[c]
+
+            if new_track_to_player == result.track_to_player:
+                new_results.append(result)
+                continue
+
+            # Recompute confidence under the new assignment.
+            confidence = self._compute_assignment_confidence(
+                data.track_stats, new_track_to_player,
+            )
+            logger.info(
+                "Identity-first partial pass: rally %d N=%d top=%s "
+                "old=%s new=%s conf=%.2f",
+                i, n_tracks, top, result.track_to_player,
+                new_track_to_player, confidence,
+            )
+            new_results.append(RallyTrackingResult(
+                rally_index=result.rally_index,
+                track_to_player=new_track_to_player,
+                server_player_id=result.server_player_id,
+                side_switch_detected=result.side_switch_detected,
+                assignment_confidence=confidence,
+                sub_tracks=result.sub_tracks,
+            ))
+            changes += 1
+
+        if changes:
+            logger.info(
+                "Identity-first partial pass changed %d/%d partial rallies",
+                changes, sum(
+                    1 for d in self.stored_rally_data
+                    if 1 <= len([t for t in d.top_tracks if t in d.track_stats]) < 4
+                ),
+            )
+        return new_results
+
     def _post_switch_consensus_pass(
         self,
         results: list[RallyTrackingResult],
@@ -2978,9 +3129,12 @@ class MatchPlayerTracker:
         if skip_stages_1_and_2:
             # Stage 3 (Bug C fix) still runs in the blind path — it acts on
             # whichever per-rally AFMs reached this point.
-            return self._post_switch_consensus_pass(
+            after_consensus = self._post_switch_consensus_pass(
                 initial_results, sorted(switch_set),
             )
+            # Stage 4 (Bug D fix, default OFF): identity-first re-assign for
+            # partial-cardinality rallies. No-op when flag disabled.
+            return self._identity_first_partial_pass(after_consensus)
 
         # Stage 1: Re-score ALL rallies (including rally 0) with final profiles.
         # Rally 0 was initialized by Y-sort only; re-scoring with accumulated
@@ -3070,6 +3224,10 @@ class MatchPlayerTracker:
         # rallies near side-switch boundaries to the surrounding consensus
         # team partition. See `_post_switch_consensus_pass` docstring.
         refined = self._post_switch_consensus_pass(refined, sorted(switch_set))
+
+        # Stage 4 (Bug D fix, default OFF): identity-first re-assign for
+        # partial-cardinality rallies. See `_identity_first_partial_pass`.
+        refined = self._identity_first_partial_pass(refined)
 
         return refined
 
@@ -3647,7 +3805,14 @@ ANCHOR_MIN_CONFIDENCE = 0.50
 #          surrounding rallies form clear consensus AND the rally has
 #          exactly 4 clean primary tracks). Old "v3" anchors invalidate
 #          on read so the fix takes effect immediately.
-MATCHER_VERSION = "v4"
+#   "v5" — 2026-05-04: identity-first partial-cardinality assignment (Bug D).
+#          Adds a stage to refine_assignments that re-assigns rallies with
+#          fewer than 4 primary tracks (e.g., near-server occlusion) using
+#          gallery-only appearance scoring + rectangular Hungarian. Default
+#          OFF (`ENABLE_IDENTITY_FIRST_MATCHING=1` to enable). Bumps the
+#          version even when default-OFF so anchors auto-invalidate on
+#          read after enable, ensuring the new path takes effect cleanly.
+MATCHER_VERSION = "v5"
 
 
 def replay_refine_from_scratchpad(
