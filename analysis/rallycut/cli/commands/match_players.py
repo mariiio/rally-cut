@@ -928,30 +928,15 @@ def match_players(
     if not quiet:
         console.print("  Saved to DB")
 
-    # Write JSON file output
+    # Write JSON file output. Single source of truth: the same `result_json`
+    # dict that was just persisted to videos.match_analysis_json. The API
+    # path (api/src/services/matchAnalysisService.ts:runMatchPlayersCli)
+    # parses this file and re-writes it to DB; if the shapes diverge the
+    # round-trip silently strips fields (rallyScratchpad, assignmentAnchor,
+    # subTracks, teamTemplates) and converts camelCase keys to snake_case.
     if output:
-        output_data = {
-            "video_id": video_id,
-            "num_rallies": len(results),
-            "playerProfiles": player_profiles_data,
-            "rallies": [
-                {
-                    "rally_id": rally.rally_id,
-                    "rally_index": result.rally_index,
-                    "start_ms": rally.start_ms,
-                    "end_ms": rally.end_ms,
-                    "track_to_player": {
-                        str(k): v for k, v in result.track_to_player.items()
-                    },
-                    "assignment_confidence": result.assignment_confidence,
-                    "side_switch_detected": result.side_switch_detected,
-                    "server_player_id": result.server_player_id,
-                }
-                for rally, result in zip(rallies, results)
-            ],
-        }
         with open(output, "w") as f:
-            json.dump(output_data, f, indent=2)
+            json.dump(result_json, f, indent=2)
 
         if not quiet:
             console.print(f"\n[green]Results saved to {output}[/green]")

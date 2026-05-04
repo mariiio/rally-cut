@@ -49,6 +49,34 @@ export interface MergedTeamIdentity {
   source: "majority_vote";
 }
 
+// Per-rally cache key written by match-players blind path so the next
+// run can pin this rally and skip MatchSolver re-decision when the
+// pre-solve structural fingerprint is unchanged. See
+// analysis/rallycut/tracking/match_tracker.py (ANCHOR_MIN_CONFIDENCE,
+// MATCHER_VERSION). Read here only to keep the type honest — TS never
+// mutates this; it round-trips through Prisma.
+interface AssignmentAnchor {
+  trackStatsHash: string;
+  matcherVersion: string;
+  assignment: Record<string, number>;
+  confidence: number;
+}
+
+// Within-rally split fragment, written by match-players when phase-1
+// repair detects an appearance-based ID switch inside a rally. Frames
+// `[fStart, fEnd)` of `parentTrackId` belong to `pid` instead of the
+// parent track's matcher PID. Source of truth:
+// analysis/rallycut/tracking/_within_rally_id_switch.py.
+interface SubTrack {
+  syntheticTrackId: number;
+  parentTrackId: number;
+  segmentIndex: number;
+  fStart: number;
+  fEnd: number;
+  pid: number;
+  margin: number;
+}
+
 interface MatchAnalysisResult {
   videoId: string;
   numRallies: number;
@@ -67,6 +95,8 @@ interface MatchAnalysisResult {
     assignmentConfidence: number;
     sideSwitchDetected: boolean;
     serverPlayerId: number | null;
+    assignmentAnchor?: AssignmentAnchor;
+    subTracks?: SubTrack[];
   }>;
   playerProfiles?: Record<string, Record<string, unknown>>;
   teamTemplates?: Record<string, TeamTemplateData>;
@@ -75,6 +105,16 @@ interface MatchAnalysisResult {
   // re-deriving team labels from per-rally `teamAssignments` via
   // last-rally-wins aggregation.
   mergedTeamIdentity?: MergedTeamIdentity;
+  // Per-rally appearance scratchpad written by match-players (Phase 0,
+  // see analysis/rallycut/tracking/match_tracker.py:scratchpad_to_dict).
+  // Used by relabel-with-crops to replay Pass 2 with new frozen profiles
+  // without re-extracting appearance from video. Opaque to TS.
+  rallyScratchpad?: Record<string, unknown>;
+  // Embedded copy of canonicalPidMapJson written by match-players when
+  // ref-crops cover all 4 pids. The load-bearing copy lives in
+  // Video.canonicalPidMapJson; this embedded copy is a convenience for
+  // CLI consumers that only read match_analysis_json.
+  canonicalPidMap?: CanonicalPidMap;
 }
 
 // Persisted shape of `Video.canonicalPidMapJson`. Written by the Python
@@ -1094,10 +1134,23 @@ function runCli<T>(
 /**
  * Get match analysis for a video.
  */
+// API response shape for /v1/videos/:id/match-analysis. Derived from the
+// persisted `MatchAnalysisResult` but with `canonicalPidMap` forced to
+// come from the separate `Video.canonicalPidMapJson` column (the
+// load-bearing copy) rather than the embedded copy in the persisted
+// JSON. Always present on the wire — null when the column is empty —
+// so consumers can rely on `response.canonicalPidMap === null` to mean
+// "no ref-crop map for this video", regardless of any stale embedded
+// copy that may linger after ref-crop deletion.
+export type MatchAnalysisApiResponse =
+  Omit<MatchAnalysisResult, 'canonicalPidMap'> & {
+    canonicalPidMap: CanonicalPidMap | null;
+  };
+
 export async function getMatchAnalysis(
   videoId: string,
   userId: string,
-): Promise<(MatchAnalysisResult & { canonicalPidMap?: CanonicalPidMap | null }) | null> {
+): Promise<MatchAnalysisApiResponse | null> {
   const video = await prisma.video.findUnique({
     where: { id: videoId },
   });
@@ -1116,7 +1169,10 @@ export async function getMatchAnalysis(
   }
   // Surface canonicalPidMapJson alongside matchAnalysisJson so the web
   // client's resolveCanonicalPid can read the ref-crop-sourced map without
-  // a second round-trip. Null when the video lacks the full crop set.
+  // a second round-trip. The column is authoritative — overwrite any
+  // embedded copy in the persisted JSON to keep responses consistent
+  // after ref-crop deletion (which nulls the column but leaves the
+  // embedded copy from the prior match-players run in place).
   const canonicalPidMap = (video.canonicalPidMapJson as unknown as CanonicalPidMap | null) ?? null;
   return { ...analysis, canonicalPidMap };
 }
