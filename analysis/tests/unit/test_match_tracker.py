@@ -1278,10 +1278,10 @@ class TestPostSwitchConsensusPass:
         assert out[1].track_to_player == {1: 1, 2: 3, 3: 2, 4: 4}
 
     def test_within_team_only_difference_not_corrected(self) -> None:
-        """Within-team-only differences are out of scope for the consensus
-        pass — handled by `_global_within_team_voting` (Stage 2). The
-        consensus pass only fires when the team PARTITION (near vs far)
-        disagrees with neighbors."""
+        """Within-team-only differences (without cross-team partition
+        disagreement) are NOT corrected by the consensus pass — partition
+        already matches, so no permutation fires. Within-team alignment
+        in those cases is handled by `_global_within_team_voting` (Stage 2)."""
         rallies = [
             ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
             ({1: 2, 2: 1, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),  # within-near swap
@@ -1291,6 +1291,28 @@ class TestPostSwitchConsensusPass:
         out = tracker._post_switch_consensus_pass(results, switches=[])
         # Partition matches neighbors → consensus pass leaves it alone.
         assert out[1].track_to_player == {1: 2, 2: 1, 3: 3, 4: 4}
+
+    def test_picks_within_team_rank_to_match_neighbors_on_full_reverse(self) -> None:
+        """When the cross-team partition disagrees AND track IDs are
+        persistent across rallies, the multi-perm scoring picks the
+        within-team pairing that maximizes track→PID alignment with
+        neighbors. For a full-reverse outlier sandwiched between identity
+        rallies, the best perm produces an exact identity match.
+
+        This is the b026dc6c r10 scenario: pre-fix AFM was full reverse
+        `{1:4, 2:3, 3:2, 4:1}` and neighbors had identity. With multi-
+        perm scoring, the (rev/rev) candidate maps the outlier exactly
+        back to identity (4 hits) — better than sorted-pairing
+        (`{1:2, 2:1, 3:4, 4:3}`, 0 hits)."""
+        rallies = [
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
+            ({1: 4, 2: 3, 3: 2, 4: 1}, {1: 0, 2: 0, 3: 1, 4: 1}, False),  # full reverse
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
+        ]
+        tracker, results = self._build_tracker(rallies)
+        out = tracker._post_switch_consensus_pass(results, switches=[])
+        # Best candidate produces identity (matches neighbors exactly).
+        assert out[1].track_to_player == {1: 1, 2: 2, 3: 3, 4: 4}
 
     def test_server_pid_follows_permutation(self) -> None:
         rallies = [

@@ -2650,10 +2650,15 @@ class MatchPlayerTracker:
         5. ``DISABLE_POST_SWITCH_CONSENSUS=1`` env var is not set
            (emergency rollback).
 
-        The permutation is built by sorted-pairing within each team, which
-        preserves within-team rank — Bug C is a cross-team identity
-        confusion, not a within-team one. Within-team errors are out of
-        scope for this pass and handled by ``_global_within_team_voting``.
+        The cross-team partition is determined by ``(actual → expected)``;
+        within each team there are 2 valid pairings (sorted vs reversed),
+        yielding 4 total candidate permutations. We score each candidate
+        by track→PID alignment with nearby stable rallies (those with the
+        same `expected` partition) and pick the highest-scoring perm.
+        This recovers within-team rank correctly when BoT-SORT track IDs
+        persist across rallies (the common case). When they don't, the
+        scoring falls back to lower hit counts and may pick the same
+        perm as sorted-pairing — safe default.
 
         Known limitations:
         - Detection requires the per-rally team partition (near_pids vs
@@ -2782,29 +2787,76 @@ class MatchPlayerTracker:
             if expected == actual:
                 continue  # no disagreement → no change needed
 
-            # Step 3: build the cross-team permutation that maps actual to
-            # expected. Sort within each team and pair element-wise; this
-            # preserves within-team rank (lower-PID-first). Within-team
-            # rank correction is OUT OF SCOPE for this pass — handled by
-            # `_global_within_team_voting` (Stage 2). Bug C is dominantly
-            # a cross-team error.
-            actual_near = sorted(actual)
-            expected_near = sorted(expected)
-            actual_far = sorted({1, 2, 3, 4} - actual)
-            expected_far = sorted({1, 2, 3, 4} - expected)
-            if len(actual_near) != 2 or len(expected_near) != 2:
+            # Step 3: build the cross-team permutation. The team partition
+            # is fixed by `(actual → expected)`; within each team there are
+            # 2 valid pairings (sorted vs reversed), so 4 candidate perms.
+            # Pick the one that maximizes track→PID alignment with nearby
+            # stable rallies — this gets the within-team rank right when
+            # BoT-SORT track IDs persist across rallies (the common case).
+            actual_near_l = sorted(actual)
+            expected_near_l = sorted(expected)
+            actual_far_l = sorted({1, 2, 3, 4} - actual)
+            expected_far_l = sorted({1, 2, 3, 4} - expected)
+            if len(actual_near_l) != 2 or len(expected_near_l) != 2:
                 continue
-            perm: dict[int, int] = {}
-            for a, e in zip(actual_near, expected_near):
-                perm[a] = e
-            for a, e in zip(actual_far, expected_far):
-                perm[a] = e
-            # Bijection sanity: must be a permutation of {1,2,3,4}.
-            if (
-                set(perm.keys()) != {1, 2, 3, 4}
-                or set(perm.values()) != {1, 2, 3, 4}
+
+            # Reference AFMs: rallies within ±2 whose partition matches
+            # `expected` (i.e., agrees with the consensus). Excludes the
+            # outlier itself by partition mismatch.
+            reference_afms: list[dict[int, int]] = []
+            for j in range(max(0, i - 2), min(len(partitions), i + 3)):
+                if j == i or partitions[j] != expected:
+                    continue
+                reference_afms.append({
+                    int(tid): int(pid)
+                    for tid, pid in results[j].track_to_player.items()
+                    if int(tid) > 0 and 1 <= int(pid) <= 4
+                })
+
+            def _score_perm(p: dict[int, int]) -> int:
+                """Count post-perm AFM track→PID assignments matching any
+                reference rally's AFM at the SAME track ID."""
+                if not reference_afms:
+                    return 0
+                hits = 0
+                for tid, old_pid in results[i].track_to_player.items():
+                    tid_int = int(tid)
+                    if tid_int <= 0 or not (1 <= int(old_pid) <= 4):
+                        continue
+                    new_pid = p.get(int(old_pid), int(old_pid))
+                    for ref in reference_afms:
+                        if ref.get(tid_int) == new_pid:
+                            hits += 1
+                            break
+                return hits
+
+            best_perm: dict[int, int] | None = None
+            best_score = -1
+            for near_pairing in (
+                list(zip(actual_near_l, expected_near_l)),
+                list(zip(actual_near_l, list(reversed(expected_near_l)))),
             ):
+                for far_pairing in (
+                    list(zip(actual_far_l, expected_far_l)),
+                    list(zip(actual_far_l, list(reversed(expected_far_l)))),
+                ):
+                    cand: dict[int, int] = {}
+                    for a, e in near_pairing:
+                        cand[a] = e
+                    for a, e in far_pairing:
+                        cand[a] = e
+                    if (
+                        set(cand.keys()) != {1, 2, 3, 4}
+                        or set(cand.values()) != {1, 2, 3, 4}
+                    ):
+                        continue
+                    s = _score_perm(cand)
+                    if s > best_score:
+                        best_score = s
+                        best_perm = cand
+            if best_perm is None:
                 continue
+            perm = best_perm
 
             # Step 4: apply the permutation to rally i's result.
             old = results[i]
