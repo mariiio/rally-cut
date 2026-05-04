@@ -1134,6 +1134,184 @@ class TestRefineAssignments:
         assert refined[0].track_to_player == result.track_to_player
 
 
+class TestPostSwitchConsensusPass:
+    """Bug C fix: outlier rallies near side-switch boundaries snap to the
+    cross-rally team-partition consensus.
+
+    Tests construct a tracker with synthetic ``stored_rally_data`` so the
+    consensus-pass logic is exercised directly without running full per-rally
+    Hungarian.
+    """
+
+    def _build_tracker(
+        self,
+        rallies: list[tuple[dict[int, int], dict[int, int], bool]],
+    ) -> tuple[MatchPlayerTracker, list[RallyTrackingResult]]:
+        """Build a tracker + per-rally results for the consensus-pass test.
+
+        Args:
+            rallies: One ``(track_to_player, track_court_sides, side_switch)``
+                tuple per rally.
+        Returns:
+            ``(tracker, results)``. tracker.stored_rally_data is populated to
+            match each rally's ``track_court_sides``.
+        """
+        tracker = MatchPlayerTracker()
+        results: list[RallyTrackingResult] = []
+        for idx, (afm, sides, ss) in enumerate(rallies):
+            tracker.stored_rally_data.append(
+                StoredRallyData(
+                    track_stats={},
+                    track_court_sides=dict(sides),
+                    early_positions={},
+                    top_tracks=sorted(afm.keys()),
+                )
+            )
+            results.append(
+                RallyTrackingResult(
+                    rally_index=idx,
+                    track_to_player=dict(afm),
+                    server_player_id=None,
+                    side_switch_detected=ss,
+                    assignment_confidence=0.8,
+                )
+            )
+        return tracker, results
+
+    def test_neighbor_consensus_snaps_outlier_partition(self) -> None:
+        """Rally 1 has near={1,3}; r0 and r2 both have near={1,2}. Snap to {1,2}."""
+        rallies = [
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),  # near={1,2}
+            ({1: 1, 2: 3, 3: 2, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),  # near={1,3} ← outlier
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),  # near={1,2}
+        ]
+        tracker, results = self._build_tracker(rallies)
+        out = tracker._post_switch_consensus_pass(results, switches=[])
+        # Rally 1's near should now be {1, 2}
+        afm = out[1].track_to_player
+        near_pids = {pid for tid, pid in afm.items() if tid in {1, 2}}
+        assert near_pids == {1, 2}
+        # Specifically the perm 3→2, 2→3 should fire (sorted pairing maps
+        # actual_near=[1,3] → expected_near=[1,2])
+        assert afm == {1: 1, 2: 2, 3: 3, 4: 4}
+
+    def test_no_change_when_all_rallies_agree(self) -> None:
+        """Modal partition same across all rallies → no permutations fire."""
+        rallies = [
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
+        ]
+        tracker, results = self._build_tracker(rallies)
+        out = tracker._post_switch_consensus_pass(results, switches=[])
+        for r_in, r_out in zip(results, out):
+            assert r_in.track_to_player == r_out.track_to_player
+
+    def test_side_switch_boundary_uses_post_switch_reference(self) -> None:
+        """Rally 1 has ss=True; expected partition comes from rally 2 (post-switch)."""
+        rallies = [
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),  # near={1,2}
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, True),   # near={1,2} BUT user-bug-C: should be {3,4}
+            ({1: 3, 2: 4, 3: 1, 4: 2}, {1: 0, 2: 0, 3: 1, 4: 1}, False),  # near={3,4} (post-switch correct)
+        ]
+        tracker, results = self._build_tracker(rallies)
+        out = tracker._post_switch_consensus_pass(results, switches=[1])
+        # Rally 1 should snap to near={3,4} per the post-switch reference.
+        afm = out[1].track_to_player
+        near_pids = {pid for tid, pid in afm.items() if tid in {1, 2}}
+        assert near_pids == {3, 4}
+
+    def test_disabled_by_env_flag(self, monkeypatch: Any) -> None:
+        monkeypatch.setenv("DISABLE_POST_SWITCH_CONSENSUS", "1")
+        rallies = [
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
+            ({1: 1, 2: 3, 3: 2, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),  # outlier
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
+        ]
+        tracker, results = self._build_tracker(rallies)
+        out = tracker._post_switch_consensus_pass(results, switches=[])
+        # Outlier preserved when disabled
+        assert out[1].track_to_player == {1: 1, 2: 3, 3: 2, 4: 4}
+
+    def test_frozen_player_ids_blocks_permutation(self) -> None:
+        """Ref-crop labels are authoritative; consensus pass must not override."""
+        rallies = [
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
+            ({1: 1, 2: 3, 3: 2, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),  # outlier
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
+        ]
+        tracker, results = self._build_tracker(rallies)
+        tracker.frozen_player_ids = {1, 2, 3, 4}
+        out = tracker._post_switch_consensus_pass(results, switches=[])
+        assert out[1].track_to_player == {1: 1, 2: 3, 3: 2, 4: 4}
+
+    def test_degenerate_partition_skipped(self) -> None:
+        """Rally with not-exactly-2-near + 2-far is skipped (no-op)."""
+        rallies = [
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
+            # Only 3 sides classified → degenerate
+            ({1: 1, 2: 3, 3: 2, 4: 4}, {1: 0, 2: 0, 3: 1}, False),
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
+        ]
+        tracker, results = self._build_tracker(rallies)
+        out = tracker._post_switch_consensus_pass(results, switches=[])
+        assert out[1].track_to_player == {1: 1, 2: 3, 3: 2, 4: 4}
+
+    def test_returns_unchanged_with_fewer_than_3_rallies(self) -> None:
+        rallies = [
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
+            ({1: 1, 2: 3, 3: 2, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
+        ]
+        tracker, results = self._build_tracker(rallies)
+        out = tracker._post_switch_consensus_pass(results, switches=[])
+        assert out[1].track_to_player == {1: 1, 2: 3, 3: 2, 4: 4}
+
+    def test_neighbors_disagree_so_no_change(self) -> None:
+        """When neighbors don't agree, can't establish consensus."""
+        rallies = [
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),  # near={1,2}
+            ({1: 1, 2: 3, 3: 2, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),  # near={1,3} ← would-be outlier
+            ({1: 3, 2: 4, 3: 1, 4: 2}, {1: 0, 2: 0, 3: 1, 4: 1}, False),  # near={3,4}
+        ]
+        tracker, results = self._build_tracker(rallies)
+        out = tracker._post_switch_consensus_pass(results, switches=[])
+        assert out[1].track_to_player == {1: 1, 2: 3, 3: 2, 4: 4}
+
+    def test_within_team_only_difference_not_corrected(self) -> None:
+        """Within-team-only differences are out of scope for the consensus
+        pass — handled by `_global_within_team_voting` (Stage 2). The
+        consensus pass only fires when the team PARTITION (near vs far)
+        disagrees with neighbors."""
+        rallies = [
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
+            ({1: 2, 2: 1, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),  # within-near swap
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
+        ]
+        tracker, results = self._build_tracker(rallies)
+        out = tracker._post_switch_consensus_pass(results, switches=[])
+        # Partition matches neighbors → consensus pass leaves it alone.
+        assert out[1].track_to_player == {1: 2, 2: 1, 3: 3, 4: 4}
+
+    def test_server_pid_follows_permutation(self) -> None:
+        rallies = [
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
+            ({1: 3, 2: 4, 3: 1, 4: 2}, {1: 0, 2: 0, 3: 1, 4: 1}, False),  # near={3,4} ← outlier
+            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
+        ]
+        tracker, results = self._build_tracker(rallies)
+        # Set server on outlier rally to one of the permuted pids.
+        results[1] = RallyTrackingResult(
+            rally_index=1,
+            track_to_player=results[1].track_to_player,
+            server_player_id=3,  # in current rally, near-team
+            side_switch_detected=False,
+            assignment_confidence=0.8,
+        )
+        out = tracker._post_switch_consensus_pass(results, switches=[])
+        # After perm 3→1, 4→2, 1→3, 2→4: server_player_id=3 should become 1.
+        assert out[1].server_player_id == 1
+
+
 class TestSeedRallySelection:
     """Phase 1 step 2: pick the highest-quality rally to anchor canonical
     pid layout, instead of always trusting rally 0's Y-sort.
