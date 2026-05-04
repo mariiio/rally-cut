@@ -50,60 +50,6 @@ MIN_IMPROVEMENT_CROSS_TEAM = 0.06
 # Minimum cost improvement to accept a swap (same-team — harder)
 MIN_IMPROVEMENT_SAME_TEAM = 0.12
 
-# Minimum per-half cost improvement to count as "substantial" evidence in
-# the bidirectional-evidence pathway (`_accept_swap`). Used to gate the
-# half-threshold pathway: the focus track AND the partner track must each
-# improve by at least this amount, ruling out cases where one large shift
-# masks a near-zero partner shift. Tuned empirically — see
-# `_accept_swap` docstring for the principle and rally 19 of dd042609
-# as the motivating case (own=0.031, partner=0.039, total=0.070, both
-# substantial → swap fires; while 3814294e (own=0.051, partner=0.002,
-# total=0.052) fails because partner is below this threshold).
-INDIVIDUAL_MIN_SHIFT = 0.020
-
-
-def _accept_swap(
-    shift_improvement: float,
-    partner_improvement: float,
-    threshold: float,
-) -> bool:
-    """Decide whether a detected swap candidate should be accepted.
-
-    Two pathways, both requiring bidirectional positive evidence (the
-    focus track AND the partner track each improve under the swap).
-    Asymmetric one-sided wins (one half vastly improves while the other
-    barely moves or regresses) are rejected because they're often
-    artifacts of one player's profile being mismatched with both halves
-    of the same track, not a true within-rally identity swap.
-
-    1. **Strong total**: total improvement >= full threshold. Catches
-       cases where one half's shift is large enough to clear the bar
-       even if the partner contribution is modest.
-
-    2. **Substantial both halves**: each individual shift >=
-       INDIVIDUAL_MIN_SHIFT AND total >= half threshold. Catches cases
-       where moderate symmetric improvement is split across both halves,
-       so bidirectional evidence is unambiguous even though no single
-       half clears the full bar.
-
-    The single-threshold gate alone misses legitimate same-team swaps
-    where the per-half cost differences are modest because same-team
-    players have similar appearance — the discriminative signal is
-    spread thin but consistent. The two-way constraint in path 2
-    substitutes for raw magnitude, replacing one strong shift with two
-    independent shifts that agree.
-    """
-    total_improvement = shift_improvement + partner_improvement
-    if shift_improvement <= 0 or partner_improvement <= 0:
-        return False
-    if total_improvement >= threshold:
-        return True
-    both_substantial = (
-        shift_improvement >= INDIVIDUAL_MIN_SHIFT
-        and partner_improvement >= INDIVIDUAL_MIN_SHIFT
-    )
-    return both_substantial and total_improvement >= threshold * 0.5
-
 # Minimum rally count in profiles to trust them for repair
 MIN_PROFILE_RALLY_COUNT = 5
 
@@ -616,7 +562,13 @@ def _detect_and_repair(
             is_backward=is_backward,
         )
 
-        if _accept_swap(shift_improvement, partner_improvement, threshold):
+        # Accept if: total improvement exceeds threshold AND both tracks
+        # individually improve (partner_improvement > 0)
+        if (
+            total_improvement >= threshold
+            and shift_improvement > 0
+            and partner_improvement > 0
+        ):
             decision.accepted = True
             result.num_repairs += 1
             used_tracks.add(ca.track_id)
@@ -1120,7 +1072,11 @@ def _validate_candidates_and_repair(
             is_backward=is_backward,
         )
 
-        if _accept_swap(shift_improvement, partner_improvement, threshold):
+        if (
+            total_improvement >= threshold
+            and shift_improvement > 0
+            and partner_improvement > 0
+        ):
             decision.accepted = True
             result.num_repairs += 1
             used_tracks.add(ca.track_id)
