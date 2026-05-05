@@ -3812,7 +3812,14 @@ ANCHOR_MIN_CONFIDENCE = 0.50
 #          OFF (`ENABLE_IDENTITY_FIRST_MATCHING=1` to enable). Bumps the
 #          version even when default-OFF so anchors auto-invalidate on
 #          read after enable, ensuring the new path takes effect cleanly.
-MATCHER_VERSION = "v5"
+#  - v6: 2026-05-04 — `remap-track-ids` enforces the
+#          primary_track_ids ⊆ trackToPlayer contract: identity
+#          passthroughs for unmapped non-colliding tracks were leaking
+#          junk PID labels (e.g. "PID 7") into the editor. Tracks
+#          without a PID assignment now resolve to UNLABELED_TRACK_ID
+#          and their positions get dropped. Bump invalidates cached
+#          anchors so primary_track_ids gets cleaned on the next run.
+MATCHER_VERSION = "v6"
 
 
 def replay_refine_from_scratchpad(

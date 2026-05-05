@@ -437,7 +437,7 @@ def test_remap_positions_applies_frame_conditional_pid_for_split_track():
         {"trackId": 3, "frameNumber": 0},    # un-split → flat → pid 3
         {"trackId": 4, "frameNumber": 100},  # un-split → flat → pid 4
     ]
-    count = _remap_positions(
+    n_remapped, n_dropped = _remap_positions(
         positions, plan.flat_mapping, plan.sub_track_overrides,
     )
     assert positions[0]["trackId"] == 2
@@ -447,12 +447,21 @@ def test_remap_positions_applies_frame_conditional_pid_for_split_track():
     # Position 0 stays at trackId=2 (no change), positions 1/2/3 already at
     # their mapped pids in flat_mapping (3→3 and 4→4 are identity); only
     # position 1 (split parent → 1) is a non-identity remap.
-    assert count == 1
+    assert n_remapped == 1
+    assert n_dropped == 0
 
 
-def test_remap_positions_marks_split_parent_outside_segments_as_unlabeled():
+def test_remap_positions_drops_split_parent_outside_segments():
+    """Split-parent positions outside any kept sub-track segment are dropped.
+
+    Pre-fix (2026-05-04): UNLABELED_TRACK_ID was written to
+    `trackId` and the position remained in `positions_json` for the
+    editor to render as an unlabeled bbox. Post-fix: the position is
+    dropped entirely, since there's no PID to render. This is the same
+    contract as for orphan tracks (see test_remap_track_ids.py
+    TestContractEnforcement).
+    """
     from rallycut.cli.commands.remap_track_ids import (
-        UNLABELED_TRACK_ID,
         RallyRemapPlan,
         _remap_positions,
     )
@@ -464,12 +473,17 @@ def test_remap_positions_marks_split_parent_outside_segments_as_unlabeled():
         ],
     )
     positions = [
-        {"trackId": 2, "frameNumber": 50},   # pre-segment LOST → unlabeled
+        {"trackId": 2, "frameNumber": 50},   # pre-segment LOST → DROPPED
         {"trackId": 2, "frameNumber": 150},  # post-segment → pid 1
     ]
-    _remap_positions(positions, plan.flat_mapping, plan.sub_track_overrides)
-    assert positions[0]["trackId"] == UNLABELED_TRACK_ID
-    assert positions[1]["trackId"] == 1
+    n_remapped, n_dropped = _remap_positions(
+        positions, plan.flat_mapping, plan.sub_track_overrides,
+    )
+    # Pre-segment-lost position is dropped from positions_json.
+    assert n_dropped == 1
+    assert len(positions) == 1
+    assert positions[0]["trackId"] == 1
+    assert positions[0]["frameNumber"] == 150
 
 
 def test_remap_positions_no_overrides_matches_legacy_behavior():
@@ -480,10 +494,13 @@ def test_remap_positions_no_overrides_matches_legacy_behavior():
         {"trackId": 5, "frameNumber": 0},
         {"trackId": 7, "frameNumber": 100},
     ]
-    n = _remap_positions(positions, {5: 1, 7: 3}, sub_track_overrides=None)
+    n_remapped, n_dropped = _remap_positions(
+        positions, {5: 1, 7: 3}, sub_track_overrides=None,
+    )
     assert positions[0]["trackId"] == 1
     assert positions[1]["trackId"] == 3
-    assert n == 2
+    assert n_remapped == 2
+    assert n_dropped == 0
 
 
 def test_remap_contacts_applies_frame_conditional_for_split_parent():

@@ -70,6 +70,12 @@ reports/merge_veto/sweep/
 reports/merge_veto/per_pass_sweep/
 reports/merge_veto/session8_sweep/
 reports/minimal_processing/sweep/
+# Chimera-stitching investigation outputs (2026-05-04 — see
+# chimera_stitching_dd042609_2026_05_04 memo for context).
+reports/per_pass_chimera/
+reports/per_pass_chimera_*.log
+reports/recover_chimera_*.log
+reports/gt_fixture_post_fix_*.log
 
 # DB snapshots (large, regeneratable via pg_dump; kept locally for rollback)
 reports/*.sql.gz
