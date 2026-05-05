@@ -96,22 +96,162 @@ class TestShouldReverse:
 
 
 class TestBuildFullMappingBijective:
-    def test_no_collisions(self) -> None:
+    def test_unmapped_non_colliding_track_excluded(self) -> None:
+        """Tracks with no PID and no collision are deliberately excluded.
+
+        Pre-fix behaviour was an identity passthrough (`mapping[20] = 20`)
+        which surfaced as junk PID labels in the editor (see
+        chimera_stitching_dd042609_2026_05_04 memo). Now those tracks
+        resolve to UNLABELED_TRACK_ID via `_resolve_with_overrides` and
+        their positions get dropped in `_remap_positions`.
+        """
         mapping = _build_full_mapping({3: 1, 7: 2}, {3, 7, 20})
-        # Should be bijective
-        _invert_mapping(mapping)  # Raises if not bijective
+        _invert_mapping(mapping)  # Must still be bijective on what's mapped
         assert mapping[3] == 1
         assert mapping[7] == 2
-        assert mapping[20] == 20  # No collision
+        assert 20 not in mapping  # Excluded — no PID, no collision
 
     def test_with_collisions(self) -> None:
         mapping = _build_full_mapping({3: 1, 7: 2}, {1, 2, 3, 7})
-        # 1 and 2 collide with output player IDs → shifted to 101+
+        # 1 and 2 collide with output player IDs → shifted to 101+ so
+        # downstream tools (action attribution candidate lists, etc.)
+        # can still reach them under unique IDs even though they have
+        # no PID assignment.
         _invert_mapping(mapping)  # Must be bijective
         assert mapping[3] == 1
         assert mapping[7] == 2
         assert mapping[1] >= 101
         assert mapping[2] >= 101
+
+
+class TestContractEnforcement:
+    """Regression tests for the dd042609 r19/r21 fix (2026-05-04).
+
+    Ensures that tracks present in `positions_json` but absent from
+    `track_to_player` (i.e. no PID assignment from match-players) are
+    dropped instead of leaked as identity passthroughs that surfaced
+    as junk PID labels in the editor.
+    """
+
+    def test_orphan_position_dropped(self) -> None:
+        # Reproduces the dd042609 r19 shape: track 7 in positions_json
+        # but no PID assigned by match-players.
+        positions = [
+            {"trackId": 1, "frame": 0, "x": 0.1, "y": 0.2},
+            {"trackId": 2, "frame": 0, "x": 0.3, "y": 0.4},
+            {"trackId": 3, "frame": 0, "x": 0.5, "y": 0.6},
+            {"trackId": 4, "frame": 0, "x": 0.7, "y": 0.8},
+            # Orphan: track 7 has frames but no PID assignment.
+            {"trackId": 7, "frame": 1, "x": 0.5, "y": 0.5},
+            {"trackId": 7, "frame": 2, "x": 0.5, "y": 0.5},
+        ]
+        track_to_player = {1: 1, 2: 2, 3: 4, 4: 3}  # No entry for track 7
+        all_ids = {1, 2, 3, 4, 7}
+
+        mapping = _build_full_mapping(track_to_player, all_ids)
+        # Track 7 must NOT be in the mapping — pre-fix it would be
+        # `mapping[7] = 7` (identity passthrough).
+        assert 7 not in mapping
+
+        n_remapped, n_dropped = _remap_positions(positions, mapping)
+        # All 4 PID-assigned positions get remapped to PID space; the
+        # 2 orphan track-7 positions get dropped.
+        track_ids = [p["trackId"] for p in positions]
+        assert track_ids == [1, 2, 4, 3]
+        assert n_dropped == 2
+        assert n_remapped >= 1
+
+    def test_collision_still_shifted_not_dropped(self) -> None:
+        # Tracks that collide with PIDs but have no PID assignment
+        # still get shifted to 101+ (so action attribution candidate
+        # lists can resolve them under unique IDs).
+        positions = [
+            {"trackId": 1, "frame": 0, "x": 0.1, "y": 0.2},  # raw 1, collides with PID 1
+            {"trackId": 7, "frame": 0, "x": 0.5, "y": 0.5},  # raw 7 → PID 1
+        ]
+        track_to_player = {7: 1}  # Only track 7 has a PID
+        all_ids = {1, 7}
+
+        mapping = _build_full_mapping(track_to_player, all_ids)
+        assert mapping[7] == 1
+        assert mapping[1] >= 101  # Shifted, not dropped
+
+        n_remapped, n_dropped = _remap_positions(positions, mapping)
+        # Both positions kept — orphan-with-collision became 101+.
+        assert n_dropped == 0
+        track_ids = sorted(p["trackId"] for p in positions)
+        assert track_ids == [1, 101]
+
+    def test_primary_track_ids_excludes_collision_shifts(self) -> None:
+        """Regression: primary_track_ids must contain real PIDs only.
+
+        Pre-fix: filter used `mapping.keys()` which includes collision-
+        shifted IDs (e.g., track 4 with no PID becomes mapping[4]=101).
+        That leaked 101 into primary_track_ids, which the editor
+        rendered as a junk PID label. Post-fix: filter against
+        `raw_mapping.keys()` (matcher's track_to_player keys), so only
+        tracks that got a real PID assignment survive.
+
+        Reproduces the post-recovery state of rally 8449bc3b
+        (627c1add/caca): old primary_track_ids=[3, 4, 101, 1] with
+        match-players track_to_player={1:2, 2:1, 13:4} →
+        new primary_track_ids must be [2] (only track 1 was in
+        track_to_player), NOT [2, 101] (which would happen if we
+        let collision-shifted 4→101 leak in).
+        """
+        old_primary = [3, 4, 101, 1]
+        track_to_player = {1: 2, 2: 1, 13: 4}  # matcher's PID assignments
+        all_ids = set(old_primary) | set(track_to_player.keys())
+
+        mapping = _build_full_mapping(track_to_player, all_ids)
+        # Track 4 collides with PID 4 (in used_ids) → shifts to 101+.
+        assert mapping[4] >= 101
+        # Real PID-assigned tracks unchanged.
+        assert mapping[1] == 2
+        assert mapping[2] == 1
+        assert mapping[13] == 4
+        # Tracks 3, 101 have no PID and don't collide → excluded.
+        assert 3 not in mapping
+        assert 101 not in mapping
+
+        # Contract enforcement: primary_track_ids must be subset of
+        # raw_mapping.values() (real PIDs).
+        new_primary = [
+            track_to_player[t] for t in old_primary if t in track_to_player
+        ]
+        assert new_primary == [2]
+        for pid in new_primary:
+            assert pid in track_to_player.values()
+            # And NOT a collision-shifted ID:
+            assert pid < 100
+
+    def test_identity_mapping_still_drops_orphan_primary(self) -> None:
+        """Regression: identity-mapping shortcut must not bypass cleanup.
+
+        Pre-fix: when match-players returned an identity track_to_player
+        (e.g. {1:1, 2:2, 3:3}), `remap-track-ids` took a shortcut that
+        skipped position+primary_track_ids cleanup. Stale orphans like
+        track 18 stayed in DB. Post-fix: cleanup runs ALWAYS, regardless
+        of mapping shape.
+
+        Reproduces rally be3134ba (b5fb0594/ruru): old primary=[1, 3, 18, 2]
+        with track_to_player={1:1, 2:2, 3:3} (identity).
+        """
+        old_primary = [1, 3, 18, 2]
+        track_to_player = {1: 1, 2: 2, 3: 3}  # identity mapping
+        all_ids = set(old_primary) | set(track_to_player.keys())
+
+        mapping = _build_full_mapping(track_to_player, all_ids)
+        # mapping is identity for matched tracks; track 18 absent
+        # (no PID, no collision since 18 ∉ used_ids={1,2,3}).
+        assert all(k == v for k, v in mapping.items())
+        assert 18 not in mapping
+
+        new_primary = [
+            track_to_player[t] for t in old_primary if t in track_to_player
+        ]
+        assert new_primary == [1, 3, 2]  # Track 18 dropped
+        assert 18 not in new_primary
 
 
 class TestRemapRoundtrip:
@@ -276,8 +416,14 @@ class TestRemapIdempotent:
 
         # Double-mapping corruption: IDs 1,2,4 collide with player IDs
         # and get shifted to 102,103,104. Only ID 3 maps correctly to 1.
-        # This proves the flag is needed to prevent corruption.
-        assert [p["trackId"] for p in pos2] == [102, 103, 1, 104, 101]
+        # The 5th position originally had track_id=1 (collision-shifted to
+        # 101 in run 1); on run 2 it lands on 101 which has no PID
+        # assignment and no collision — under the new contract enforcement
+        # (remap-track-ids drops orphan positions instead of leaking
+        # them as identity passthroughs) the position is dropped.
+        # Pre-fix expected `[102, 103, 1, 104, 101]`; the trailing 101
+        # was the contract leak this fix removes.
+        assert [p["trackId"] for p in pos2] == [102, 103, 1, 104]
 
     def test_retrack_with_low_ids_no_false_reversal(self) -> None:
         """After re-tracking with IDs 1-4 (same as player IDs), no false reversal.

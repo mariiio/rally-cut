@@ -16,6 +16,7 @@ Usage:
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -23,6 +24,8 @@ import typer
 from rich.console import Console
 
 from rallycut.cli.utils import handle_errors
+
+logger = logging.getLogger(__name__)
 
 console = Console()
 
@@ -148,17 +151,30 @@ def _build_full_mapping(
 ) -> dict[int, int]:
     """Build collision-safe mapping for ALL track IDs in a rally.
 
-    Mapped tracks get their player IDs (1-4).
-    Unmapped tracks keep their ID if no collision, otherwise shift to 101+.
+    Mapped tracks get their player IDs (1-4). Tracks NOT in
+    `track_to_player` (no PID assignment from match-players) are
+    deliberately omitted from the returned mapping — `_remap_positions`
+    is invoked with `unmapped_to_unlabeled=True` and resolves them to
+    `UNLABELED_TRACK_ID` so their positions get dropped from the
+    rendered output. This enforces the contract that every track_id
+    surfaced to the editor has a PID, fixing the "junk PID label"
+    failure mode reported on rallies where match-players' top-4
+    selection didn't cover the tracker's primary_track_ids (chimera
+    tracks, sporadic merge failures, etc.).
 
-    `sub_track_pids` carries pids claimed by sub-tracks (from within-track
-    segmentation). When provided, an unmapped track whose ID equals one of
-    those pids would render as a phantom duplicate label alongside the
-    sub-track's bbox at the same frame, so we treat its ID as colliding
-    and shift it (or, more practically, the caller passes
-    `unmapped_to_unlabeled=True` to `_resolve_with_overrides` which writes
-    `UNLABELED_TRACK_ID` for them — see below). To make that path fire,
-    such tracks must NOT be added to `mapping` here. We exclude them.
+    Pre-fix behaviour kept identity passthroughs for unmapped
+    non-colliding tracks (`mapping[tid] = tid`); those rendered as
+    label = original_track_id (e.g. "PID 7"), which is meaningless
+    because PIDs are 1-4. Tracks that DO collide with a mapped PID
+    still shift to 101+ for compatibility with downstream tools that
+    expect every track_id to remain reachable in remapped form (action
+    attribution candidate lists, etc.).
+
+    `sub_track_pids` carries pids claimed by sub-tracks (from within-
+    track segmentation). When provided, an unmapped track whose ID
+    equals one of those pids would render as a phantom duplicate label
+    alongside the sub-track's bbox at the same frame, so it stays
+    excluded.
     """
     mapping: dict[int, int] = {}
     used_ids = set(track_to_player.values())
@@ -168,27 +184,24 @@ def _build_full_mapping(
     for tid, pid in track_to_player.items():
         mapping[tid] = pid
 
-    # Then handle unmapped tracks
+    # Then handle unmapped tracks. Collisions still need shifting (101+)
+    # so contacts/actions code that walks all track ids in the rally
+    # can resolve them to a non-conflicting label. Non-colliding
+    # unmapped tracks are deliberately excluded — they have no PID.
     next_shifted = 101
     for tid in sorted(all_track_ids):
         if tid in mapping:
             continue  # Already mapped
         if tid in sub_track_pids:
-            # Pid claimed by a sub-track. Don't map this real track to its
-            # identity (or anything) — leave it absent from `mapping` so
-            # `_resolve_with_overrides` falls through to `unmapped_to_unlabeled`
-            # and writes UNLABELED_TRACK_ID for these positions. Otherwise
-            # they'd render as a duplicate pid label at the same frames.
-            continue
+            continue  # Pid claimed by sub-track; positions go to UNLABELED
         if tid in used_ids:
-            # Collision: this track ID conflicts with a mapped player ID
+            # Collision: this track ID conflicts with a mapped player ID.
             while next_shifted in all_track_ids or next_shifted in used_ids:
                 next_shifted += 1
             mapping[tid] = next_shifted
             next_shifted += 1
-        else:
-            # No collision, keep original ID
-            mapping[tid] = tid
+        # else: no collision, no PID — exclude from mapping so positions
+        # resolve to UNLABELED_TRACK_ID via `unmapped_to_unlabeled`.
 
     return mapping
 
@@ -247,24 +260,35 @@ def _remap_positions(
     positions: list[dict[str, Any]],
     mapping: dict[int, int],
     sub_track_overrides: list[dict[str, int]] | None = None,
-) -> int:
-    """Remap `trackId` in positions list. Returns count of remapped entries.
+) -> tuple[int, int]:
+    """Remap `trackId` in positions list in place.
 
-    When `sub_track_overrides` is provided, the resolution becomes
-    frame-conditional for parent tracks that were split by within-track
-    segmentation. Frames inside a split parent but outside every kept
-    sub-track segment are written as `UNLABELED_TRACK_ID`.
+    Returns `(remapped_count, dropped_count)`. `dropped_count` is the
+    number of positions whose track had no PID assignment and were
+    cleared from the list (the contract: every entry in the returned
+    positions has a track_id resolvable via `track_to_player`).
+
+    Frame-conditional resolution applies for parent tracks split by
+    within-track segmentation; frames inside a split parent but outside
+    every kept sub-track segment resolve to `UNLABELED_TRACK_ID` and
+    get dropped.
+
+    Tracks not in `mapping` (omitted by `_build_full_mapping` because
+    they had no PID and didn't collide) also resolve to
+    `UNLABELED_TRACK_ID` and get dropped — fixes the
+    "junk PID label" rendering bug in the editor.
     """
     overrides_by_parent = _index_overrides_by_parent(sub_track_overrides or [])
-    # When sub-tracks are present, an unmapped real track means its pid was
-    # claimed by a sub-track and Hungarian had no remaining pid to assign it.
-    # Mark those positions as unlabeled so they don't render as a phantom
-    # duplicate label alongside the sub-track's bbox at the same frame.
-    unmapped_to_unlabeled = bool(overrides_by_parent)
-    count = 0
+    # Always apply unmapped → UNLABELED resolution. Positions whose track
+    # has no PID assignment get dropped from the output.
+    unmapped_to_unlabeled = True
+    remapped = 0
+    keep: list[dict[str, Any]] = []
+    dropped = 0
     for p in positions:
         old_id = p.get("trackId")
         if old_id is None:
+            keep.append(p)
             continue
         old_id_int = int(old_id)
         frame = p.get("frameNumber")
@@ -273,12 +297,20 @@ def _remap_positions(
             old_id_int, frame_int, mapping, overrides_by_parent,
             unmapped_to_unlabeled=unmapped_to_unlabeled,
         )
+        if new_id == UNLABELED_TRACK_ID:
+            dropped += 1
+            continue
         if new_id is None:
+            keep.append(p)
             continue
         if new_id != old_id_int:
             p["trackId"] = new_id
-            count += 1
-    return count
+            remapped += 1
+        keep.append(p)
+    # Mutate in place: clear and refill so callers' references stay valid.
+    positions.clear()
+    positions.extend(keep)
+    return remapped, dropped
 
 
 def _remap_contacts(
@@ -707,16 +739,85 @@ def remap_track_ids_cmd(
         if write_snapshot:
             changes["pre_remap_state_json"] = json.dumps(snapshot_payload)
 
-        # Identity mapping means no track ID rewriting is needed. Skip the
-        # remap-and-rewrite work, but STILL record `appliedFullMapping` +
-        # `remapApplied` (Step 4 below) so a future match-players run can
-        # see "this rally has been processed; positions are in PID space"
-        # rather than mistaking it for raw BoT-SORT output and looping back
-        # into corruption. `_should_reverse(pos_dicts, applied)` already
-        # gates reverse-remap on the current track-ID set matching the
-        # applied mapping's values, so an identity entry carrying forward
-        # is a no-op (its inverse is identity).
-        if not any(k != v for k, v in mapping.items()) and not sub_track_overrides:
+        # Contract enforcement (always runs, regardless of identity-mapping
+        # shortcut below): drop positions whose track has no PID assignment;
+        # filter primary_track_ids to a subset of `raw_mapping.keys()` (real
+        # tracks the matcher kept) so the rendered values are real PIDs (not
+        # collision-shifted 101+). Keeps the contract
+        # `primary_track_ids ⊆ raw_mapping.values()` invariant before the
+        # identity-shortcut path is taken.
+        n_dropped_positions = 0
+        if pos_json:
+            positions = cast(list[dict[str, Any]], pos_json)
+            original_count = len(positions)
+            orphan_track_ids = sorted({
+                int(p["trackId"])
+                for p in positions
+                if p.get("trackId") is not None
+                and int(p["trackId"]) not in mapping
+            })
+            n_remapped, n_dropped_positions = _remap_positions(
+                positions, mapping, sub_track_overrides,
+            )
+            if n_remapped > 0 or n_dropped_positions > 0:
+                changes["positions_json"] = json.dumps(positions)
+                rally_count += n_remapped
+            if n_dropped_positions > 0:
+                logger.warning(
+                    "remap-track-ids: dropped %d/%d positions from rally %s "
+                    "with no PID assignment (contract violation: tracks in "
+                    "positions_json but absent from match-players "
+                    "trackToPlayer). track_to_player=%s, dropped_track_ids=%s",
+                    n_dropped_positions,
+                    original_count,
+                    rally_id[:12] if isinstance(rally_id, str) else rally_id,
+                    sorted(raw_mapping.keys()),
+                    orphan_track_ids,
+                )
+
+        # Primary-track-ids cleanup, also runs ALWAYS (before the identity
+        # shortcut). Filter against raw_mapping.keys(): a primary ID is
+        # only kept if it's a real track the matcher assigned a PID. The
+        # mapped value is the real PID (1-4), not a collision-shifted
+        # 101+ value.
+        n_dropped_primaries = 0
+        if primary_ids:
+            old_ids = cast(list[int], primary_ids)
+            new_primary = [raw_mapping[tid] for tid in old_ids if tid in raw_mapping]
+            n_dropped_primaries = len(old_ids) - len(new_primary)
+            if new_primary != old_ids:
+                changes["primary_track_ids"] = json.dumps(new_primary)
+                rally_count += 1
+                if n_dropped_primaries > 0:
+                    dropped_primaries = [t for t in old_ids if t not in raw_mapping]
+                    logger.warning(
+                        "remap-track-ids: dropped %d primary_track_ids from "
+                        "rally %s with no PID assignment: %s "
+                        "(was %s, now %s)",
+                        n_dropped_primaries,
+                        rally_id[:12] if isinstance(rally_id, str) else rally_id,
+                        dropped_primaries,
+                        old_ids,
+                        new_primary,
+                    )
+            # Already remapped — clear primary_ids so the later
+            # remap-step below doesn't double-remap.
+            primary_ids = None
+
+        # Identity mapping means no NEW track ID rewriting is needed for
+        # the matched tracks (mapping[k]=k for all matched). Skip the
+        # contacts/actions/GT remap below, but ONLY if positions cleanup
+        # AND primary cleanup didn't drop anything either — otherwise
+        # we still need to write the cleaned data back. Always record
+        # `appliedFullMapping` + `remapApplied` so a future match-players
+        # run can see "this rally has been processed; positions are in
+        # PID space" rather than mistaking it for raw BoT-SORT output.
+        if (
+            not any(k != v for k, v in mapping.items())
+            and not sub_track_overrides
+            and n_dropped_positions == 0
+            and n_dropped_primaries == 0
+        ):
             rally_entry["appliedFullMapping"] = {
                 str(k): v for k, v in mapping.items()
             }
@@ -726,14 +827,6 @@ def remap_track_ids_cmd(
             if not quiet:
                 console.print(f"  [dim]{rally_id[:8]}: already using player IDs[/dim]")
             continue
-
-        # Remap positions
-        if pos_json:
-            positions = cast(list[dict[str, Any]], pos_json)
-            n = _remap_positions(positions, mapping, sub_track_overrides)
-            if n > 0:
-                changes["positions_json"] = json.dumps(positions)
-                rally_count += n
 
         # Remap contacts
         if contacts_json:
@@ -751,20 +844,9 @@ def remap_track_ids_cmd(
                 changes["actions_json"] = json.dumps(actions)
                 rally_count += n
 
-        # Remap primaryTrackIds. Primary track ids have no per-frame
-        # context; the array represents "which 4 players are primary in
-        # this rally" for editor display. For split parents, use the
-        # flat (parent-level) mapping rather than UNLABELED — the
-        # parent's frames carry per-segment overrides in positions, but
-        # the editor still needs all 4 primaries listed to render the
-        # full player overlay. The parent's flat-mapped pid (its
-        # MatchSolver assignment) is the natural representative.
-        if primary_ids:
-            old_ids = cast(list[int], primary_ids)
-            new_ids = [mapping.get(tid, tid) for tid in old_ids]
-            if new_ids != old_ids:
-                changes["primary_track_ids"] = json.dumps(new_ids)
-                rally_count += 1
+        # primary_track_ids cleanup happened above (before the identity
+        # shortcut) so the contract holds even on identity rallies. The
+        # `primary_ids` local was set to None to skip a second pass here.
 
         # Remap action ground truth labels. GT labels have a `frame` field;
         # apply the same frame-conditional resolution as the action stream.
