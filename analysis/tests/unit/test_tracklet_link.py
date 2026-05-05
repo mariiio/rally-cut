@@ -22,16 +22,25 @@ def _make_positions(
     frames: range,
     x: float = 0.5,
     y: float = 0.5,
+    width: float = 0.05,
+    height: float = 0.15,
 ) -> list[PlayerPosition]:
-    """Create positions for a track at fixed location."""
+    """Create positions for a track at fixed location.
+
+    Default bbox dims (0.05 × 0.15 = 0.0075 area) intentionally fall
+    BELOW PRIMARY_RELINK_SMALL_BBOX_AREA (0.012), routing through the
+    motion-only path in `relink_primary_fragments`. Tests that need the
+    appearance-aware path must pass larger ``width``/``height`` (e.g.
+    ``width=0.10, height=0.30 → area=0.030``).
+    """
     return [
         PlayerPosition(
             frame_number=f,
             track_id=track_id,
             x=x,
             y=y,
-            width=0.05,
-            height=0.15,
+            width=width,
+            height=height,
             confidence=0.9,
         )
         for f in frames
@@ -377,10 +386,18 @@ class TestRelinkPrimaryFragments:
         assert num == 0  # backward link blocked
 
     def test_appearance_gate_rejects_dissimilar(self) -> None:
-        """Non-primary fragment with dissimilar appearance is rejected."""
+        """Non-primary fragment with dissimilar appearance is rejected.
+
+        Uses LARGE bboxes (width=0.10, height=0.30 → area=0.030) so the
+        appearance-aware path is exercised. The bbox-quality-aware
+        bypass only fires when both endpoints are below
+        ``PRIMARY_RELINK_SMALL_BBOX_AREA`` (0.012); large bboxes route
+        through the existing HSV gate which should still reject
+        dissimilar appearances.
+        """
         positions = (
-            _make_positions(1, range(0, 50), x=0.3, y=0.4)
-            + _make_positions(2, range(70, 120), x=0.34, y=0.44)
+            _make_positions(1, range(0, 50), x=0.3, y=0.4, width=0.10, height=0.30)
+            + _make_positions(2, range(70, 120), x=0.34, y=0.44, width=0.10, height=0.30)
         )
         store = ColorHistogramStore()
         hist_a = _make_histogram(hue_peak=2)
@@ -418,6 +435,197 @@ class TestRelinkPrimaryFragments:
             positions, {1, 2, 3, 4}, store,
         )
         assert num == 1  # fragment 5 continues T4
+
+
+class TestRelinkPrimaryFragmentsBboxAware:
+    """Tests for the bbox-quality-aware merge gate (2026-05-05).
+
+    When BOTH endpoint bboxes are below ``PRIMARY_RELINK_SMALL_BBOX_AREA``
+    (default 0.012), the appearance gate is bypassed and a motion-only
+    velocity check is used instead. This rescues legitimate same-player
+    merges that the HSV gate fails on far-side occluded crops (mostly
+    background pixels → uninformative histograms).
+
+    Reproduces the structure of user case 84e66e74 r13 (P2 PID flicker).
+    """
+
+    def test_motion_only_path_approves_low_bbox_same_player(self) -> None:
+        """Both endpoints small + plausible motion → APPROVE via motion-only.
+
+        Mimics 84e66e74 r13 T4↔T14: small bboxes (far-side occluded
+        player), short gap (19f), short displacement (0.07 norm), low
+        velocity (~0.0038/f). Even with DISSIMILAR HSV histograms (which
+        the appearance gate would reject), the merge is approved because
+        the bbox-aware path bypasses appearance.
+        """
+        # Small bboxes: 0.05 × 0.15 = 0.0075 area (below 0.012 threshold)
+        positions = (
+            _make_positions(1, range(0, 50), x=0.667, y=0.546)  # primary
+            + _make_positions(2, range(70, 120), x=0.606, y=0.543)  # fragment
+        )
+        store = ColorHistogramStore()
+        # Deliberately dissimilar HSV histograms — appearance gate would reject.
+        for f in range(0, 50, 3):
+            store.add(1, f, _make_histogram(hue_peak=2))
+        for f in range(70, 120, 3):
+            store.add(2, f, _make_histogram(hue_peak=10))
+
+        result, updated_ids, num = relink_primary_fragments(
+            positions, {1}, store, max_appearance=0.20,
+        )
+        # gap=20f ≤ 50, dist=0.061 ≤ 0.08, velocity=0.003/f ≤ 0.005/f → APPROVE
+        # despite dissimilar HSV (which would have blocked under old gate).
+        assert num == 1
+        assert all(p.track_id == 1 for p in result if p.track_id > 0)
+
+    def test_motion_only_path_blocks_teleport(self) -> None:
+        """Both endpoints small but teleport velocity → BLOCK.
+
+        Catches the implausible-motion case the velocity gate is designed
+        to protect against. Even though HSV gate would have nothing to
+        say (dissimilar bboxes), the velocity check correctly rejects.
+        """
+        # Small bboxes, gap=10f, dist=0.078 → velocity 0.0078/f > 0.005
+        positions = (
+            _make_positions(1, range(0, 50), x=0.30, y=0.50)
+            + _make_positions(2, range(60, 110), x=0.378, y=0.50)
+        )
+        store = ColorHistogramStore()
+        hist = _make_histogram(hue_peak=5)  # similar HSV (would pass appearance)
+        for f in range(0, 50, 3):
+            store.add(1, f, hist)
+        for f in range(60, 110, 3):
+            store.add(2, f, hist)
+
+        result, updated_ids, num = relink_primary_fragments(
+            positions, {1}, store, max_appearance=0.20,
+        )
+        # Velocity gate blocks this teleport even though appearance is fine.
+        assert num == 0
+
+    def test_appearance_path_unchanged_for_clean_bboxes(self) -> None:
+        """Large bboxes route through appearance-aware path (no behavior change).
+
+        The new gate is purely additive: clean-bbox cases continue to use
+        the existing HSV Bhattacharyya gate exactly as before.
+        """
+        # Large bboxes: 0.10 × 0.30 = 0.030 (well above 0.012 threshold)
+        positions = (
+            _make_positions(1, range(0, 50), x=0.3, y=0.4, width=0.10, height=0.30)
+            + _make_positions(2, range(70, 120), x=0.34, y=0.44, width=0.10, height=0.30)
+        )
+        store = ColorHistogramStore()
+        # Similar appearance — should pass appearance gate.
+        hist = _make_histogram(hue_peak=5)
+        for f in range(0, 50, 3):
+            store.add(1, f, hist)
+        for f in range(70, 120, 3):
+            store.add(2, f, hist)
+
+        result, updated_ids, num = relink_primary_fragments(
+            positions, {1}, store, max_appearance=0.20,
+        )
+        assert num == 1  # appearance-aware path: similar HSV → APPROVE
+
+    def test_mixed_bbox_quality_uses_appearance_path(self) -> None:
+        """If only ONE endpoint is small, the appearance path is still used.
+
+        The bbox-aware bypass requires BOTH endpoints to be small (the
+        appearance signal is unreliable on either side). One small + one
+        large means there's at least one decent crop for HSV; trust the
+        existing gate.
+        """
+        positions = (
+            # Primary: large bbox (clean appearance signal)
+            _make_positions(1, range(0, 50), x=0.3, y=0.4, width=0.10, height=0.30)
+            # Fragment: small bbox
+            + _make_positions(2, range(70, 120), x=0.34, y=0.44, width=0.05, height=0.15)
+        )
+        store = ColorHistogramStore()
+        # Dissimilar HSV — appearance gate would reject.
+        for f in range(0, 50, 3):
+            store.add(1, f, _make_histogram(hue_peak=2))
+        for f in range(70, 120, 3):
+            store.add(2, f, _make_histogram(hue_peak=10))
+
+        result, updated_ids, num = relink_primary_fragments(
+            positions, {1}, store, max_appearance=0.20,
+        )
+        # Mixed quality → appearance-aware path → reject due to dissimilar HSV.
+        assert num == 0
+
+
+class TestEvaluatePrimaryRelinkCandidate:
+    """Direct tests of the candidate-evaluation helper (2026-05-05)."""
+
+    def _info(
+        self,
+        first_frame: int, last_frame: int,
+        first_pos: tuple[float, float], last_pos: tuple[float, float],
+        first_area: float = 0.030, last_area: float = 0.030,
+    ) -> dict[str, object]:
+        return {
+            "first_frame": first_frame, "last_frame": last_frame,
+            "first_pos": first_pos, "last_pos": last_pos,
+            "first_area": first_area, "last_area": last_area,
+        }
+
+    def test_motion_only_path_taken_when_both_bboxes_small(self) -> None:
+        from rallycut.tracking.tracklet_link import _evaluate_primary_relink_candidate
+        p_info = self._info(0, 50, (0.5, 0.5), (0.667, 0.546),
+                            first_area=0.0075, last_area=0.0075)
+        np_info = self._info(70, 120, (0.606, 0.543), (0.6, 0.5),
+                             first_area=0.0050, last_area=0.0050)
+        blocked, score, reason = _evaluate_primary_relink_candidate(
+            p_info, np_info, max_gap=50, max_distance=0.08,
+            max_appearance=0.20,
+            p_hist=None, np_hist=None,
+        )
+        assert not blocked
+        assert "motion-only" in reason
+
+    def test_appearance_path_taken_when_bbox_large(self) -> None:
+        from rallycut.tracking.tracklet_link import _evaluate_primary_relink_candidate
+        p_info = self._info(0, 50, (0.5, 0.5), (0.30, 0.40),
+                            first_area=0.030, last_area=0.030)
+        np_info = self._info(70, 120, (0.34, 0.44), (0.34, 0.44),
+                             first_area=0.030, last_area=0.030)
+        # Identical histograms → distance 0 → appearance pass
+        hist = np.ones((16, 8), dtype=np.float32) / 128
+        blocked, score, reason = _evaluate_primary_relink_candidate(
+            p_info, np_info, max_gap=50, max_distance=0.08,
+            max_appearance=0.20,
+            p_hist=hist, np_hist=hist,
+        )
+        assert not blocked
+        assert "appearance-aware" in reason
+
+    def test_motion_only_blocks_high_velocity(self) -> None:
+        from rallycut.tracking.tracklet_link import _evaluate_primary_relink_candidate
+        # gap=5f, dist=0.05 → velocity 0.01/f, way over 0.005/f
+        p_info = self._info(0, 50, (0.5, 0.5), (0.30, 0.40),
+                            first_area=0.005, last_area=0.005)
+        np_info = self._info(55, 100, (0.35, 0.40), (0.35, 0.40),
+                             first_area=0.005, last_area=0.005)
+        blocked, score, reason = _evaluate_primary_relink_candidate(
+            p_info, np_info, max_gap=50, max_distance=0.08,
+            max_appearance=0.20,
+            p_hist=None, np_hist=None,
+        )
+        assert blocked
+        assert "velocity" in reason
+
+    def test_blocks_when_gap_exceeds_max(self) -> None:
+        from rallycut.tracking.tracklet_link import _evaluate_primary_relink_candidate
+        p_info = self._info(0, 50, (0.5, 0.5), (0.5, 0.5))
+        np_info = self._info(200, 250, (0.5, 0.5), (0.5, 0.5))
+        blocked, score, reason = _evaluate_primary_relink_candidate(
+            p_info, np_info, max_gap=50, max_distance=0.08,
+            max_appearance=0.20,
+            p_hist=None, np_hist=None,
+        )
+        assert blocked
+        assert "gap" in reason
 
 
 class TestOptimalPartition:

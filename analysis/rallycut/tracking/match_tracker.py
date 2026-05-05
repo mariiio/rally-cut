@@ -3819,7 +3819,21 @@ ANCHOR_MIN_CONFIDENCE = 0.50
 #          without a PID assignment now resolve to UNLABELED_TRACK_ID
 #          and their positions get dropped. Bump invalidates cached
 #          anchors so primary_track_ids gets cleaned on the next run.
-MATCHER_VERSION = "v6"
+#  - v7: 2026-05-05 — `relink_primary_fragments` adds a bbox-quality-
+#          aware merge gate. When BOTH endpoint bboxes are below
+#          PRIMARY_RELINK_SMALL_BBOX_AREA (default 0.012), the
+#          appearance gate (HSV Bhattacharyya) is bypassed and a
+#          motion-only velocity check is applied instead. Rationale:
+#          far-side occluded detections produce mostly-sand crops that
+#          defeat both HSV histograms and the learned ReID head; the
+#          appearance signal is uninformative noise on these inputs.
+#          The motion-only path correctly approves the user-confirmed
+#          merge in 84e66e74 r13 (P2 PID flicker case) that the
+#          previous gate blocked. Non-low-quality bboxes continue
+#          through the existing appearance-aware path — bit-exact for
+#          clean-bbox cases. Bump invalidates anchors so freshly-merged
+#          primary tracks propagate cleanly to the next run.
+MATCHER_VERSION = "v7"
 
 
 def replay_refine_from_scratchpad(

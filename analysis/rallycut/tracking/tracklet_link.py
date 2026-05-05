@@ -90,21 +90,33 @@ COURT_FOOT_TRUST_MARGIN_M = 2.0
 def _compute_track_summary(
     positions: list[PlayerPosition],
 ) -> dict[int, dict]:
-    """Build per-track summary: frame range, start/end positions, frame set.
+    """Build per-track summary: frame range, endpoint positions+bbox areas, frame set.
+
+    `first_area` / `last_area` are normalized bbox areas (width × height in
+    [0, 1]² coords) at the endpoint frames. Used by `relink_primary_fragments`
+    to switch to a motion-only merge path when bboxes are too small for
+    appearance signals to be reliable (per
+    `chimera_stitching_dd042609_2026_05_04` follow-up: occluded far-side
+    detections produce mostly-sand crops that defeat both HSV histograms
+    and the learned ReID head).
 
     Returns:
-        Dict mapping track_id -> {first_frame, last_frame, first_pos, last_pos, frames, count}.
+        Dict mapping track_id -> {first_frame, last_frame, first_pos,
+        last_pos, first_area, last_area, frames, count}.
     """
     tracks: dict[int, dict] = {}
     for p in positions:
         if p.track_id < 0:
             continue
+        area = float(p.width) * float(p.height)
         if p.track_id not in tracks:
             tracks[p.track_id] = {
                 "first_frame": p.frame_number,
                 "last_frame": p.frame_number,
                 "first_pos": (p.x, p.y),
                 "last_pos": (p.x, p.y),
+                "first_area": area,
+                "last_area": area,
                 "frames": set(),
                 "count": 0,
             }
@@ -112,9 +124,11 @@ def _compute_track_summary(
         if p.frame_number < info["first_frame"]:
             info["first_frame"] = p.frame_number
             info["first_pos"] = (p.x, p.y)
+            info["first_area"] = area
         if p.frame_number > info["last_frame"]:
             info["last_frame"] = p.frame_number
             info["last_pos"] = (p.x, p.y)
+            info["last_area"] = area
         info["frames"].add(p.frame_number)
         info["count"] += 1
     return tracks
@@ -878,6 +892,130 @@ PRIMARY_RELINK_MAX_GAP = 50  # ~1.7s at 30fps
 PRIMARY_RELINK_MAX_DISTANCE = 0.08  # normalized, ~100px at 1280w
 PRIMARY_RELINK_MAX_APPEARANCE = 0.20  # Bhattacharyya gate — reject if too dissimilar
 
+# Bbox-quality-aware merge gate (added 2026-05-05; see memory file
+# chimera_stitching_dd042609_2026_05_04 follow-up). When a fragment's
+# endpoint bbox is small (typically far-side occluded detections), the
+# YOLO bbox tends to capture mostly background and partial body — both
+# the HSV histogram and the learned ReID embedding produce uninformative
+# similarity scores on these crops. Visual debugging confirmed the
+# crops are "mostly sand" for areas under ~0.012 normalized.
+#
+# When BOTH endpoint bboxes are below this threshold, we skip the
+# appearance gate and apply a velocity-based motion-only check instead:
+# implied displacement-per-frame must stay below a sprint cap. This
+# rescues legitimate same-player merges that the HSV gate currently
+# blocks (validated on user case 84e66e74 r13: gap=19f, dist=0.072,
+# velocity=0.0038/f → APPROVE; same player confirmed visually).
+#
+# Calibrated from observed user-reported failure cases. See
+# probe_bbox_aware_merge_gate.py for the validation panel + outputs.
+PRIMARY_RELINK_SMALL_BBOX_AREA = float(os.environ.get(
+    "RALLYCUT_PRIMARY_RELINK_SMALL_BBOX_AREA", "0.012",
+))
+PRIMARY_RELINK_MAX_VELOCITY_PER_FRAME = float(os.environ.get(
+    "RALLYCUT_PRIMARY_RELINK_MAX_VELOCITY_PER_FRAME", "0.005",
+))
+
+
+def _evaluate_primary_relink_candidate(
+    p_info: dict,
+    np_info: dict,
+    max_gap: int,
+    max_distance: float,
+    max_appearance: float,
+    p_hist: np.ndarray | None,
+    np_hist: np.ndarray | None,
+    *,
+    small_bbox_area: float = PRIMARY_RELINK_SMALL_BBOX_AREA,
+    max_velocity_per_frame: float = PRIMARY_RELINK_MAX_VELOCITY_PER_FRAME,
+) -> tuple[bool, tuple[float, float], str]:
+    """Decide whether to link a non-primary fragment to a primary track.
+
+    Two-path design:
+      A. **Appearance-aware** (default, used when at least one endpoint
+         bbox is large enough for appearance to be reliable): apply the
+         existing HSV Bhattacharyya gate plus gap+distance gates.
+      B. **Motion-only** (used when BOTH endpoint bboxes are small,
+         typically far-side occluded detections): skip the HSV gate and
+         apply an additional velocity check (gap+distance+velocity).
+         Rationale: small-bbox crops are mostly background, so HSV/ReID
+         signals are uninformative. The velocity check is a stricter
+         motion gate (≤ max_velocity_per_frame) to compensate for the
+         dropped appearance gate.
+
+    Returns:
+        ``(blocked, (primary_score, secondary_score), reason)``.
+        Caller picks the candidate primary with the lowest tuple in
+        lexicographic order. The score's *meaning* depends on the path
+        taken — appearance-aware uses (appearance_dist, spatial_dist);
+        motion-only uses (spatial_dist, gap_frames). They are not
+        directly comparable across paths; in practice each non-primary
+        fragment routes through one path so all its candidates share
+        the same scoring scheme.
+    """
+    gap = np_info["first_frame"] - p_info["last_frame"]
+    if gap < 0:
+        return True, (float("inf"), float("inf")), "fragment precedes or overlaps primary"
+    if gap > max_gap:
+        return True, (float("inf"), float("inf")), f"gap {gap}f > {max_gap}f"
+
+    end_pos = p_info["last_pos"]
+    start_pos = np_info["first_pos"]
+    dx = end_pos[0] - start_pos[0]
+    dy = end_pos[1] - start_pos[1]
+    dist = float((dx * dx + dy * dy) ** 0.5)
+    if dist > max_distance:
+        return True, (float("inf"), float("inf")), f"spatial dist {dist:.4f} > {max_distance}"
+
+    # Bbox-quality decision: when both endpoints are small, appearance is
+    # unreliable — switch to motion-only path.
+    p_endpoint_area = float(p_info.get("last_area", 0.0))
+    np_endpoint_area = float(np_info.get("first_area", 0.0))
+    both_low_quality = (
+        p_endpoint_area < small_bbox_area
+        and np_endpoint_area < small_bbox_area
+    )
+
+    if both_low_quality:
+        # Motion-only gate: stricter velocity to compensate for missing
+        # appearance signal.
+        velocity = dist / max(gap, 1)
+        if velocity > max_velocity_per_frame:
+            return (
+                True, (float("inf"), float("inf")),
+                f"velocity {velocity:.4f}/f > {max_velocity_per_frame}/f "
+                f"(gap={gap}, dist={dist:.4f}; bbox-quality LOW: "
+                f"areas {p_endpoint_area:.4f}, {np_endpoint_area:.4f})",
+            )
+        # Approved via motion-only. Score for tiebreaker: prefer lower
+        # spatial distance (closer endpoints), break ties by smaller gap.
+        return (
+            False, (dist, float(gap)),
+            f"motion-only PASS: gap={gap}f, dist={dist:.4f}, "
+            f"velocity={velocity:.4f}/f (bbox-quality LOW: areas "
+            f"{p_endpoint_area:.4f}, {np_endpoint_area:.4f})",
+        )
+
+    # Appearance-aware gate (existing logic).
+    appearance_dist = float("inf")
+    if p_hist is not None and np_hist is not None:
+        appearance_dist = _bhattacharyya_distance(
+            p_hist.astype(np.float32),
+            np_hist.astype(np.float32),
+        )
+    if appearance_dist > max_appearance:
+        return (
+            True, (float("inf"), float("inf")),
+            f"HSV Bhattacharyya {appearance_dist:.4f} > {max_appearance}",
+        )
+    # Approved via appearance-aware. Score: appearance-dist primary,
+    # spatial-dist secondary (matches the pre-2026-05-05 behavior).
+    return (
+        False, (appearance_dist, dist),
+        f"appearance-aware PASS: gap={gap}f, dist={dist:.4f}, "
+        f"appearance={appearance_dist:.4f}",
+    )
+
 
 def relink_primary_fragments(
     positions: list[PlayerPosition],
@@ -910,6 +1048,10 @@ def relink_primary_fragments(
         max_distance: Maximum endpoint distance (normalized).
         max_appearance: Maximum Bhattacharyya distance (0=identical, 1=different).
             Fragments with appearance distance above this are rejected.
+            Bypassed when both endpoint bboxes are below
+            `PRIMARY_RELINK_SMALL_BBOX_AREA` — see
+            `_evaluate_primary_relink_candidate` for the motion-only
+            fallback path used in that case.
 
     Returns:
         Tuple of (modified positions, updated primary_track_ids, num re-links).
@@ -951,12 +1093,13 @@ def relink_primary_fragments(
     for info in primary_info.values():
         info["frames"] = set(info["frames"])
 
+    n_motion_only_merges = 0
     for np_tid in non_primary_ids:
         np_info = tracks[np_tid]
 
         best_primary: int | None = None
-        best_dist: float = float("inf")
-        best_appearance: float = float("inf")
+        best_score: tuple[float, float] = (float("inf"), float("inf"))
+        best_reason: str = ""
 
         for p_tid, p_info in primary_info.items():
             # Check frame overlap
@@ -968,45 +1111,25 @@ def relink_primary_fragments(
             # Backward merges (fragment precedes target) are blocked
             # because a pre-existing fragment is more likely a separate
             # player than a predecessor of a primary that starts later.
-            gap = np_info["first_frame"] - p_info["last_frame"]
-            if gap < 0:
-                continue  # Fragment precedes or overlaps primary
-            end_pos = p_info["last_pos"]
-            start_pos = np_info["first_pos"]
-
-            if gap > max_gap:
+            blocked, score, reason = _evaluate_primary_relink_candidate(
+                p_info, np_info,
+                max_gap=max_gap,
+                max_distance=max_distance,
+                max_appearance=max_appearance,
+                p_hist=avg_hists.get(p_tid),
+                np_hist=avg_hists.get(np_tid),
+            )
+            if blocked:
                 continue
 
-            dx = end_pos[0] - start_pos[0]
-            dy = end_pos[1] - start_pos[1]
-            dist = (dx * dx + dy * dy) ** 0.5
-
-            if dist > max_distance:
-                continue
-
-            # Appearance gate + tiebreaker
-            appearance_dist = float("inf")
-            p_hist = avg_hists.get(p_tid)
-            np_hist = avg_hists.get(np_tid)
-            if p_hist is not None and np_hist is not None:
-                appearance_dist = _bhattacharyya_distance(
-                    p_hist.astype(np.float32),
-                    np_hist.astype(np.float32),
-                )
-
-            # Reject if appearance is too dissimilar
-            if appearance_dist > max_appearance:
-                continue
-
-            # Prefer better appearance match; use spatial distance to break
-            # ties.  All candidates already passed spatial/temporal gates,
-            # so appearance is the stronger discriminator.
-            if appearance_dist < best_appearance or (
-                appearance_dist == best_appearance and dist < best_dist
-            ):
+            # Lexicographic tiebreaker on the path-specific score tuple.
+            # All candidates evaluated here passed at least one of the
+            # two paths; the score tuple's meaning is consistent within
+            # the path each candidate took.
+            if score < best_score:
                 best_primary = p_tid
-                best_dist = dist
-                best_appearance = appearance_dist
+                best_score = score
+                best_reason = reason
 
         if best_primary is not None:
             id_mapping[np_tid] = best_primary
@@ -1018,14 +1141,21 @@ def relink_primary_fragments(
             if np_info["first_frame"] < p_info["first_frame"]:
                 p_info["first_frame"] = np_info["first_frame"]
                 p_info["first_pos"] = np_info["first_pos"]
+                p_info["first_area"] = np_info.get("first_area", p_info.get("first_area", 0.0))
             if np_info["last_frame"] > p_info["last_frame"]:
                 p_info["last_frame"] = np_info["last_frame"]
                 p_info["last_pos"] = np_info["last_pos"]
+                p_info["last_area"] = np_info.get("last_area", p_info.get("last_area", 0.0))
 
-            logger.debug(
-                f"Primary re-link: T{np_tid} -> T{best_primary} "
-                f"(dist={best_dist:.4f}, appearance={best_appearance:.4f})"
-            )
+            if "motion-only" in best_reason:
+                n_motion_only_merges += 1
+                logger.info(
+                    f"Primary re-link [motion-only]: T{np_tid} -> T{best_primary} {best_reason}"
+                )
+            else:
+                logger.debug(
+                    f"Primary re-link [appearance]: T{np_tid} -> T{best_primary} {best_reason}"
+                )
 
     if not id_mapping:
         return positions, sorted(primary_set), 0
@@ -1045,8 +1175,10 @@ def relink_primary_fragments(
         learned_store.remap_ids(id_mapping)
 
     num_relinks = len(id_mapping)
+    n_appearance_merges = num_relinks - n_motion_only_merges
     logger.info(
-        f"Primary re-link: {num_relinks} re-links, "
+        f"Primary re-link: {num_relinks} re-links "
+        f"({n_appearance_merges} appearance-aware + {n_motion_only_merges} motion-only), "
         f"remapped {remapped} positions"
     )
 
