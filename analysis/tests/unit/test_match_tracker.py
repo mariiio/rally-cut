@@ -1738,10 +1738,9 @@ class TestHardTeamPairConstraintInHungarian:
 class TestTrackAppearanceStatsSerialization:
     """Roundtrip serialization for the per-rally TrackAppearanceStats.
 
-    The relabel-with-crops worker reloads pre-extracted appearance from disk
-    and replays Pass 2 stages 1+2. Stages 1+2 only consume the avg_* fields
-    (verified 2026-04-24 by determinism probe); the raw `features` list is
-    intermediate state from Pass 1's extraction and is NOT preserved.
+    Pass-2-stage scratchpad replay only consumes the avg_* fields (verified
+    2026-04-24 by determinism probe); the raw `features` list is intermediate
+    state from Pass 1's extraction and is NOT preserved.
     """
 
     def test_roundtrip_preserves_avg_fields(self) -> None:

@@ -352,8 +352,8 @@ class TrackAppearanceStats:
         """Serialize to a JSON-compatible dict.
 
         Drops the raw `features` list — it is intermediate Pass-1 state and
-        downstream replay (Pass 2 stages 1+2, relabel-with-crops) only needs
-        the avg_* aggregates.
+        downstream Pass-2-stage scratchpad replay only needs the avg_*
+        aggregates.
         """
         d: dict[str, Any] = {"track_id": int(self.track_id)}
         if self.avg_skin_tone_hsv is not None:

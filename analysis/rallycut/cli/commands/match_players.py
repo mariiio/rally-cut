@@ -435,9 +435,8 @@ def match_players(
     }
     if team_templates_data is not None:
         result_json["teamTemplates"] = team_templates_data
-    # Phase 0: persist the per-rally scratchpad so the relabel-with-crops
-    # worker can replay Pass 2 stages 1+2 with new frozen profiles without
-    # re-extracting appearance from video.
+    # Persist the per-rally scratchpad so future diagnostics can inspect
+    # intermediate Pass 2 state without re-running tracking.
     if match_result.scratchpad:
         result_json["rallyScratchpad"] = match_result.scratchpad
 

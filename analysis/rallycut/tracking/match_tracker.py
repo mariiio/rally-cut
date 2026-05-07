@@ -529,9 +529,9 @@ class StoredRallyData:
     # low-confidence votes for team membership.
     sides_by_bbox: dict[int, int] = field(default_factory=dict)
     # Late-rally positions per top track (avg over last 30 frames). Used
-    # by ``MatchSolver`` for cross-rally position continuity. Not
-    # persisted by ``to_dict`` — solver runs in-memory only on the blind
-    # path; relabel-with-crops replay never sees this field.
+    # by ``MatchSolver`` for cross-rally position continuity. Not persisted
+    # by ``to_dict`` — solver runs in-memory only and the field is not
+    # needed for downstream scratchpad inspection.
     late_positions: dict[int, tuple[float, float]] = field(default_factory=dict)
     # Upstream tracking-pipeline team labels: track_id -> 0 (near) / 1 (far),
     # computed by `compute_court_split` / `classify_teams` from bbox-size
