@@ -991,7 +991,9 @@ class MatchPlayerTracker:
             )
         else:
             # Optional pre-Hungarian within-track split (Task 4, 2026-04-26).
-            # Returns [] when flag is off, no classifier, or no frozen profiles.
+            # Currently a stub — the classifier path was ref-crop-driven and
+            # is unreachable post-cleanup; method body to be deleted in a
+            # later phase.
             sub_tracks = self._maybe_segment_tracks_by_appearance(
                 track_ids=top_tracks,
                 track_stats=track_stats,
@@ -1653,13 +1655,15 @@ class MatchPlayerTracker:
         classifier: Any,
         crop_extractor: Callable[[int, int], np.ndarray | None] | None = None,
     ) -> list[SubTrackCandidate]:
-        """Flag-gated wrapper around `_segment_tracks_by_appearance`.
+        """Stub: pre-Hungarian within-track segmentation.
 
-        Active only when:
-          - ENABLE_REF_CROP_TRACK_SPLIT environment variable is "1"
-          - A trained classifier is supplied
-          - frozen_player_ids is non-empty (means video has ref-crop profiles)
-          - crop_extractor is not None
+        Was a flag-gated wrapper around `_segment_tracks_by_appearance` that
+        only fired when the video had ref-crop-derived frozen profiles. With
+        ref-crops removed in the 2026-05-07 cleanup, the classifier path is
+        permanently unreachable and the method returns `[]` unconditionally.
+        Kept temporarily so the call site at `_assign_tracks_to_players`
+        compiles; the method body and call site are deleted in a later
+        phase.
         """
         if os.environ.get("ENABLE_REF_CROP_TRACK_SPLIT", "0") != "1":
             return []
@@ -2728,7 +2732,6 @@ class MatchPlayerTracker:
         - Rally has 1 ≤ N < 4 primary tracks with track_stats.
         - At least IDENTITY_FIRST_MIN_ANCHORS (3) per-PID profiles in
           state.players, each with valid appearance features.
-        - frozen_player_ids is empty (ref-crop labels are authoritative).
 
         When any gate fails the rally falls through unchanged.
         """
@@ -2851,9 +2854,7 @@ class MatchPlayerTracker:
                each other AND disagree with rally i (consensus
                disagreement).
         3. The implied permutation is a valid bijection over {1,2,3,4}.
-        4. ``self.frozen_player_ids`` is empty (ref-crop labels are
-           authoritative; never permute over the user's manual labels).
-        5. ``DISABLE_POST_SWITCH_CONSENSUS=1`` env var is not set
+        4. ``DISABLE_POST_SWITCH_CONSENSUS=1`` env var is not set
            (emergency rollback).
 
         The cross-team partition is determined by ``(actual → expected)``;
