@@ -914,7 +914,7 @@ class MatchPlayerTracker:
 
         # Bbox-height cross-check uses windowed positions on rally 1
         # (clean serve-formation snapshot) and full positions otherwise.
-        if self.rally_count == 1 and not self.frozen_player_ids:
+        if self.rally_count == 1:
             windowed_primary = [
                 p for p in full_primary_positions
                 if p.frame_number < FIRST_RALLY_INIT_WINDOW_FRAMES
@@ -981,7 +981,7 @@ class MatchPlayerTracker:
         # regressed b5fb0594/r10 to UNLABELED 37.5%. See
         # `w4_revalidated_NOGO_2026_05_01.md`.
 
-        if self.rally_count <= 1 and not self.frozen_player_ids:
+        if self.rally_count <= 1:
             # Phase 3: seeded profiles enrich the per-match prior, but the
             # first-rally track->pid mapping still goes through the baseline
             # Y-sort so convention remains identical. The seed's benefit
@@ -1007,7 +1007,7 @@ class MatchPlayerTracker:
                 # Run Hungarian on remaining real tracks against remaining pids.
                 hungarian_result = self._assign_tracks_to_players_global(
                     remaining_top_tracks, track_stats, track_court_sides,
-                    use_side_penalty=not self.frozen_player_ids,
+                    use_side_penalty=True,
                     early_positions=early_positions,
                     restrict_to_pids=remaining_pids,
                 )
@@ -1016,7 +1016,7 @@ class MatchPlayerTracker:
             else:
                 track_to_player = self._assign_tracks_to_players_global(
                     top_tracks, track_stats, track_court_sides,
-                    use_side_penalty=not self.frozen_player_ids,
+                    use_side_penalty=True,
                     early_positions=early_positions,
                 )
 
@@ -1026,7 +1026,7 @@ class MatchPlayerTracker:
         self._last_rally_sub_tracks = sub_tracks
 
         # Step 5: Within-team refinement
-        if self.rally_count > 1 or self.frozen_player_ids:
+        if self.rally_count > 1:
             track_to_player = self._refine_within_team(
                 track_to_player, player_positions, track_court_sides
             )
@@ -1665,13 +1665,7 @@ class MatchPlayerTracker:
             return []
         if classifier is None or not getattr(classifier, "is_trained", False):
             return []
-        if not getattr(self, "frozen_player_ids", None):
-            return []
-        if crop_extractor is None:
-            return []
-        return self._segment_tracks_by_appearance(
-            track_ids, track_stats, positions, classifier, crop_extractor,
-        )
+        return []
 
     @staticmethod
     def _apply_subtrack_assignments(
@@ -2159,10 +2153,6 @@ class MatchPlayerTracker:
                 continue
             if player_id not in self.state.players:
                 continue
-            # Skip frozen profiles (user-provided reference crops)
-            if player_id in self.frozen_player_ids:
-                continue
-
             stats = track_stats[track_id]
             profile = self.state.players[player_id]
 
@@ -2675,10 +2665,6 @@ class MatchPlayerTracker:
             profile.player_id = new_pid
             new_players[new_pid] = profile
         self.state.players = new_players
-        # Frozen pid set follows the permutation too.
-        self.frozen_player_ids = {
-            perm.get(pid, pid) for pid in self.frozen_player_ids
-        }
         # Live assignments
         self.state.current_side_assignment = {
             perm.get(pid, pid): team
@@ -2747,8 +2733,6 @@ class MatchPlayerTracker:
         When any gate fails the rally falls through unchanged.
         """
         if not ENABLE_IDENTITY_FIRST_PARTIAL:
-            return results
-        if self.frozen_player_ids:
             return results
         if len(self.state.players) < IDENTITY_FIRST_MIN_ANCHORS:
             return results
@@ -2909,8 +2893,6 @@ class MatchPlayerTracker:
             rallies returned unchanged. Refuses to fire on any ambiguous
             case.
         """
-        if self.frozen_player_ids:
-            return results
         if os.environ.get("DISABLE_POST_SWITCH_CONSENSUS") == "1":
             return results
         if len(results) < 3 or len(self.stored_rally_data) != len(results):
@@ -3177,24 +3159,21 @@ class MatchPlayerTracker:
                     )
 
         # Re-anchor canonical pid layout from the highest-quality rally
-        # (Phase 1 step 2). Frozen profiles disable this — when reference
-        # crops anchor pids, the user's labels are authoritative and must
-        # not be permuted.
-        if not self.frozen_player_ids:
-            seed_idx = self._select_seed_rally()
-            if seed_idx > 0 and seed_idx < len(initial_results):
-                seed_perm = self._within_team_permutation_from_seed(
-                    seed_idx, initial_results[seed_idx].track_to_player,
+        # (Phase 1 step 2).
+        seed_idx = self._select_seed_rally()
+        if seed_idx > 0 and seed_idx < len(initial_results):
+            seed_perm = self._within_team_permutation_from_seed(
+                seed_idx, initial_results[seed_idx].track_to_player,
+            )
+            if any(seed_perm.get(p, p) != p for p in range(1, 5)):
+                logger.info(
+                    "Pass 2 re-anchoring canonical pid layout from "
+                    "rally %d (Y-sort seed): perm=%s",
+                    seed_idx, seed_perm,
                 )
-                if any(seed_perm.get(p, p) != p for p in range(1, 5)):
-                    logger.info(
-                        "Pass 2 re-anchoring canonical pid layout from "
-                        "rally %d (Y-sort seed): perm=%s",
-                        seed_idx, seed_perm,
-                    )
-                    initial_results = self._apply_within_team_permutation(
-                        seed_perm, initial_results,
-                    )
+                initial_results = self._apply_within_team_permutation(
+                    seed_perm, initial_results,
+                )
 
         # Blind-path short-circuit: solver replaces Stages 1 and 2.
         if skip_stages_1_and_2:
@@ -3251,7 +3230,7 @@ class MatchPlayerTracker:
                         remaining_tracks,
                         data.track_stats,
                         data.track_court_sides,
-                        use_side_penalty=not self.frozen_player_ids,
+                        use_side_penalty=True,
                         restrict_to_pids=remaining_pids,
                         track_team_constraint=team_constraint or None,
                     )
@@ -3263,7 +3242,7 @@ class MatchPlayerTracker:
                     data.top_tracks,
                     data.track_stats,
                     data.track_court_sides,
-                    use_side_penalty=not self.frozen_player_ids,
+                    use_side_penalty=True,
                     track_team_constraint=team_constraint or None,
                 )
 
@@ -3975,7 +3954,7 @@ def replay_refine_from_scratchpad(
             data.top_tracks,
             data.track_stats,
             data.track_court_sides,
-            use_side_penalty=not tracker.frozen_player_ids,
+            use_side_penalty=True,
             track_team_constraint=team_constraint or None,
         )
         tracker.state.current_side_assignment = saved_side
@@ -4268,153 +4247,150 @@ def match_players_across_rallies(
     track_stats_hashes: dict[str, str] = {}
     cache_hit_count = 0
     cache_total = 0
-    if tracker.frozen_player_ids:
-        results = tracker.refine_assignments(results)
-    else:
-        from rallycut.tracking.match_solver import MatchSolver
+    from rallycut.tracking.match_solver import MatchSolver
 
-        # Per-rally pre-MatchSolver state hashes — fed back to the CLI to
-        # write `assignmentAnchor` into match_analysis_json. Always
-        # populated on the blind path so the next run can use them.
-        for i, data in enumerate(tracker.stored_rally_data):
-            if i < len(rallies):
-                track_stats_hashes[rallies[i].rally_id] = _stored_rally_data_hash(data)
+    # Per-rally pre-MatchSolver state hashes — fed back to the CLI to
+    # write `assignmentAnchor` into match_analysis_json. Always
+    # populated on the blind path so the next run can use them.
+    for i, data in enumerate(tracker.stored_rally_data):
+        if i < len(rallies):
+            track_stats_hashes[rallies[i].rally_id] = _stored_rally_data_hash(data)
 
-        # Per-rally assignment-anchor cache (ENABLE_ASSIGNMENT_ANCHORS=1).
-        # When a rally's pre-MatchSolver hash matches its prior anchor's
-        # hash, we pin the prior assignment instead of re-solving — this
-        # decouples its decision from cross-rally input drift (the actual
-        # cascade source confirmed by the Phase 1 falsification + DB-state
-        # determinism probe).
-        pinned_assignments: dict[int, dict[int, int]] = {}
-        # Default ON — anchor cache decouples each rally from cross-rally
-        # input drift. Set ENABLE_ASSIGNMENT_ANCHORS=0 to disable.
-        anchors_enabled = os.environ.get("ENABLE_ASSIGNMENT_ANCHORS", "1") != "0"
-        if anchors_enabled and prior_match_analysis:
-            prior_anchors_by_rid: dict[str, dict[str, Any]] = {}
-            for entry in prior_match_analysis.get("rallies", []):
-                rid = entry.get("rallyId") or entry.get("rally_id")
-                anchor = entry.get("assignmentAnchor")
-                if rid and isinstance(anchor, dict):
-                    prior_anchors_by_rid[rid] = anchor
+    # Per-rally assignment-anchor cache (ENABLE_ASSIGNMENT_ANCHORS=1).
+    # When a rally's pre-MatchSolver hash matches its prior anchor's
+    # hash, we pin the prior assignment instead of re-solving — this
+    # decouples its decision from cross-rally input drift (the actual
+    # cascade source confirmed by the Phase 1 falsification + DB-state
+    # determinism probe).
+    pinned_assignments: dict[int, dict[int, int]] = {}
+    # Default ON — anchor cache decouples each rally from cross-rally
+    # input drift. Set ENABLE_ASSIGNMENT_ANCHORS=0 to disable.
+    anchors_enabled = os.environ.get("ENABLE_ASSIGNMENT_ANCHORS", "1") != "0"
+    if anchors_enabled and prior_match_analysis:
+        prior_anchors_by_rid: dict[str, dict[str, Any]] = {}
+        for entry in prior_match_analysis.get("rallies", []):
+            rid = entry.get("rallyId") or entry.get("rally_id")
+            anchor = entry.get("assignmentAnchor")
+            if rid and isinstance(anchor, dict):
+                prior_anchors_by_rid[rid] = anchor
 
-            stale_version_count = 0
-            for i, rally in enumerate(rallies):
-                if i >= len(tracker.stored_rally_data):
-                    break
-                anchor = prior_anchors_by_rid.get(rally.rally_id)
-                if not anchor:
-                    continue
-                # Version-key check: anchors written by an older matcher
-                # are silently misleading after any matcher logic change.
-                # Drop them so the rally re-solves cleanly.
-                if anchor.get("matcherVersion") != MATCHER_VERSION:
-                    stale_version_count += 1
-                    continue
-                if anchor.get("trackStatsHash") != track_stats_hashes.get(rally.rally_id):
-                    continue
-                raw_assignment = anchor.get("assignment") or {}
-                try:
-                    assignment = {
-                        int(k): int(v) for k, v in raw_assignment.items()
-                    }
-                except (TypeError, ValueError):
-                    continue
-                expected_tids = {
-                    int(t) for t in tracker.stored_rally_data[i].top_tracks
+        stale_version_count = 0
+        for i, rally in enumerate(rallies):
+            if i >= len(tracker.stored_rally_data):
+                break
+            anchor = prior_anchors_by_rid.get(rally.rally_id)
+            if not anchor:
+                continue
+            # Version-key check: anchors written by an older matcher
+            # are silently misleading after any matcher logic change.
+            # Drop them so the rally re-solves cleanly.
+            if anchor.get("matcherVersion") != MATCHER_VERSION:
+                stale_version_count += 1
+                continue
+            if anchor.get("trackStatsHash") != track_stats_hashes.get(rally.rally_id):
+                continue
+            raw_assignment = anchor.get("assignment") or {}
+            try:
+                assignment = {
+                    int(k): int(v) for k, v in raw_assignment.items()
                 }
-                if set(assignment.keys()) != expected_tids:
-                    # Anchor's track ids don't fit current state — skip.
-                    continue
-                pinned_assignments[i] = assignment
+            except (TypeError, ValueError):
+                continue
+            expected_tids = {
+                int(t) for t in tracker.stored_rally_data[i].top_tracks
+            }
+            if set(assignment.keys()) != expected_tids:
+                # Anchor's track ids don't fit current state — skip.
+                continue
+            pinned_assignments[i] = assignment
 
-            if pinned_assignments:
-                logger.info(
-                    "AssignmentAnchor cache: %d/%d rallies pinned",
-                    len(pinned_assignments), len(tracker.stored_rally_data),
-                )
-            if stale_version_count:
-                logger.info(
-                    "AssignmentAnchor cache: invalidated %d rally/rallies "
-                    "with stale matcherVersion (current=%s); they will "
-                    "re-solve from scratch.",
-                    stale_version_count, MATCHER_VERSION,
-                )
-
-        cache_hit_count = len(pinned_assignments)
-        cache_total = len(tracker.stored_rally_data) if anchors_enabled else 0
-
-        _probe.record_track_stats_input(tracker.stored_rally_data)
-        solver = MatchSolver(reid_blend=REID_BLEND)
-        solved = solver.solve(
-            tracker.stored_rally_data,
-            pinned_assignments=pinned_assignments or None,
-        )
-
-        # Splice solver assignments into the per-rally results. server_player_id
-        # is re-derived from the solver's track_to_player using the original
-        # server-track identity recovered from the Pass-1 mapping (track_id
-        # itself is stable across passes; only its pid label changes).
-        spliced: list[RallyTrackingResult] = []
-        for i, r in enumerate(results):
-            new_t2p = solved[i] if i < len(solved) else r.track_to_player
-
-            server_track_id: int | None = None
-            if r.server_player_id is not None:
-                for tid, pid in r.track_to_player.items():
-                    if pid == r.server_player_id:
-                        server_track_id = tid
-                        break
-            new_server_pid = (
-                new_t2p.get(server_track_id)
-                if server_track_id is not None
-                else r.server_player_id
+        if pinned_assignments:
+            logger.info(
+                "AssignmentAnchor cache: %d/%d rallies pinned",
+                len(pinned_assignments), len(tracker.stored_rally_data),
+            )
+        if stale_version_count:
+            logger.info(
+                "AssignmentAnchor cache: invalidated %d rally/rallies "
+                "with stale matcherVersion (current=%s); they will "
+                "re-solve from scratch.",
+                stale_version_count, MATCHER_VERSION,
             )
 
-            spliced.append(RallyTrackingResult(
-                rally_index=r.rally_index,
-                track_to_player=new_t2p,
-                server_player_id=new_server_pid,
-                side_switch_detected=False,  # Stage 0 sets this below.
-                assignment_confidence=r.assignment_confidence,
-                sub_tracks=r.sub_tracks,
-            ))
-        results = spliced
+    cache_hit_count = len(pinned_assignments)
+    cache_total = len(tracker.stored_rally_data) if anchors_enabled else 0
 
-        # Rebuild profiles from solver assignments so downstream consumers
-        # (team_templates, scratchpad replay) see solver truth, not the
-        # discarded Pass-1 forward Hungarian. Reset first since Pass 1 may
-        # have populated some pids and skipped others under the 0.80 gate.
-        tracker.state.players.clear()
-        tracker.state.initialize_players()
-        for i, data in enumerate(tracker.stored_rally_data):
-            if i < len(solved) and solved[i]:
-                if _probe.is_enabled():
-                    before = _probe.checksum_profiles(tracker.state.players)
-                    tracker._update_profiles(data.track_stats, solved[i])
-                    after = _probe.checksum_profiles(tracker.state.players)
-                    _probe.record_update_profiles(
-                        rally_idx=i,
-                        track_to_player=solved[i],
-                        before=before,
-                        after=after,
-                        context="post_solve",
-                    )
-                else:
-                    tracker._update_profiles(data.track_stats, solved[i])
+    _probe.record_track_stats_input(tracker.stored_rally_data)
+    solver = MatchSolver(reid_blend=REID_BLEND)
+    solved = solver.solve(
+        tracker.stored_rally_data,
+        pinned_assignments=pinned_assignments or None,
+    )
 
-        results = tracker.refine_assignments(results, skip_stages_1_and_2=True)
+    # Splice solver assignments into the per-rally results. server_player_id
+    # is re-derived from the solver's track_to_player using the original
+    # server-track identity recovered from the Pass-1 mapping (track_id
+    # itself is stable across passes; only its pid label changes).
+    spliced: list[RallyTrackingResult] = []
+    for i, r in enumerate(results):
+        new_t2p = solved[i] if i < len(solved) else r.track_to_player
 
-        # `_slow_drift_split` (ENABLE_SLOW_DRIFT_SPLIT=1) removed
-        # 2026-05-03 per dormant_flag_audit_2026_05_03.md. The
-        # position-based bisect detector was parked half-finished
-        # with two known unresolved issues (within_rally_swap
-        # artifact at bisect frame; anchor-cache interaction); its
-        # pattern is generalized by `_within_rally_id_switch.py`
-        # (Phase 1+2) which uses appearance signal instead of
-        # position drift and works on cases the position detector
-        # misses (sub-threshold position shift but clear appearance
-        # discontinuity, e.g. 7d77980f / 09553ef1).
+        server_track_id: int | None = None
+        if r.server_player_id is not None:
+            for tid, pid in r.track_to_player.items():
+                if pid == r.server_player_id:
+                    server_track_id = tid
+                    break
+        new_server_pid = (
+            new_t2p.get(server_track_id)
+            if server_track_id is not None
+            else r.server_player_id
+        )
+
+        spliced.append(RallyTrackingResult(
+            rally_index=r.rally_index,
+            track_to_player=new_t2p,
+            server_player_id=new_server_pid,
+            side_switch_detected=False,  # Stage 0 sets this below.
+            assignment_confidence=r.assignment_confidence,
+            sub_tracks=r.sub_tracks,
+        ))
+    results = spliced
+
+    # Rebuild profiles from solver assignments so downstream consumers
+    # (team_templates, scratchpad replay) see solver truth, not the
+    # discarded Pass-1 forward Hungarian. Reset first since Pass 1 may
+    # have populated some pids and skipped others under the 0.80 gate.
+    tracker.state.players.clear()
+    tracker.state.initialize_players()
+    for i, data in enumerate(tracker.stored_rally_data):
+        if i < len(solved) and solved[i]:
+            if _probe.is_enabled():
+                before = _probe.checksum_profiles(tracker.state.players)
+                tracker._update_profiles(data.track_stats, solved[i])
+                after = _probe.checksum_profiles(tracker.state.players)
+                _probe.record_update_profiles(
+                    rally_idx=i,
+                    track_to_player=solved[i],
+                    before=before,
+                    after=after,
+                    context="post_solve",
+                )
+            else:
+                tracker._update_profiles(data.track_stats, solved[i])
+
+    results = tracker.refine_assignments(results, skip_stages_1_and_2=True)
+
+    # `_slow_drift_split` (ENABLE_SLOW_DRIFT_SPLIT=1) removed
+    # 2026-05-03 per dormant_flag_audit_2026_05_03.md. The
+    # position-based bisect detector was parked half-finished
+    # with two known unresolved issues (within_rally_swap
+    # artifact at bisect frame; anchor-cache interaction); its
+    # pattern is generalized by `_within_rally_id_switch.py`
+    # (Phase 1+2) which uses appearance signal instead of
+    # position drift and works on cases the position detector
+    # misses (sub-threshold position shift but clear appearance
+    # discontinuity, e.g. 7d77980f / 09553ef1).
 
     # Within-rally appearance-based ID-switch detector (Phase 1, 2026-05-03).
     # Detects within-rally identity drift via per-track appearance

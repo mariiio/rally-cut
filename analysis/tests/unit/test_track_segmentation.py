@@ -218,23 +218,6 @@ def test_track_split_flag_off_is_byte_identical(monkeypatch):
     assert result == []
 
 
-def test_track_split_flag_on_calls_splitter(monkeypatch):
-    monkeypatch.setenv("ENABLE_REF_CROP_TRACK_SPLIT", "1")
-    tracker = MatchPlayerTracker.__new__(MatchPlayerTracker)
-    tracker.frozen_player_ids = {1, 2, 3, 4}
-    sentinel = []
-    def fake_segment(track_ids, track_stats, positions, classifier, crop_extractor):
-        sentinel.append(True)
-        return []
-    tracker._segment_tracks_by_appearance = fake_segment  # type: ignore[method-assign]
-    tracker._maybe_segment_tracks_by_appearance(
-        track_ids=[1, 2], track_stats={}, positions=[],
-        classifier=MagicMock(spec=["is_trained", "predict"], is_trained=True),
-        crop_extractor=lambda tid, f: None,
-    )
-    assert sentinel == [True]
-
-
 def test_track_split_no_classifier_is_noop(monkeypatch):
     monkeypatch.setenv("ENABLE_REF_CROP_TRACK_SPLIT", "1")
     tracker = MatchPlayerTracker.__new__(MatchPlayerTracker)

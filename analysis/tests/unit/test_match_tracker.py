@@ -1281,18 +1281,6 @@ class TestPostSwitchConsensusPass:
         # Outlier preserved when disabled
         assert out[1].track_to_player == {1: 1, 2: 3, 3: 2, 4: 4}
 
-    def test_frozen_player_ids_blocks_permutation(self) -> None:
-        """Ref-crop labels are authoritative; consensus pass must not override."""
-        rallies = [
-            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
-            ({1: 1, 2: 3, 3: 2, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),  # outlier
-            ({1: 1, 2: 2, 3: 3, 4: 4}, {1: 0, 2: 0, 3: 1, 4: 1}, False),
-        ]
-        tracker, results = self._build_tracker(rallies)
-        tracker.frozen_player_ids = {1, 2, 3, 4}
-        out = tracker._post_switch_consensus_pass(results, switches=[])
-        assert out[1].track_to_player == {1: 1, 2: 3, 3: 2, 4: 4}
-
     def test_degenerate_partition_skipped(self) -> None:
         """Rally with not-exactly-2-near + 2-far is skipped (no-op)."""
         rallies = [
@@ -2354,28 +2342,6 @@ class TestIdentityFirstPartialPass:
         )
         out = tracker._identity_first_partial_pass(results)
         assert out[0].track_to_player == {10: 1, 11: 2, 12: 3, 13: 4}
-
-    def test_frozen_player_ids_blocks(self, monkeypatch: Any) -> None:
-        monkeypatch.setattr(
-            "rallycut.tracking.match_tracker.ENABLE_IDENTITY_FIRST_PARTIAL",
-            True,
-        )
-        gallery = {
-            1: self._profile(1, upper_hue=10.0, lower_hue=50.0),
-            2: self._profile(2, upper_hue=30.0, lower_hue=70.0),
-            3: self._profile(3, upper_hue=120.0, lower_hue=140.0),
-            4: self._profile(4, upper_hue=160.0, lower_hue=20.0),
-        }
-        stats = {
-            10: _make_stats(10, upper_hue=10.0, lower_hue=50.0),
-            11: _make_stats(11, upper_hue=120.0, lower_hue=140.0),
-            12: _make_stats(12, upper_hue=160.0, lower_hue=20.0),
-        }
-        tracker, results = self._build(gallery, [10, 11, 12], stats,
-                                       {10: 2, 11: 1, 12: 3})
-        tracker.frozen_player_ids = {1, 2, 3, 4}
-        out = tracker._identity_first_partial_pass(results)
-        assert out[0].track_to_player == {10: 2, 11: 1, 12: 3}
 
     def test_incomplete_gallery_blocks(self, monkeypatch: Any) -> None:
         monkeypatch.setattr(
