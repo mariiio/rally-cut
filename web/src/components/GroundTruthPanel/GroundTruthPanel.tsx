@@ -17,7 +17,6 @@ import { PlayerTrackingAdvancedSection } from './PlayerTrackingAdvancedSection';
 
 interface GroundTruthPanelProps {
   onOpenPlayerMatching?: () => void;
-  onOpenReferenceCrops?: () => void;
 }
 
 type SectionId = 'calibration' | 'actions' | 'score' | 'advanced';
@@ -62,7 +61,6 @@ function Section({ id, title, status, expanded, onToggle, children }: SectionPro
 
 export function GroundTruthPanel({
   onOpenPlayerMatching,
-  onOpenReferenceCrops,
 }: GroundTruthPanelProps) {
   const [expanded, setExpanded] = useState<Record<SectionId, boolean>>({
     calibration: true,
@@ -118,7 +116,6 @@ export function GroundTruthPanel({
       />
       <PlayerTrackingAdvancedSection
         onOpenPlayerMatching={onOpenPlayerMatching}
-        onOpenReferenceCrops={onOpenReferenceCrops}
         renderSection={(body) => (
           <Section
             id="advanced"

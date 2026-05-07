@@ -24,7 +24,6 @@ import { getMatchStatsApi } from '@/services/api';
 import type { MatchStats } from '@/services/api';
 import { LabelingModeBanner } from './LabelingModeBanner';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
-import { canonicalRallyMapFor } from '@/utils/canonicalPid';
 import { rallyMatchEntry } from '@/utils/gtLabelDisplay';
 import { effectiveTeamAssignments } from '@/utils/teamAssignments';
 import { AspectRatio } from '@/constants/enums';
@@ -243,11 +242,6 @@ export function VideoPlayer() {
     const analysis = activeMatchId ? matchAnalysis[activeMatchId] : undefined;
     return rallyMatchEntry(analysis, currentRally?._backendId ?? null)
       ?.appliedFullMapping;
-  }, [activeMatchId, matchAnalysis, currentRally]);
-
-  const currentCanonicalRallyMap = useMemo(() => {
-    const analysis = activeMatchId ? matchAnalysis[activeMatchId] : undefined;
-    return canonicalRallyMapFor(analysis, currentRally?._backendId ?? null);
   }, [activeMatchId, matchAnalysis, currentRally]);
 
   // Get camera edit for current rally
@@ -1009,7 +1003,6 @@ export function VideoPlayer() {
               onDeleteLabel={(frame) => removeActionLabel(currentRally._backendId!, frame)}
               playerNumberMap={labelingPlayerNumbers}
               appliedFullMapping={currentAppliedFullMapping}
-              canonicalRallyMap={currentCanonicalRallyMap}
             />
           )}
           {/* Landing zones overlay */}

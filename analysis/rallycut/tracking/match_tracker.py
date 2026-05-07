@@ -3875,7 +3875,7 @@ ANCHOR_MIN_CONFIDENCE = 0.50
 #          through the existing appearance-aware path — bit-exact for
 #          clean-bbox cases. Bump invalidates anchors so freshly-merged
 #          primary tracks propagate cleanly to the next run.
-MATCHER_VERSION = "v7"
+MATCHER_VERSION = "v8"
 
 
 def scratchpad_to_dict(tracker: MatchPlayerTracker) -> dict[str, Any]:

@@ -1,24 +1,22 @@
 import type { ActionGroundTruthLabel, MatchAnalysis } from '@/services/api';
-import { type CanonicalRallyMap, resolveCanonicalPid } from '@/utils/canonicalPid';
+import { resolveCanonicalPid } from '@/utils/canonicalPid';
 
 /**
  * Resolve the display pid (1-4) for a GT label.
  *
- * Delegates the trackId → pid lookup to ``resolveCanonicalPid`` so the
- * canonicalPidMap (ref-crop-sourced) takes precedence over
- * ``appliedFullMapping`` (legacy Hungarian) which takes precedence over
- * sort-order. Adds the GT-specific fallback to legacy ``playerTrackId``
- * for rows predating the ``trackId`` anchor (commit 3cf67c1).
+ * Delegates the trackId → pid lookup to ``resolveCanonicalPid`` so
+ * ``appliedFullMapping`` (Hungarian) takes precedence over sort-order.
+ * Adds the GT-specific fallback to legacy ``playerTrackId`` for rows
+ * predating the ``trackId`` anchor (commit 3cf67c1).
  */
 export function resolveGtDisplayPid(
   gt: ActionGroundTruthLabel,
-  canonicalRallyMap: CanonicalRallyMap | undefined,
   appliedFullMapping: Record<string, number> | undefined,
   playerNumberMap: Map<number, number> | undefined,
 ): number | null {
   if (gt.trackId !== undefined) {
     const resolved = resolveCanonicalPid(
-      gt.trackId, canonicalRallyMap, appliedFullMapping, playerNumberMap,
+      gt.trackId, appliedFullMapping, playerNumberMap,
     );
     if (resolved !== null) return resolved;
   }

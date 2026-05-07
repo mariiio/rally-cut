@@ -15,7 +15,6 @@ import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { useEditorStore } from '@/stores/editorStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import type { ActionsData } from '@/services/api';
-import { canonicalRallyMapFor } from '@/utils/canonicalPid';
 import { resolveGtDisplayPid, gtAnchorId, rallyMatchEntry } from '@/utils/gtLabelDisplay';
 
 // Action colors for classified contacts
@@ -581,10 +580,9 @@ export function PlayerTrackingToolbar() {
           {gtLabels.map((label) => {
             const analysis = activeMatchId ? matchAnalysis[activeMatchId] : undefined;
             const rallyEntry = rallyMatchEntry(analysis, backendRallyId);
-            const canonicalRallyMap = canonicalRallyMapFor(analysis, backendRallyId);
             const anchor = gtAnchorId(label);
             const pNum = anchor !== null && anchor >= 0
-              ? resolveGtDisplayPid(label, canonicalRallyMap, rallyEntry?.appliedFullMapping, playerNumberMap)
+              ? resolveGtDisplayPid(label, rallyEntry?.appliedFullMapping, playerNumberMap)
               : null;
             const chipLabel = pNum != null
               ? `${formatPhase(label.action)} f${label.frame} P${pNum}`

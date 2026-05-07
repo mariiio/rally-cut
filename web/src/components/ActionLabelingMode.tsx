@@ -5,7 +5,7 @@ import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useEditorStore } from '@/stores/editorStore';
 import type { ActionGroundTruthLabel } from '@/services/api';
-import { canonicalRallyMapFor, pidToTrackId as resolveDisplayPidToTrackId } from '@/utils/canonicalPid';
+import { pidToTrackId as resolveDisplayPidToTrackId } from '@/utils/canonicalPid';
 import { rallyMatchEntry } from '@/utils/gtLabelDisplay';
 
 const ACTION_KEYS: Record<string, ActionGroundTruthLabel['action']> = {
@@ -41,8 +41,7 @@ export function ActionLabelingMode({ videoRef, onLabelAdded }: ActionLabelingMod
   const trackData = backendRallyId ? playerTracks[backendRallyId]?.tracksJson : null;
 
   // Lazy-load match analysis when labeling begins — gives us the per-rally
-  // canonicalPidMap (preferred) and appliedFullMapping (legacy fallback) we
-  // need to anchor GT to raw BoT-SORT track ids.
+  // appliedFullMapping we need to anchor GT to raw BoT-SORT track ids.
   useEffect(() => {
     if (!isLabelingActions || !activeMatchId) return;
     if (matchAnalysis[activeMatchId]) return;
@@ -54,11 +53,6 @@ export function ActionLabelingMode({ videoRef, onLabelAdded }: ActionLabelingMod
     () => rallyMatchEntry(currentAnalysis, backendRallyId),
     [currentAnalysis, backendRallyId],
   );
-  const currentCanonicalRallyMap = useMemo(
-    () => canonicalRallyMapFor(currentAnalysis, backendRallyId),
-    [currentAnalysis, backendRallyId],
-  );
-
   const sortedTracks = useMemo(
     () => (trackData ? [...trackData.tracks].sort((a, b) => a.trackId - b.trackId) : []),
     [trackData],
@@ -70,17 +64,15 @@ export function ActionLabelingMode({ videoRef, onLabelAdded }: ActionLabelingMod
   }, [sortedTracks]);
 
   /** Reverse a visible display pid (1-4) into the raw BoT-SORT id to anchor
-   *  the GT row. Read-side priority is mirrored: canonical first, then
-   *  legacy `appliedFullMapping`, then sort-order. */
+   *  the GT row. Priority: appliedFullMapping (Hungarian) → sort-order. */
   const resolveRawTrackIdForPid = useCallback(
     (displayPid: number): number | null =>
       resolveDisplayPidToTrackId(
         displayPid,
-        currentCanonicalRallyMap,
         currentRallyEntry?.appliedFullMapping,
         sortOrderMap,
       ),
-    [currentCanonicalRallyMap, currentRallyEntry, sortOrderMap],
+    [currentRallyEntry, sortOrderMap],
   );
 
   /** Visible trackId could be either a canonical pid (post-remap rallies)
@@ -142,8 +134,7 @@ export function ActionLabelingMode({ videoRef, onLabelAdded }: ActionLabelingMod
       if (!labelAtFrame) return;
 
       // Resolve "Player N" to a raw BoT-SORT track id. Priority:
-      // canonicalPidMap (ref-crop sourced) → appliedFullMapping (legacy
-      // Hungarian) → sort-order over visible tracks.
+      // appliedFullMapping (Hungarian) → sort-order over visible tracks.
       const rawTrackId = resolveRawTrackIdForPid(num);
       if (rawTrackId === null) {
         console.warn(

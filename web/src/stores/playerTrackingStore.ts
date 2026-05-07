@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { trackPlayers, getPlayerTrack, swapPlayerTracks, promoteRawTrack, saveCourtCalibration, deleteCourtCalibration, getActionGroundTruth, saveActionGroundTruth as apiSaveActionGroundTruth, trackAllRallies as apiTrackAllRallies, getBatchTrackingStatus as apiGetBatchTrackingStatus, getPlayerReferenceCrops, uploadPlayerReferenceCrop, deletePlayerReferenceCrop, getVideoScoreGt, saveRallyScoreGt, getMatchAnalysis, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData, type ActionGroundTruthLabel, type QualityReport, type BatchTrackingStatus, type PlayerReferenceCrop, type ScoreGtEntry, type ScoreTeam, type MatchAnalysis } from '@/services/api';
+import { trackPlayers, getPlayerTrack, swapPlayerTracks, promoteRawTrack, saveCourtCalibration, deleteCourtCalibration, getActionGroundTruth, saveActionGroundTruth as apiSaveActionGroundTruth, trackAllRallies as apiTrackAllRallies, getBatchTrackingStatus as apiGetBatchTrackingStatus, getVideoScoreGt, saveRallyScoreGt, getMatchAnalysis, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData, type ActionGroundTruthLabel, type QualityReport, type BatchTrackingStatus, type ScoreGtEntry, type ScoreTeam, type MatchAnalysis } from '@/services/api';
 
 // Types for player tracking data (store format)
 export interface PlayerPosition {
@@ -96,10 +96,6 @@ interface PlayerTrackingState {
    *  fetch instead of racing. Not persisted; lives only in memory. */
   _matchAnalysisPending?: Record<string, Promise<MatchAnalysis | null>>;
 
-  // Reference crops state
-  referenceCrops: PlayerReferenceCrop[];
-  referenceCropsLoading: boolean;
-
   // Score ground truth (Session 5) — keyed by videoId
   scoreGt: Record<string, ScoreGtEntry[]>;
   scoreGtLoading: Record<string, boolean>;
@@ -148,11 +144,6 @@ interface PlayerTrackingState {
   trackAllRalliesForVideo: (videoId: string) => Promise<void>;
   pollBatchTrackingStatus: (videoId: string, fallbackFps?: number) => void;
   stopPollingBatchTracking: (videoId: string) => void;
-
-  // Reference crop actions
-  loadReferenceCrops: (videoId: string) => Promise<void>;
-  addReferenceCrop: (videoId: string, playerId: number, frameMs: number, bbox: { x: number; y: number; w: number; h: number }, imageData: string) => Promise<PlayerReferenceCrop>;
-  removeReferenceCrop: (videoId: string, cropId: string) => Promise<void>;
 
   // Action labeling actions
   setIsLabelingActions: (value: boolean) => void;
@@ -287,8 +278,6 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
       actionGtSaving: {},
       matchAnalysis: {},
       matchAnalysisLoading: {},
-      referenceCrops: [],
-      referenceCropsLoading: false,
       scoreGt: {},
       scoreGtLoading: {},
 
@@ -926,39 +915,6 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
         });
       },
 
-      loadReferenceCrops: async (videoId: string) => {
-        set({ referenceCropsLoading: true });
-        try {
-          const crops = await getPlayerReferenceCrops(videoId);
-          set({ referenceCrops: crops, referenceCropsLoading: false });
-        } catch (error) {
-          console.error('[PlayerTrackingStore] Failed to load reference crops:', error);
-          set({ referenceCropsLoading: false });
-        }
-      },
-
-      addReferenceCrop: async (videoId, playerId, frameMs, bbox, imageData) => {
-        const crop = await uploadPlayerReferenceCrop(videoId, { playerId, frameMs, bbox, imageData });
-        set((state) => ({
-          referenceCrops: [...state.referenceCrops, crop],
-        }));
-        // The API endpoint already nulled canonicalPidMapJson and queued a
-        // 'refCrop' pending edit; this nudges analysisStore so the existing
-        // match-analysis debounce/rebuild path actually fires. Without this,
-        // the queued edit sits until the user happens to also edit a rally.
-        const { useAnalysisStore } = await import('@/stores/analysisStore');
-        useAnalysisStore.getState().notifyRefCropEdited(videoId);
-        return crop;
-      },
-
-      removeReferenceCrop: async (videoId, cropId) => {
-        await deletePlayerReferenceCrop(videoId, cropId);
-        set((state) => ({
-          referenceCrops: state.referenceCrops.filter((c) => c.id !== cropId),
-        }));
-        const { useAnalysisStore } = await import('@/stores/analysisStore');
-        useAnalysisStore.getState().notifyRefCropEdited(videoId);
-      },
     }),
     {
       name: 'player-tracking-storage',

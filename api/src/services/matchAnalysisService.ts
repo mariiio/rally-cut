@@ -18,7 +18,6 @@ import { fileURLToPath } from 'url';
 import { env } from '../config/env.js';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
-import { getObject } from '../lib/s3.js';
 import { ForbiddenError, NotFoundError } from '../middleware/errorHandler.js';
 import { consumePendingEdits } from './pendingAnalysisEdits.js';
 import { planStages } from './matchAnalysisPlanning.js';
@@ -237,21 +236,12 @@ export function triggerMatchAnalysis(videoId: string): boolean {
  * Use this synchronous variant only for ops scripts, the legacy `/run-match-analysis`
  * SSE route, and test harnesses that need to await completion directly.
  *
- * `useRefCrops` (default `false`): when `false` (fresh-upload / re-analyze /
- * retrack-analyze and post-batch-tracking flows), the blind global solver
- * runs and DB reference crops are NOT loaded. When `true` (only set by the
- * PlayerReferenceCropDialog "re-run matching" trigger), reference crops
- * are downloaded from DB and used as frozen anchors. The ref-crop path is
- * isolated to the modal trigger so the solver-vs-ref-crop comparison is
- * an explicit user choice rather than a default that happens to fire on
- * every fixture with crops in DB.
  */
 export type ProgressCallback = (step: string, index: number, total: number) => void;
 
 export async function runMatchAnalysis(
   videoId: string,
   onProgress?: ProgressCallback,
-  useRefCrops: boolean = false,
 ): Promise<MatchAnalysisResult | null> {
   const started = Date.now();
   const timings: Record<string, number> = {};
@@ -296,68 +286,13 @@ export async function runMatchAnalysis(
 
     await fs.mkdir(TEMP_DIR, { recursive: true });
     const outputPath = path.join(TEMP_DIR, `match_${videoId}.json`);
-    let cropsDir: string | undefined;
 
     try {
-      // Download reference crops (if any) for the CLI — but only on the
-      // modal-triggered ref-crop path. Default flows (fresh-upload /
-      // re-analyze / retrack-analyze / post-batch-tracking catch-up)
-      // run blind regardless of whether DB has crops.
-      let referenceCropsJsonPath: string | undefined;
-      if (useRefCrops) {
-        const referenceCrops = await prisma.playerReferenceCrop.findMany({
-          where: { videoId },
-          orderBy: [{ playerId: 'asc' }, { createdAt: 'asc' }],
-        });
-
-        if (referenceCrops.length > 0) {
-          cropsDir = path.join(TEMP_DIR, `crops_${videoId}`);
-          await fs.mkdir(cropsDir, { recursive: true });
-
-          const downloadResults = await Promise.all(
-            referenceCrops.map(async (crop) => {
-              try {
-                const obj = await getObject(crop.s3Key);
-                const chunks: Buffer[] = [];
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                for await (const chunk of obj.Body as any) {
-                  chunks.push(Buffer.from(chunk));
-                }
-                const cropPath = path.join(cropsDir!, `${crop.id}.jpg`);
-                await fs.writeFile(cropPath, Buffer.concat(chunks));
-                return {
-                  playerId: crop.playerId,
-                  cropPath,
-                  frameMs: crop.frameMs,
-                  bbox: { x: crop.bboxX, y: crop.bboxY, w: crop.bboxW, h: crop.bboxH },
-                };
-              } catch (dlError) {
-                console.error(`[MATCH_ANALYSIS] Failed to download crop ${crop.id}:`, dlError);
-                return null;
-              }
-            })
-          );
-
-          const manifest = downloadResults.filter((r): r is NonNullable<typeof r> => r !== null);
-          if (manifest.length > 0) {
-            referenceCropsJsonPath = path.join(cropsDir, 'manifest.json');
-            await fs.writeFile(referenceCropsJsonPath, JSON.stringify(manifest));
-            console.log(`[MATCH_ANALYSIS] Using ${manifest.length} reference crops for matching (modal-triggered)`);
-          }
-        }
-      }
-
       // Stage 2: Match players across rallies
       report('Matching players across rallies...', 2, 6);
       result = await timed(
         'stage2_match',
-        () => runMatchPlayersCli(
-          videoId,
-          outputPath,
-          referenceCropsJsonPath,
-          undefined,
-          !useRefCrops,
-        ),
+        () => runMatchPlayersCli(videoId, outputPath),
       );
 
       // Persist to database
@@ -401,9 +336,6 @@ export async function runMatchAnalysis(
       return null;
     } finally {
       await fs.unlink(outputPath).catch(() => {});
-      if (cropsDir) {
-        await fs.rm(cropsDir, { recursive: true, force: true }).catch(() => {});
-      }
     }
   } else {
     // Partial rerun: only re-process changed rallies (stages 4 + 5)
@@ -685,57 +617,13 @@ export async function remapSingleRally(videoId: string, rallyId: string): Promis
   console.log(`[REMAP_SINGLE] Re-running match-players for video ${videoId}`);
   await fs.mkdir(TEMP_DIR, { recursive: true });
   const outputPath = path.join(TEMP_DIR, `rematch_${videoId}.json`);
-  let cropsDir: string | undefined;
 
   try {
-    // Download reference crops if any exist
-    const referenceCrops = await prisma.playerReferenceCrop.findMany({
-      where: { videoId },
-      orderBy: [{ playerId: 'asc' }, { createdAt: 'asc' }],
-    });
-
-    let referenceCropsJsonPath: string | undefined;
-    if (referenceCrops.length > 0) {
-      cropsDir = path.join(TEMP_DIR, `crops_${videoId}`);
-      await fs.mkdir(cropsDir, { recursive: true });
-
-      const downloadResults = await Promise.all(
-        referenceCrops.map(async (crop) => {
-          try {
-            const obj = await getObject(crop.s3Key);
-            const chunks: Buffer[] = [];
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            for await (const chunk of obj.Body as any) {
-              chunks.push(Buffer.from(chunk));
-            }
-            const cropPath = path.join(cropsDir!, `${crop.id}.jpg`);
-            await fs.writeFile(cropPath, Buffer.concat(chunks));
-            return {
-              playerId: crop.playerId,
-              imagePath: cropPath,
-              frameMs: crop.frameMs,
-              bbox: { x: crop.bboxX, y: crop.bboxY, w: crop.bboxW, h: crop.bboxH },
-            };
-          } catch (dlError) {
-            console.error(`[REMAP_SINGLE] Failed to download crop ${crop.id}:`, dlError);
-            return null;
-          }
-        }),
-      );
-
-      const manifest = downloadResults.filter((r): r is NonNullable<typeof r> => r !== null);
-      if (manifest.length > 0) {
-        referenceCropsJsonPath = path.join(cropsDir, 'manifest.json');
-        await fs.writeFile(referenceCropsJsonPath, JSON.stringify(manifest));
-        console.log(`[REMAP_SINGLE] Using ${manifest.length} reference crops for matching`);
-      }
-    }
-
     // Run match-players with existing profiles as frozen anchors.
     // This classifies the re-tracked rally against established player profiles
     // instead of rebuilding from scratch — prevents ambiguous assignments
     // that cause player teleports on single-rally retrack.
-    await runMatchPlayersCli(videoId, outputPath, referenceCropsJsonPath, true);
+    await runMatchPlayersCli(videoId, outputPath, true);
 
     // Read the fresh match analysis from DB (camelCase, written by CLI)
     const updatedVideo = await prisma.video.findUnique({
@@ -770,9 +658,6 @@ export async function remapSingleRally(videoId: string, rallyId: string): Promis
     return await applyRemapToRally(videoId, rallyId, trackToPlayer, matchResult);
   } finally {
     await fs.unlink(outputPath).catch(() => {});
-    if (cropsDir) {
-      await fs.rm(cropsDir, { recursive: true, force: true }).catch(() => {});
-    }
   }
 }
 
@@ -1018,28 +903,15 @@ async function computeAndSaveMatchStats(videoId: string): Promise<void> {
 
 /**
  * Run the `rallycut match-players` CLI command.
- *
- * `noRefCrops`: pass `--no-ref-crops` to force the blind solver path
- * (even when DB has reference crops). The CLI preserves the existing
- * `canonical_pid_map_json` so a later modal-triggered ref-crop run can
- * pick it up unchanged.
  */
 async function runMatchPlayersCli(
   videoId: string,
   outputPath: string,
-  referenceCropsJsonPath?: string,
   useExistingProfiles?: boolean,
-  noRefCrops?: boolean,
 ): Promise<MatchAnalysisResult> {
   const args = ['match-players', videoId, '--output', outputPath, '--quiet'];
-  if (referenceCropsJsonPath) {
-    args.push('--reference-crops-json', referenceCropsJsonPath);
-  }
   if (useExistingProfiles) {
     args.push('--use-existing-profiles');
-  }
-  if (noRefCrops) {
-    args.push('--no-ref-crops');
   }
   return runCli<MatchAnalysisResult>(args, outputPath, 'MATCH_ANALYSIS');
 }

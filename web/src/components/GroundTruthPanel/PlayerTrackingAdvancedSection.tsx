@@ -6,7 +6,6 @@ import EditIcon from '@mui/icons-material/Edit';
 import OpenInNewIcon from '@mui/icons-material/OpenInNew';
 import SaveIcon from '@mui/icons-material/Save';
 import CheckCircleIcon from '@mui/icons-material/CheckCircle';
-import PersonSearchIcon from '@mui/icons-material/PersonSearch';
 import PeopleIcon from '@mui/icons-material/People';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { useEditorStore } from '@/stores/editorStore';
@@ -20,13 +19,11 @@ import {
 interface Props {
   renderSection: (body: ReactNode) => ReactNode;
   onOpenPlayerMatching?: () => void;
-  onOpenReferenceCrops?: () => void;
 }
 
 export function PlayerTrackingAdvancedSection({
   renderSection,
   onOpenPlayerMatching,
-  onOpenReferenceCrops,
 }: Props) {
   const selectedRallyId = useEditorStore((s) => s.selectedRallyId);
   const rallies = useEditorStore((s) => s.rallies);
@@ -179,16 +176,6 @@ export function PlayerTrackingAdvancedSection({
             onClick={onOpenPlayerMatching}
           >
             Player matching…
-          </Button>
-        )}
-        {onOpenReferenceCrops && (
-          <Button
-            size="small"
-            variant="outlined"
-            startIcon={<PersonSearchIcon />}
-            onClick={onOpenReferenceCrops}
-          >
-            Reference crops…
           </Button>
         )}
       </Stack>

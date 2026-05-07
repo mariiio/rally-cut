@@ -2074,185 +2074,6 @@ export async function promoteRawTrack(
 }
 
 // ============================================================================
-// Player Reference Crops
-// ============================================================================
-
-export interface PlayerReferenceCrop {
-  id: string;
-  playerId: number;
-  frameMs: number;
-  bbox: { x: number; y: number; w: number; h: number };
-  downloadUrl: string;
-  createdAt: string;
-}
-
-/**
- * Get all reference crops for a video.
- */
-export async function getPlayerReferenceCrops(videoId: string): Promise<PlayerReferenceCrop[]> {
-  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/player-reference-crops`, {
-    headers: getHeaders(),
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || `Failed to get reference crops: ${response.status}`);
-  }
-
-  const data = await response.json();
-  return data.crops;
-}
-
-/**
- * Upload a player reference crop.
- */
-export async function uploadPlayerReferenceCrop(
-  videoId: string,
-  data: {
-    playerId: number;
-    frameMs: number;
-    bbox: { x: number; y: number; w: number; h: number };
-    imageData: string; // base64 JPEG
-  },
-): Promise<PlayerReferenceCrop> {
-  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/player-reference-crops`, {
-    method: 'POST',
-    headers: getHeaders('application/json'),
-    body: JSON.stringify(data),
-  });
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || `Failed to upload reference crop: ${response.status}`);
-  }
-
-  return response.json();
-}
-
-/**
- * Delete a player reference crop.
- */
-export async function deletePlayerReferenceCrop(videoId: string, cropId: string): Promise<void> {
-  const response = await fetch(
-    `${API_BASE_URL}/v1/videos/${videoId}/player-reference-crops/${cropId}`,
-    {
-      method: 'DELETE',
-      headers: getHeaders(),
-    },
-  );
-
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || `Failed to delete reference crop: ${response.status}`);
-  }
-}
-
-// ============================================================================
-// Reference-crop quality validator / suggester (Part A crop-guided identity)
-// ============================================================================
-
-export interface ReferenceCropValidationIssue {
-  code: string;
-  message: string;
-  playerId: number | null;
-}
-
-export interface ReferenceCropValidationResult {
-  videoId: string;
-  pass: boolean;
-  issues: ReferenceCropValidationIssue[];
-  cropCounts: Record<string, number>;
-}
-
-/**
- * Run the pre-flight quality validator on the video's currently-assigned
- * reference crops. The "Re-run Matching" button should stay disabled while
- * `pass === false`; each issue's `message` is designed to be rendered
- * inline with no further formatting.
- */
-export async function validateReferenceCrops(videoId: string): Promise<ReferenceCropValidationResult> {
-  const response = await fetch(
-    `${API_BASE_URL}/v1/videos/${videoId}/player-reference-crops/validate`,
-    {
-      method: 'POST',
-      headers: getHeaders('application/json'),
-    },
-  );
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || `Failed to validate reference crops: ${response.status}`);
-  }
-  return response.json();
-}
-
-export interface CandidateCropInfo {
-  rallyId: string;
-  trackId: number;
-  frameMs: number;
-  bbox: { x: number; y: number; w: number; h: number };
-  detectionConfidence: number;
-}
-
-export interface ReferenceCropSuggestions {
-  videoId: string;
-  candidates: Record<string, CandidateCropInfo[]>;
-}
-
-/**
- * Diversity-aware candidate crops per player slot. Used to pre-populate the
- * dialog with high-quality ranked candidates instead of ad-hoc auto-sampled
- * ones.
- */
-export async function suggestReferenceCrops(
-  videoId: string,
-  numCandidates = 6,
-): Promise<ReferenceCropSuggestions> {
-  const response = await fetch(
-    `${API_BASE_URL}/v1/videos/${videoId}/player-reference-crops/suggest`,
-    {
-      method: 'POST',
-      headers: getHeaders('application/json'),
-      body: JSON.stringify({ numCandidates }),
-    },
-  );
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || `Failed to suggest reference crops: ${response.status}`);
-  }
-  return response.json();
-}
-
-export interface PreAssignedCandidate extends CandidateCropInfo {
-  suggestedPlayerId: number;
-  confidence: number;
-}
-
-/**
- * Pre-assign candidate crops to player slots using the existing
- * match-analysis trackToPlayer mapping. The dialog uses this to
- * pre-fill the grid — user confirms instead of manually assigning.
- */
-export async function preAssignReferenceCrops(
-  videoId: string,
-  candidates: CandidateCropInfo[],
-): Promise<PreAssignedCandidate[]> {
-  const response = await fetch(
-    `${API_BASE_URL}/v1/videos/${videoId}/player-reference-crops/pre-assign`,
-    {
-      method: 'POST',
-      headers: getHeaders('application/json'),
-      body: JSON.stringify({ candidates }),
-    },
-  );
-  if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.error?.message || `Failed to pre-assign reference crops: ${response.status}`);
-  }
-  const data = await response.json();
-  return data.candidates;
-}
-
-// ============================================================================
 // Label Studio Integration (Ground Truth Labeling)
 // ============================================================================
 
@@ -2584,16 +2405,6 @@ export interface MatchAnalysis {
     sideSwitchDetected: boolean;
     serverPlayerId: number | null;
   }>;
-  /// Ref-crop-sourced canonical pid mapping. Present only when
-  /// Video.canonicalPidMapJson is non-null (every pid in {1,2,3,4} has at
-  /// least one reference crop AND the per-rally all-or-nothing gate fired).
-  /// Bit-deterministic across re-runs; `resolveCanonicalPid` reads it in
-  /// preference to per-rally `appliedFullMapping`.
-  canonicalPidMap?: {
-    version: 1;
-    sourceRefCropsSha: string;
-    rallies: Record<string, Record<string, number>>;
-  } | null;
   /// Video-wide pid→team mapping derived by per-pid majority vote across
   /// rallies. Written by compute-match-stats. `valid: false` means the
   /// vote could not commit (no 2-and-2 partition or any per-pid confidence
@@ -2640,17 +2451,8 @@ export interface MatchAnalysisProgress {
 export async function runMatchAnalysis(
   videoId: string,
   onProgress?: (progress: MatchAnalysisProgress) => void,
-  options?: { useRefCrops?: boolean },
 ): Promise<void> {
-  // `useRefCrops=true` is set only by the PlayerReferenceCropDialog
-  // "re-run matching" trigger. Default flows (fresh-upload /
-  // re-analyze / retrack-analyze) run the blind solver path even when
-  // DB has reference crops, so the solver-vs-ref-crop comparison is an
-  // explicit user choice.
-  const url = options?.useRefCrops
-    ? `${API_BASE_URL}/v1/videos/${videoId}/run-match-analysis?useRefCrops=true`
-    : `${API_BASE_URL}/v1/videos/${videoId}/run-match-analysis`;
-  const response = await fetch(url, {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/run-match-analysis`, {
     method: 'POST',
     headers: getHeaders(),
   });

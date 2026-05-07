@@ -28,7 +28,6 @@ import { QualityReportBanner } from './QualityReportBanner';
 import { AutoFixNote } from './AutoFixNote';
 import { MatchStatsPanel } from './MatchStatsPanel';
 import { PlayerMatchingDialog } from './PlayerMatchingDialog';
-import { PlayerReferenceCropDialog } from './PlayerReferenceCropDialog';
 import { useEditorStore } from '@/stores/editorStore';
 import { useAnalysisStore } from '@/stores/analysisStore';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
@@ -79,7 +78,6 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
   const [showNamePromptModal, setShowNamePromptModal] = useState(false);
   const [pendingCreateHighlight, setPendingCreateHighlight] = useState(false);
   const [playerMatchingVideoId, setPlayerMatchingVideoId] = useState<string | null>(null);
-  const [referenceCropVideoId, setReferenceCropVideoId] = useState<string | null>(null);
 
   // Analysis pipeline state
   const analysisPipeline = useAnalysisStore((s) =>
@@ -486,7 +484,6 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
         >
           <RightSidebarTabs
             onOpenPlayerMatching={currentMatch?.id ? () => setPlayerMatchingVideoId(currentMatch.id) : undefined}
-            onOpenReferenceCrops={currentMatch?.id ? () => setReferenceCropVideoId(currentMatch.id) : undefined}
           />
         </CollapsiblePanel>
       </Box>
@@ -523,14 +520,6 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
         />
       )}
 
-      {/* Player Reference Crop Dialog */}
-      {referenceCropVideoId && (
-        <PlayerReferenceCropDialog
-          open={true}
-          videoId={referenceCropVideoId}
-          onClose={() => setReferenceCropVideoId(null)}
-        />
-      )}
       </Box>
     </TutorialProvider>
   );
@@ -538,10 +527,9 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
 
 interface RightSidebarTabsProps {
   onOpenPlayerMatching?: () => void;
-  onOpenReferenceCrops?: () => void;
 }
 
-function RightSidebarTabs({ onOpenPlayerMatching, onOpenReferenceCrops }: RightSidebarTabsProps) {
+function RightSidebarTabs({ onOpenPlayerMatching }: RightSidebarTabsProps) {
   const [tab, setTab] = useState<'camera' | 'gt'>('camera');
   return (
     <Box sx={{ display: 'flex', flexDirection: 'column', height: '100%', minHeight: 0 }}>
@@ -560,7 +548,6 @@ function RightSidebarTabs({ onOpenPlayerMatching, onOpenReferenceCrops }: RightS
       <Box sx={{ flex: 1, minHeight: 0, display: tab === 'gt' ? 'block' : 'none' }}>
         <GroundTruthPanel
           onOpenPlayerMatching={onOpenPlayerMatching}
-          onOpenReferenceCrops={onOpenReferenceCrops}
         />
       </Box>
     </Box>
