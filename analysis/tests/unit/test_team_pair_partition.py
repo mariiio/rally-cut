@@ -25,10 +25,9 @@ import numpy as np
 
 from rallycut.tracking.match_solver import (
     HARD_TEAM_PAIR_COST,
-    MatchSolver,
-    NUM_CLUSTERS,
-    TEAM_LO_PAIR,
     TEAM_HI_PAIR,
+    TEAM_LO_PAIR,
+    MatchSolver,
     _propose_team_partitions,
     _signal_proposes_partition,
 )
@@ -167,6 +166,77 @@ class TestAssignWithTeamPairCostDecided:
         assert assignment[4] == 2
         assert assignment[2] == 3
         assert assignment[3] == 4
+
+    def test_uniform_cost_picks_side_consistent_orientation(self) -> None:
+        """Iter-0 fix: when appearance cost is uniform (no profiles yet),
+        break the orientation tie using `track_court_sides`.
+
+        Mechanism: at MatchSolver iter 0 the cluster profiles are empty,
+        so ``_build_appearance_cost`` returns 0.5 in every cell. The
+        partition is correct but all 4 (orientation × pair-to-target)
+        combinations have equal total cost. Without a tie-breaker, the
+        first combination Python iterates wins — which on b5fb0594
+        rally 1 (be3134ba, 2026-05-07) placed both near-court tracks
+        into HI_PAIR PIDs, baking a cross-team error into iter-0 cluster
+        members and propagating it to subsequent iterations.
+
+        Fix: prefer the orientation where near-classified tracks
+        (``track_court_sides[tid] == 0``) land in LO_PAIR (P1, P2) and
+        far-classified tracks (``track_court_sides[tid] == 1``) land in
+        HI_PAIR (P3, P4). The tie-breaker uses a tiny epsilon so it
+        never overrides real appearance differences.
+        """
+        top = [1, 18, 3, 26]
+        cluster_ids = list(TEAM_LO_PAIR + TEAM_HI_PAIR)
+        # Uniform cost — every (track, cluster) is equally good.
+        cost = np.full((4, 4), 0.5, dtype=float)
+        # Side classification: T1, T18 are near; T3, T26 are far.
+        # The correct orientation is T1, T18 → P1, P2 (LO_PAIR) and
+        # T3, T26 → P3, P4 (HI_PAIR).
+        track_court_sides = {1: 0, 18: 0, 3: 1, 26: 1}
+        partition = frozenset({frozenset({1, 18}), frozenset({3, 26})})
+
+        assignment, _ = self._solver()._assign_with_team_pair(
+            top, cluster_ids, cost, [partition],
+            track_court_sides=track_court_sides,
+        )
+        # Near tracks must end up in LO_PAIR (P1, P2).
+        assert assignment[1] in TEAM_LO_PAIR, f"T1 should be in LO_PAIR, got {assignment}"
+        assert assignment[18] in TEAM_LO_PAIR, f"T18 should be in LO_PAIR, got {assignment}"
+        # Far tracks must end up in HI_PAIR (P3, P4).
+        assert assignment[3] in TEAM_HI_PAIR, f"T3 should be in HI_PAIR, got {assignment}"
+        assert assignment[26] in TEAM_HI_PAIR, f"T26 should be in HI_PAIR, got {assignment}"
+
+    def test_appearance_overrides_side_hint_when_signals_disagree(self) -> None:
+        """Tie-breaker is small enough that real appearance always wins.
+
+        Without this guarantee, the side-classifier would be promoted
+        from a tie-breaker to a hard rule — overriding genuine appearance
+        evidence. The tie-breaker must only act when totals are tied.
+        """
+        top = [1, 18, 3, 26]
+        cluster_ids = list(TEAM_LO_PAIR + TEAM_HI_PAIR)
+        # Appearance STRONGLY prefers the side-INCONSISTENT orientation:
+        # T1, T18 → P3, P4 (cost 0.0) vs P1, P2 (cost 0.9).
+        cost = np.array([
+            [0.9, 0.9, 0.0, 0.9],   # T1 → P3 cheapest
+            [0.9, 0.9, 0.9, 0.0],   # T18 → P4 cheapest
+            [0.0, 0.9, 0.9, 0.9],   # T3 → P1 cheapest
+            [0.9, 0.0, 0.9, 0.9],   # T26 → P2 cheapest
+        ])
+        # Side-classifier hints the opposite — but appearance must win.
+        track_court_sides = {1: 0, 18: 0, 3: 1, 26: 1}
+        partition = frozenset({frozenset({1, 18}), frozenset({3, 26})})
+
+        assignment, _ = self._solver()._assign_with_team_pair(
+            top, cluster_ids, cost, [partition],
+            track_court_sides=track_court_sides,
+        )
+        # Appearance wins: T1, T18 in HI_PAIR (the cheap cells).
+        assert assignment[1] in TEAM_HI_PAIR
+        assert assignment[18] in TEAM_HI_PAIR
+        assert assignment[3] in TEAM_LO_PAIR
+        assert assignment[26] in TEAM_LO_PAIR
 
     def test_partition_constraint_actually_enforced(self) -> None:
         # If the optimal unconstrained Hungarian would violate the

@@ -88,6 +88,18 @@ CONVERGENCE_PASSES = 2
 # Max coordinate-descent iterations before forcing termination.
 MAX_ITERATIONS = 10
 
+# Tie-breaker for `_assign_with_team_pair` orientation choice. When two
+# (orientation, pair-to-target) combinations yield equal Hungarian total
+# cost — typical at iter 0 where appearance costs are uniform 0.5 — the
+# tie-break prefers the orientation where near-classified tracks
+# (track_court_sides == 0) land in LO_PAIR PIDs (1, 2) and far-classified
+# tracks land in HI_PAIR. The epsilon is small enough that any real
+# appearance preference (~1e-3 magnitude) overrides this hint, so the
+# tie-breaker only acts when costs are genuinely tied. Without it,
+# arbitrary frozenset iteration order produced cross-team assignments
+# at iter 0, poisoning subsequent iterations (b5fb0594 rally 1, 2026-05-07).
+SIDE_INCONSISTENCY_EPSILON = 1e-9
+
 
 class MatchSolver:
     """Coordinate-descent solver for cross-rally cluster identity.
@@ -407,6 +419,7 @@ class MatchSolver:
         if candidate_partitions:
             assignment, _team_pair_cost = self._assign_with_team_pair(
                 top, cluster_ids, cost, candidate_partitions,
+                track_court_sides=stored.track_court_sides,
             )
         else:
             row_ind, col_ind = linear_sum_assignment(cost)
@@ -537,6 +550,8 @@ class MatchSolver:
         cluster_ids: list[int],
         base_cost: np.ndarray,
         candidate_partitions: list[frozenset[frozenset[int]]],
+        *,
+        track_court_sides: dict[int, int] | None = None,
     ) -> tuple[dict[int, int], float]:
         """Constrained Hungarian over multiple candidate 2v2 partitions.
 
@@ -546,6 +561,17 @@ class MatchSolver:
         applies HARD_TEAM_PAIR_COST to cells that would violate the
         partition under that orientation, runs Hungarian, and keeps the
         global lowest-cost result.
+
+        ``track_court_sides`` (optional) breaks orientation ties using
+        the side classification that proposed the partition. When two
+        (orientation, pair-to-target) combinations have equal total
+        cost — typical at iter 0 where ``base_cost`` is the uniform
+        ``EMPTY_CLUSTER_COST`` — the tie-break prefers the orientation
+        where near-classified tracks land in LO_PAIR (P1, P2) and
+        far-classified tracks land in HI_PAIR (P3, P4). Adds
+        ``SIDE_INCONSISTENCY_EPSILON`` per misaligned track to each
+        combination's total; the epsilon is small enough that any real
+        appearance preference dominates it.
 
         Returns (assignment, cost). Cost is the unpenalized total under
         the winning assignment (HARD penalties are stripped so a winner
@@ -590,6 +616,23 @@ class MatchSolver:
 
                     row_ind, col_ind = linear_sum_assignment(penalized)
                     total = float(penalized[row_ind, col_ind].sum())
+                    if track_court_sides:
+                        # Side-consistency tie-breaker: count tracks whose
+                        # assigned PID's pair (LO=near, HI=far) disagrees
+                        # with the track's side classification.
+                        side_inconsistency = 0
+                        for r, c in zip(row_ind, col_ind):
+                            tid = top[r]
+                            side = track_court_sides.get(tid)
+                            if side is None:
+                                continue
+                            target_pid = cluster_ids[c]
+                            target_side = (
+                                0 if target_pid in TEAM_LO_PAIR else 1
+                            )
+                            if side != target_side:
+                                side_inconsistency += 1
+                        total += SIDE_INCONSISTENCY_EPSILON * side_inconsistency
                     if total < best_cost:
                         best_cost = total
                         best_assignment = {
