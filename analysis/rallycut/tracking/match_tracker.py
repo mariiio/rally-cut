@@ -878,45 +878,59 @@ class MatchPlayerTracker:
 
         # Step 2: Classify track sides (soft near/far labels)
         #
-        # For the first rally, restrict classification to the serve
-        # formation window.  The serve moment has formal 2v2 arrangement
-        # by volleyball rules; mid-rally, players cross sides and
-        # contaminate whole-rally Y averages.  Because the first rally's
-        # assignment seeds every subsequent rally's templates, an init
-        # error here propagates to the whole match — use the cleanest
-        # signal available.
-        classification_positions = player_positions
-        if self.rally_count == 1 and not self.frozen_player_ids:
-            windowed = [
-                p for p in player_positions
-                if p.frame_number < FIRST_RALLY_INIT_WINDOW_FRAMES
-            ]
-            # Fall back to full rally if the serve window is sparse
-            # (short rally, delayed detection, etc.) — we'd rather use
-            # noisy full-rally data than no data.
-            if len(windowed) >= 4 * 10:  # ≥10 frames per player
-                classification_positions = windowed
-
-        # Restrict side-classification positions to primary-track samples.
-        # The upstream `_filter_player_positions` pipeline is supposed to
-        # drop spectator / referee tracks but sometimes leaks them into
-        # `positions_json` (90266c1d rallies 5+6 have T9/T15/T101/T28/T6
+        # On the first rally, the calibration projection prefers the
+        # clean serve-formation window: the serve moment has a formal 2v2
+        # arrangement by volleyball rules, and mid-rally players cross
+        # sides and contaminate whole-rally Y averages. The first rally's
+        # assignment seeds every subsequent rally's templates, so an init
+        # error here propagates to the whole match.
+        #
+        # We pass full-rally positions to ``_classify_track_sides`` and
+        # let it window internally for the calibration projection only —
+        # ``track_avg_y`` is built from full positions so late-arriver
+        # primary tracks (those starting after the serve window) are
+        # classified by the image-Y fallback rather than silently dropped.
+        # The ``_classify_sides_by_bbox_height`` cross-check still uses
+        # the windowed positions on rally 1 for consistency with the
+        # serve-formation intent.
+        #
+        # Restrict to primary-track samples first — the upstream
+        # ``_filter_player_positions`` pipeline is supposed to drop
+        # spectator / referee tracks but sometimes leaks them into
+        # ``positions_json`` (90266c1d rallies 5+6 have T9/T15/T101/T28/T6
         # with 1-100+ samples each despite primary_track_ids = [1,2,3,4]).
-        # `track_stats` is already correctly restricted to primary tracks
-        # by `extract_rally_appearances`, so its keys are the trusted
-        # primary set. Without this filter, `_classify_track_sides` and
-        # `_classify_sides_by_bbox_height` count those leaked tracks
-        # toward their 2v2 partition checks, which can break the
-        # high-confidence team-pair constraint.
+        # ``track_stats`` is already correctly restricted to primary
+        # tracks by ``extract_rally_appearances``, so its keys are the
+        # trusted primary set. Without this filter, the bbox-height
+        # cross-check counts leaked tracks toward its 2v2 partition.
         if track_stats:
             primary_tids = set(track_stats.keys())
-            classification_positions = [
-                p for p in classification_positions
+            full_primary_positions = [
+                p for p in player_positions
                 if p.track_id < 0 or p.track_id in primary_tids
             ]
+        else:
+            full_primary_positions = list(player_positions)
+
+        # Bbox-height cross-check uses windowed positions on rally 1
+        # (clean serve-formation snapshot) and full positions otherwise.
+        if self.rally_count == 1 and not self.frozen_player_ids:
+            windowed_primary = [
+                p for p in full_primary_positions
+                if p.frame_number < FIRST_RALLY_INIT_WINDOW_FRAMES
+            ]
+            if len(windowed_primary) >= 4 * 10:
+                bbox_height_positions = windowed_primary
+            else:
+                bbox_height_positions = full_primary_positions
+            serve_window = FIRST_RALLY_INIT_WINDOW_FRAMES
+        else:
+            bbox_height_positions = full_primary_positions
+            serve_window = None
 
         track_avg_y, track_court_sides = self._classify_track_sides(
-            track_stats, classification_positions, court_split_y, team_assignments
+            track_stats, full_primary_positions, court_split_y, team_assignments,
+            serve_window_frames=serve_window,
         )
 
         # Bbox-height side signal (Phase 1 step 1). Independent of the
@@ -926,7 +940,7 @@ class MatchPlayerTracker:
         # any track — a disagreement is diagnostic of an unreliable
         # side signal for that track and the team-pair voter should treat
         # it as low-confidence.
-        sides_by_bbox = self._classify_sides_by_bbox_height(classification_positions)
+        sides_by_bbox = self._classify_sides_by_bbox_height(bbox_height_positions)
         if sides_by_bbox and track_court_sides:
             disagreements = [
                 tid for tid, side in sides_by_bbox.items()
@@ -1126,6 +1140,8 @@ class MatchPlayerTracker:
         player_positions: list[PlayerPosition],
         court_split_y: float | None,
         team_assignments: dict[int, int] | None = None,
+        *,
+        serve_window_frames: int | None = None,
     ) -> tuple[dict[int, float], dict[int, int]]:
         """Classify tracks into near/far court with soft labels.
 
@@ -1135,17 +1151,36 @@ class MatchPlayerTracker:
 
         Args:
             track_stats: Appearance stats per track.
-            player_positions: All player positions for this rally.
+            player_positions: All player positions for this rally
+                (full-rally; the function does its own optional windowing
+                for the calibration projection — see ``serve_window_frames``).
             court_split_y: Y coordinate splitting near/far teams.
             team_assignments: Pre-computed track_id -> team (0=near, 1=far)
                 from the tracking pipeline's actions_json.teamAssignments.
+            serve_window_frames: When set (typically rally 1), restrict
+                the calibration-projection input to frames < this value
+                to use the clean serve-formation snapshot for the
+                authoritative side signal. ``track_avg_y`` is still built
+                from full ``player_positions`` so late-arriver tracks
+                (those with all positions ≥ the window) are not silently
+                dropped — they are classified by the image-Y fallback.
 
         Returns:
             Tuple of (track_avg_y, track_court_sides) where:
                 track_avg_y: track_id -> average Y position
                 track_court_sides: track_id -> 0 (near) or 1 (far)
+
+        Contract: every track in ``track_stats`` is guaranteed to appear
+        in the returned ``track_court_sides``. An invariant guard at the
+        end fills any track that the priority chain missed via image-Y
+        fallback and emits a WARNING — repeated firings indicate a hole
+        in the priority chain.
         """
-        # Compute average Y position for each track
+        # Compute average Y position for each track from the FULL
+        # positions (always — independent of any serve-window restriction).
+        # This guarantees every primary track gets an avg_y so late-arrivers
+        # can be classified by the image-Y fallback even when their
+        # positions all fall outside the serve-formation window.
         track_avg_y: dict[int, float] = {}
         track_y_values: dict[int, list[float]] = {}
 
@@ -1162,12 +1197,24 @@ class MatchPlayerTracker:
         track_court_sides: dict[int, int] = {}
         self._sides_from_calibration = False
 
+        # Calibration-projection input. When ``serve_window_frames`` is
+        # set, restrict to frames < that value (the clean serve-formation
+        # snapshot — preferred for the authoritative side signal on
+        # rally 1). Otherwise use all positions.
+        if serve_window_frames is not None:
+            calibration_positions = [
+                p for p in player_positions
+                if p.frame_number < serve_window_frames
+            ]
+        else:
+            calibration_positions = player_positions
+
         # Priority 0: Court calibration — project foot positions through
         # homography to get court_y in meters.  Net is at 8.0 m.
         # This is authoritative when available.
         if self.calibrator is not None and self.calibrator.is_calibrated:
             track_court_y: dict[int, list[float]] = {}
-            for p in player_positions:
+            for p in calibration_positions:
                 if p.track_id < 0 or p.track_id not in track_avg_y:
                     continue
                 foot_x = p.x
@@ -1290,6 +1337,30 @@ class MatchPlayerTracker:
             track_court_sides[t] = 1  # far (lower Y)
         for t in sorted_tracks[mid:]:
             track_court_sides[t] = 0  # near (higher Y)
+
+        # Invariant guard: every track in ``track_stats`` must be
+        # classified. The priority chain has historically had holes
+        # (e.g. late-arriver tracks under serve-window restriction —
+        # b5fb0594 be3134ba 2026-05-07). This guard catches any future
+        # gap and falls back to image-Y from track_avg_y, with a WARNING
+        # to flag the hole at its source.
+        unclassified = set(track_stats.keys()) - set(track_court_sides.keys())
+        if unclassified:
+            logger.warning(
+                "Primary tracks not classified by priority chain: %s. "
+                "Falling back to image-Y. This indicates a missing path "
+                "in side-classification — investigate if it fires repeatedly.",
+                sorted(unclassified),
+            )
+            for tid in unclassified:
+                if tid in track_avg_y:
+                    track_court_sides[tid] = (
+                        0 if track_avg_y[tid] > 0.5 else 1
+                    )
+                else:
+                    # No avg_y either (track has zero positions in input);
+                    # default to near so downstream sees the track.
+                    track_court_sides[tid] = 0
 
         return track_avg_y, track_court_sides
 

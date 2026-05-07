@@ -540,6 +540,53 @@ class TestClassifyTrackSides:
         # Track 30 (y=0.5) not in team_assignments, falls back to court_split_y
         assert sides[30] == 1  # y=0.5 <= court_split_y=0.5 → far
 
+    def test_late_arriver_classified_under_serve_window(self) -> None:
+        """Late-arriver primary tracks (positions all fall after the serve-
+        formation window) must still get a court_side classification.
+
+        Regression for b5fb0594 be3134ba 2026-05-07: rally 1's serve-window
+        restriction silently dropped T18 (starts at frame 328, well after
+        FIRST_RALLY_INIT_WINDOW_FRAMES=120) from track_court_sides → from
+        top_tracks → from the matcher's Hungarian → no PID assignment.
+
+        The function must guarantee: every track in track_stats also ends
+        up in the returned track_court_sides dict.
+        """
+        tracker = MatchPlayerTracker()
+
+        # T10, T11 (near, y=0.7+) and T20 (far, y=0.3) present from frame 0.
+        # T18 (late-arriver) only appears from frame 200 onward (well past
+        # the serve-formation window of 120 frames).
+        positions: list[PlayerPosition] = []
+        for tid, y in [(10, 0.7), (11, 0.8), (20, 0.3)]:
+            for frame in range(0, 400):
+                positions.append(PlayerPosition(
+                    frame_number=frame, track_id=tid,
+                    x=0.5, y=y, width=0.05, height=0.15, confidence=0.9,
+                ))
+        for frame in range(200, 400):  # late arriver
+            positions.append(PlayerPosition(
+                frame_number=frame, track_id=18,
+                x=0.5, y=0.4, width=0.05, height=0.15, confidence=0.9,
+            ))
+
+        stats = {t: _make_stats(t) for t in [10, 11, 18, 20]}
+
+        # Simulate first-rally serve-window restriction: caller passes
+        # serve_window_frames=120 to indicate the calibration projection
+        # should use only early frames, but the function must still
+        # classify late-arrivers via the image-Y fallback.
+        _, sides = tracker._classify_track_sides(
+            stats, positions, court_split_y=None,
+            serve_window_frames=120,
+        )
+
+        # CONTRACT: every track in stats must appear in sides.
+        assert set(sides.keys()) == {10, 11, 18, 20}, (
+            f"late-arriver T18 silently dropped from classification: "
+            f"sides={sides}"
+        )
+
     def test_team_assignments_fixes_compressed_y(self) -> None:
         """team_assignments correctly classifies compressed-Y video tracks.
 
