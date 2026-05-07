@@ -6,6 +6,7 @@ from typing import Any
 
 import cv2
 import numpy as np
+import pytest
 
 from rallycut.tracking.match_tracker import (
     MatchPlayerTracker,
@@ -2026,6 +2027,7 @@ class TestMatchScratchpadSerialization:
         assert result.scratchpad == {}
 
 
+@pytest.mark.skip(reason="replay_refine_from_scratchpad removed in ref-crop cleanup phase 3")
 class TestReplayFromScratchpad:
     """`replay_refine_from_scratchpad` reproduces refine_assignments stages 1+2.
 

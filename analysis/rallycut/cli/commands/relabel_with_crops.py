@@ -56,7 +56,6 @@ def relabel_with_crops_cmd(
     """
     import time
 
-    from rallycut.cli.commands.match_players import _load_db_reference_crops
     from rallycut.evaluation.db import get_connection
     from rallycut.evaluation.tracking.db import get_video_path
     from rallycut.tracking.match_tracker import replay_refine_from_scratchpad
@@ -123,9 +122,13 @@ def relabel_with_crops_cmd(
         console.print(f"[red]Error[/red]: could not resolve video path for {video_id}")
         raise typer.Exit(1)
 
-    if not quiet:
-        console.print("Loading reference crops from DB...")
-    _, reference_profiles, _ = _load_db_reference_crops(video_id, video_path, quiet=quiet)
+    console.print(
+        "[red]Error[/red]: relabel-with-crops is removed. "
+        "The ref-crop matcher path has been dropped."
+    )
+    raise typer.Exit(1)
+    # dead code — removed in ref-crop cleanup phase 1; entire command deleted phase 4
+    reference_profiles = None
     if not reference_profiles:
         console.print(
             "[red]Error[/red]: no rows found in player_reference_crops for "
