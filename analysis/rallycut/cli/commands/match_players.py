@@ -246,9 +246,6 @@ def match_players(
             console.print("  Using general ReID model")
             console.print()
 
-    enable_track_split = False
-    crops_by_pid_for_classifier: dict[int, list[Any]] | None = None
-
     # --reset-anchors: strip prior assignmentAnchor entries before solving.
     # Caller has explicitly invalidated the cache; the next solve will
     # rebuild fresh anchors. We mutate a copy so the DB-stored prior
@@ -279,8 +276,6 @@ def match_players(
         num_samples=num_samples,
         reid_model=general_reid_model,
         calibrator=court_calibrator,
-        enable_track_split=enable_track_split,
-        crops_by_pid_for_classifier=crops_by_pid_for_classifier,
         prior_match_analysis=prior_match_analysis_for_solver,
     )
     results = match_result.rally_results
