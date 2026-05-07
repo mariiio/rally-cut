@@ -2396,9 +2396,8 @@ export interface MatchAnalysis {
     endMs: number;
     trackToPlayer: Record<string, number>;
     // Raw BoT-SORT trackId → canonical pid. Unlike `trackToPlayer` (identity
-    // after remap), this preserves the Hungarian mapping and is the legacy
-    // anchor for resolving action-GT `trackId` to a display pid. Superseded
-    // by `canonicalPidMap` when the video has a full ref-crop set.
+    // after remap), this preserves the Hungarian mapping; used as the
+    // anchor for resolving action-GT `trackId` to a display pid.
     appliedFullMapping?: Record<string, number>;
     remapApplied?: boolean;
     assignmentConfidence: number;

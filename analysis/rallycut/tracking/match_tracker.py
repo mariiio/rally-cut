@@ -3875,6 +3875,16 @@ ANCHOR_MIN_CONFIDENCE = 0.50
 #          through the existing appearance-aware path — bit-exact for
 #          clean-bbox cases. Bump invalidates anchors so freshly-merged
 #          primary tracks propagate cleanly to the next run.
+#  - v8: 2026-05-07 — ref-crop matcher path removed. The frozen-profile
+#          dual-path (reference_profiles / frozen_player_ids) collapsed
+#          to the always-blind path; reference_profiles parameter +
+#          frozen_player_ids attribute + replay_refine_from_scratchpad
+#          deleted across phases 1-4 of the cleanup. Bump invalidates
+#          anchors so the first run after merge re-solves under the
+#          collapsed code path; eval gate confirmed byte-identical
+#          PERMUTED panel. DB column Video.canonicalPidMapJson and
+#          table player_reference_crops kept dormant for a future
+#          post-hoc cluster-pick UX.
 MATCHER_VERSION = "v8"
 
 

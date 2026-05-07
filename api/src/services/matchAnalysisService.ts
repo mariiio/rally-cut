@@ -109,22 +109,6 @@ interface MatchAnalysisResult {
   // Used by relabel-with-crops to replay Pass 2 with new frozen profiles
   // without re-extracting appearance from video. Opaque to TS.
   rallyScratchpad?: Record<string, unknown>;
-  // Embedded copy of canonicalPidMapJson written by match-players when
-  // ref-crops cover all 4 pids. The load-bearing copy lives in
-  // Video.canonicalPidMapJson; this embedded copy is a convenience for
-  // CLI consumers that only read match_analysis_json.
-  canonicalPidMap?: CanonicalPidMap;
-}
-
-// Persisted shape of `Video.canonicalPidMapJson`. Written by the Python
-// `match-players` CLI (analysis/rallycut/cli/commands/match_players.py)
-// when the video has all 4 ref crops AND the rally-level all-or-nothing
-// gate passes; null otherwise. Plan:
-// docs/superpowers/plans/2026-04-25-ref-crop-canonical-identity.md.
-export interface CanonicalPidMap {
-  version: 1;
-  sourceRefCropsSha: string;
-  rallies: Record<string, Record<string, number>>;
 }
 
 export interface MatchStatsResult {
@@ -1006,23 +990,10 @@ function runCli<T>(
 /**
  * Get match analysis for a video.
  */
-// API response shape for /v1/videos/:id/match-analysis. Derived from the
-// persisted `MatchAnalysisResult` but with `canonicalPidMap` forced to
-// come from the separate `Video.canonicalPidMapJson` column (the
-// load-bearing copy) rather than the embedded copy in the persisted
-// JSON. Always present on the wire — null when the column is empty —
-// so consumers can rely on `response.canonicalPidMap === null` to mean
-// "no ref-crop map for this video", regardless of any stale embedded
-// copy that may linger after ref-crop deletion.
-export type MatchAnalysisApiResponse =
-  Omit<MatchAnalysisResult, 'canonicalPidMap'> & {
-    canonicalPidMap: CanonicalPidMap | null;
-  };
-
 export async function getMatchAnalysis(
   videoId: string,
   userId: string,
-): Promise<MatchAnalysisApiResponse | null> {
+): Promise<MatchAnalysisResult | null> {
   const video = await prisma.video.findUnique({
     where: { id: videoId },
   });
@@ -1035,18 +1006,7 @@ export async function getMatchAnalysis(
     throw new ForbiddenError('You do not have permission to view match analysis for this video');
   }
 
-  const analysis = (video.matchAnalysisJson as unknown as MatchAnalysisResult) ?? null;
-  if (!analysis) {
-    return null;
-  }
-  // Surface canonicalPidMapJson alongside matchAnalysisJson so the web
-  // client's resolveCanonicalPid can read the ref-crop-sourced map without
-  // a second round-trip. The column is authoritative — overwrite any
-  // embedded copy in the persisted JSON to keep responses consistent
-  // after ref-crop deletion (which nulls the column but leaves the
-  // embedded copy from the prior match-players run in place).
-  const canonicalPidMap = (video.canonicalPidMapJson as unknown as CanonicalPidMap | null) ?? null;
-  return { ...analysis, canonicalPidMap };
+  return (video.matchAnalysisJson as unknown as MatchAnalysisResult) ?? null;
 }
 
 /**
