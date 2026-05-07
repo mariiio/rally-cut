@@ -787,7 +787,6 @@ class MatchPlayerTracker:
         self,
         calibrator: CourtCalibrator | None = None,
         collect_diagnostics: bool = False,
-        reference_profiles: dict[int, PlayerAppearanceProfile] | None = None,
     ):
         """
         Initialize match tracker.
@@ -796,17 +795,10 @@ class MatchPlayerTracker:
             calibrator: Optional court calibrator for baseline detection.
             collect_diagnostics: If True, collect per-rally cost matrices
                 and assignment margins for diagnostic analysis.
-            reference_profiles: Optional user-provided frozen profiles (player_id -> profile).
-                When provided, profiles are never updated — they anchor all assignments.
         """
         self.calibrator = calibrator
         self.state = MatchPlayerState()
         self.state.initialize_players()
-        self.frozen_player_ids: set[int] = set()
-        if reference_profiles:
-            for pid, profile in reference_profiles.items():
-                self.state.players[pid] = profile
-                self.frozen_player_ids.add(pid)
         self.rally_count = 0
         self.collect_diagnostics = collect_diagnostics
         self.diagnostics: list[RallyAssignmentDiagnostics] = []
@@ -3887,94 +3879,6 @@ ANCHOR_MIN_CONFIDENCE = 0.50
 MATCHER_VERSION = "v7"
 
 
-def replay_refine_from_scratchpad(
-    scratchpad: dict[str, Any],
-    player_profiles: dict[int, PlayerAppearanceProfile],
-    initial_results: list[RallyTrackingResult],
-) -> list[RallyTrackingResult]:
-    """Re-run refine_assignments stages 1+2 from a captured scratchpad.
-
-    Engine of the Phase 1 relabel-with-crops worker. Builds a fresh tracker,
-    restores the per-rally appearance state and final profiles, then mirrors
-    refine_assignments stages 1 and 2 line-for-line — stage 0 (side-switch
-    detection) is intentionally skipped because the scratchpad already holds
-    the partition AND the post-flip player_side_assignment per rally
-    (scratchpad_to_dict is called AFTER refine_assignments in
-    match_players_across_rallies).
-
-    Args:
-        scratchpad: Output of `scratchpad_to_dict`.
-        player_profiles: pid → profile to inject. Use the existing match-time
-            profiles to reproduce the live result; supply NEW frozen profiles
-            (built from user-provided reference crops) to relabel.
-        initial_results: Pass-1 RallyTrackingResult per rally. Used only to
-            propagate rally_index and server_player_id; the trackToPlayer is
-            recomputed from scratch.
-
-    Returns:
-        Refined results, one per rally. trackToPlayer reflects stages 1+2
-        under the supplied profiles.
-    """
-    if not scratchpad.get("rallies"):
-        return []
-
-    tracker = MatchPlayerTracker()
-    tracker.stored_rally_data = [
-        StoredRallyData.from_dict(entry) for entry in scratchpad["rallies"]
-    ]
-    tracker.state.players.update(player_profiles)
-    tracker.frozen_player_ids = set(
-        int(pid) for pid in scratchpad.get("frozenPlayerIds", [])
-    )
-
-    # Mark side_switch_detected on the initial results for any captured switch.
-    switch_set = {int(i) for i in scratchpad.get("sideSwitches", [])}
-    initial = list(initial_results)
-    for i in switch_set:
-        if 0 <= i < len(initial):
-            r = initial[i]
-            initial[i] = RallyTrackingResult(
-                rally_index=r.rally_index,
-                track_to_player=r.track_to_player,
-                server_player_id=r.server_player_id,
-                side_switch_detected=True,
-                assignment_confidence=r.assignment_confidence,
-                sub_tracks=r.sub_tracks,
-            )
-
-    # Stage 1: re-score every rally with the supplied profiles.
-    refined: list[RallyTrackingResult] = []
-    for data, init in zip(tracker.stored_rally_data, initial):
-        saved_side = tracker.state.current_side_assignment
-        tracker.state.current_side_assignment = data.player_side_assignment
-        tracker._sides_from_calibration = data.sides_from_calibration
-        team_constraint = tracker._high_confidence_sides_for_team_pair(
-            data.track_court_sides, data.sides_by_bbox,
-        )
-        track_to_player = tracker._assign_tracks_to_players_global(
-            data.top_tracks,
-            data.track_stats,
-            data.track_court_sides,
-            use_side_penalty=True,
-            track_team_constraint=team_constraint or None,
-        )
-        tracker.state.current_side_assignment = saved_side
-        confidence = tracker._compute_assignment_confidence(
-            data.track_stats, track_to_player
-        )
-        refined.append(RallyTrackingResult(
-            rally_index=init.rally_index,
-            track_to_player=track_to_player,
-            server_player_id=init.server_player_id,
-            side_switch_detected=init.side_switch_detected,
-            assignment_confidence=confidence,
-            sub_tracks=init.sub_tracks,
-        ))
-
-    # Stage 2: global within-team voting.
-    return tracker._global_within_team_voting(refined)
-
-
 def scratchpad_to_dict(tracker: MatchPlayerTracker) -> dict[str, Any]:
     """Serialize the per-rally + match-level state needed to replay Pass 2.
 
@@ -3987,13 +3891,10 @@ def scratchpad_to_dict(tracker: MatchPlayerTracker) -> dict[str, Any]:
     Bundle shape (matches tests in TestMatchScratchpadSerialization):
       - rallies: list of StoredRallyData.to_dict() per rally, in order
       - sideSwitches: sorted rally indices where Pass 2 stage 0 flipped sides
-      - frozenPlayerIds: pids that were anchored by reference profiles at
-        match-time (so the replay can choose to re-freeze them or not)
     """
     return {
         "rallies": [data.to_dict() for data in tracker.stored_rally_data],
         "sideSwitches": sorted(tracker.last_side_switches),
-        "frozenPlayerIds": sorted(int(pid) for pid in tracker.frozen_player_ids),
     }
 
 
@@ -4065,7 +3966,6 @@ def match_players_across_rallies(
     rallies: list[RallyTrackData],
     num_samples: int = 12,
     collect_diagnostics: bool = False,
-    reference_profiles: dict[int, PlayerAppearanceProfile] | None = None,
     extract_reid: bool = False,
     reid_model: GeneralReIDModel | None = None,
     calibrator: CourtCalibrator | None = None,
@@ -4086,14 +3986,11 @@ def match_players_across_rallies(
         num_samples: Frames to sample per track for appearance.
         collect_diagnostics: If True, collect per-rally cost matrices
             and assignment margins for diagnostic analysis.
-        reference_profiles: Optional user-provided frozen profiles (player_id -> profile).
-            When provided, profiles are never updated — they anchor all assignments.
         extract_reid: If True, extract DINOv2 embeddings per track for ReID-based
-            cost blending in the Hungarian assignment. Auto-enabled when reference
-            profiles contain ReID embeddings or a general ReID model is provided.
+            cost blending in the Hungarian assignment. Auto-enabled when a general
+            ReID model is provided.
         reid_model: Optional GeneralReIDModel for embedding extraction.
-            When provided, uses its projection head. Falls back to raw backbone
-            when not provided but reference profiles have embeddings.
+            When provided, uses its projection head.
         calibrator: Optional court calibrator for authoritative near/far side
             classification. When provided, track foot positions are projected
             through the homography to determine court side (net at 8.0m),
@@ -4118,18 +4015,6 @@ def match_players_across_rallies(
         extract_reid = True
         logger.info("Auto-enabling ReID extraction (general model provided)")
 
-    # Auto-enable ReID extraction when reference profiles have embeddings
-    if not extract_reid and reference_profiles:
-        if any(p.reid_embedding is not None for p in reference_profiles.values()):
-            extract_reid = True
-            logger.info("Auto-enabling ReID extraction (reference profiles have embeddings)")
-
-    if reference_profiles:
-        logger.info(
-            f"Using reference profiles for players: "
-            f"{sorted(reference_profiles.keys())}"
-        )
-
     # Profile-drift probe (Phase 1, Task 3 of post-7307c1d-revert refactor).
     # No-op when MATCH_PLAYERS_PROBE is unset; otherwise writes a sidecar
     # JSON to analysis/reports/profile_drift_probe/ at finalize time.
@@ -4138,7 +4023,6 @@ def match_players_across_rallies(
         rally_ids=[r.rally_id for r in rallies],
         extra={
             "num_rallies": len(rallies),
-            "has_reference_profiles": bool(reference_profiles),
             "extract_reid": bool(extract_reid),
         },
     )
@@ -4146,7 +4030,6 @@ def match_players_across_rallies(
     tracker = MatchPlayerTracker(
         calibrator=calibrator,
         collect_diagnostics=collect_diagnostics,
-        reference_profiles=reference_profiles,
     )
 
     # Optional pre-Hungarian within-track appearance split (Task 6, 2026-04-26).
@@ -4497,8 +4380,7 @@ def match_players_across_rallies(
 CANONICAL_PID_TIEBREAK_TAU = 0.01
 
 # Cross-rally `match-players` is the source of truth for track-pid pairing.
-# It already incorporates ref-crop prototypes via `reference_profiles` in
-# its Hungarian, AND aggregates appearance evidence across every rally —
+# It aggregates appearance evidence across every rally —
 # strictly more information than the per-rally canonical Hungarian. When
 # canonical's per-rally signal disagrees with match-players on a track,
 # match-players wins regardless of canonical's gap. Canonical's role is

@@ -230,8 +230,6 @@ def match_players(
         console.print(f"  Video: {video_path.name}{cal_str}")
         console.print()
 
-    reference_profiles = None
-
     # Load ReID model (blind path only). Uses the fine-tuned
     # OSNet-x1.0 backbone (`GeneralReIDModel`). The DINOv2 alternative
     # (RALLYCUT_REID_BACKBONE=dinov2_vitl14) was benchmarked WORSE than
@@ -248,8 +246,6 @@ def match_players(
             console.print("  Using general ReID model")
             console.print()
 
-    # Always blind path post-ref-crop-cleanup; tracker-side parameters are
-    # removed in phase 2-3 (this commit only drops the CLI surface).
     enable_track_split = False
     crops_by_pid_for_classifier: dict[int, list[Any]] | None = None
 
@@ -281,7 +277,6 @@ def match_players(
         video_path=video_path,
         rallies=rallies,
         num_samples=num_samples,
-        reference_profiles=reference_profiles,
         reid_model=general_reid_model,
         calibrator=court_calibrator,
         enable_track_split=enable_track_split,

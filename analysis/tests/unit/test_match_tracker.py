@@ -1888,30 +1888,16 @@ class TestStoredRallyDataSerialization:
 
 
 class TestMatchScratchpadSerialization:
-    """End-to-end scratchpad bundle: per-rally state + side switches + frozen pids.
+    """End-to-end scratchpad bundle: per-rally state + side switches.
 
-    The relabel-with-crops worker (Phase 1) reads this bundle from
-    match_analysis_json.rallyScratchpad to replay Pass 2 stages 1+2 with new
-    frozen profiles, without re-extracting appearance from video.
+    Serializes per-rally StoredRallyData and the side-switch partition
+    produced by refine_assignments into a JSON-safe dict for persistence.
     """
 
-    def _process_three_rallies(self, *, frozen: bool = False) -> MatchPlayerTracker:
+    def _process_three_rallies(self) -> MatchPlayerTracker:
         from rallycut.tracking.match_tracker import scratchpad_to_dict  # noqa: F401
 
-        # Build deterministic 3-rally synthetic match.
-        ref_profiles = None
-        if frozen:
-            ref_profiles = {
-                pid: _make_stats(track_id=pid).avg_lower_hist  # placeholder
-                for pid in [1, 2, 3, 4]
-            }
-            # Use a real reference_profiles dict with PlayerAppearanceProfile.
-            from rallycut.tracking.player_features import PlayerAppearanceProfile
-            ref_profiles = {
-                pid: PlayerAppearanceProfile(player_id=pid)
-                for pid in [1, 2, 3, 4]
-            }
-        tracker = MatchPlayerTracker(reference_profiles=ref_profiles)
+        tracker = MatchPlayerTracker()
 
         results: list[RallyTrackingResult] = []
         for rally_idx in range(3):
@@ -1937,10 +1923,9 @@ class TestMatchScratchpadSerialization:
         tracker = self._process_three_rallies()
         scratchpad = scratchpad_to_dict(tracker)
 
-        assert set(scratchpad.keys()) >= {"rallies", "sideSwitches", "frozenPlayerIds"}
+        assert set(scratchpad.keys()) >= {"rallies", "sideSwitches"}
         assert isinstance(scratchpad["rallies"], list)
         assert isinstance(scratchpad["sideSwitches"], list)
-        assert isinstance(scratchpad["frozenPlayerIds"], list)
 
     def test_scratchpad_one_rally_entry_per_processed_rally(self) -> None:
         from rallycut.tracking.match_tracker import scratchpad_to_dict
@@ -1954,22 +1939,6 @@ class TestMatchScratchpadSerialization:
             assert "track_court_sides" in entry
             assert "top_tracks" in entry
             assert "player_side_assignment" in entry
-
-    def test_scratchpad_records_frozen_pids_when_reference_profiles_used(self) -> None:
-        from rallycut.tracking.match_tracker import scratchpad_to_dict
-
-        tracker = self._process_three_rallies(frozen=True)
-        scratchpad = scratchpad_to_dict(tracker)
-
-        assert sorted(scratchpad["frozenPlayerIds"]) == [1, 2, 3, 4]
-
-    def test_scratchpad_no_frozen_pids_on_blind_run(self) -> None:
-        from rallycut.tracking.match_tracker import scratchpad_to_dict
-
-        tracker = self._process_three_rallies(frozen=False)
-        scratchpad = scratchpad_to_dict(tracker)
-
-        assert scratchpad["frozenPlayerIds"] == []
 
     def test_scratchpad_side_switches_reflect_refine_partition(self) -> None:
         """sideSwitches must match the partition computed by refine_assignments."""
@@ -1998,7 +1967,6 @@ class TestMatchScratchpadSerialization:
 
         assert scratchpad["rallies"] == []
         assert scratchpad["sideSwitches"] == []
-        assert scratchpad["frozenPlayerIds"] == []
 
     def test_match_players_result_carries_scratchpad_field(self) -> None:
         """MatchPlayersResult exposes scratchpad so the CLI can persist it.
@@ -2013,205 +1981,6 @@ class TestMatchScratchpadSerialization:
 
         assert hasattr(result, "scratchpad")
         assert result.scratchpad == {}
-
-
-@pytest.mark.skip(reason="caller (relabel_with_crops_cmd) gutted in ref-crop cleanup phase 1; function deleted phase 3; class deleted phase 4")
-class TestReplayFromScratchpad:
-    """`replay_refine_from_scratchpad` reproduces refine_assignments stages 1+2.
-
-    This is the engine of the Phase 1 relabel-with-crops worker: given the
-    captured scratchpad (per-rally state + side switches + frozen pids) and
-    a profile dict, return the same trackToPlayer assignments that the live
-    refine_assignments produced. With identical profiles the output must be
-    byte-identical (no missing state). With NEW frozen profiles it produces
-    the relabeled assignments — the user-visible payoff.
-    """
-
-    # Distinct HSV signatures per slot — required for refine_assignments to
-    # discriminate within a team. Mirrors the pattern in TestRefineAssignments.
-    SLOT_SIGNATURES = [
-        dict(skin_hsv=(15.0, 180.0, 120.0), upper_hue=20.0, lower_hue=100.0),
-        dict(skin_hsv=(25.0, 100.0, 200.0), upper_hue=80.0, lower_hue=140.0),
-        dict(skin_hsv=(10.0, 160.0, 150.0), upper_hue=140.0, lower_hue=20.0),
-        dict(skin_hsv=(30.0, 120.0, 170.0), upper_hue=160.0, lower_hue=80.0),
-    ]
-
-    def _build_three_rally_match(
-        self, frozen: bool = False
-    ) -> tuple[MatchPlayerTracker, list[RallyTrackingResult]]:
-        """Run a 3-rally synthetic match through the standard pipeline.
-
-        Returns (tracker, pass1_results) — the tracker has stored_rally_data
-        and last_side_switches populated; pass1_results are the Pass-1 outputs
-        BEFORE refine_assignments. Replay is given pass1_results and must
-        reach the same final state that live refine_assignments would.
-        """
-        ref_profiles = None
-        if frozen:
-            from rallycut.tracking.player_features import PlayerAppearanceProfile
-            ref_profiles = {
-                pid: PlayerAppearanceProfile(player_id=pid)
-                for pid in [1, 2, 3, 4]
-            }
-        tracker = MatchPlayerTracker(reference_profiles=ref_profiles)
-        results: list[RallyTrackingResult] = []
-        for rally_idx in range(3):
-            base = (rally_idx + 1) * 100
-            tids = [base, base + 1, base + 2, base + 3]
-            stats = {
-                tids[i]: _make_stats(tids[i], **self.SLOT_SIGNATURES[i])
-                for i in range(4)
-            }
-            positions = _make_positions(tids, [0.7, 0.8, 0.3, 0.4])
-            results.append(
-                tracker.process_rally(
-                    track_stats=stats,
-                    player_positions=positions,
-                    court_split_y=0.5,
-                    start_ms=rally_idx * 10_000,
-                    end_ms=rally_idx * 10_000 + 5_000,
-                )
-            )
-        return tracker, results
-
-    def test_replay_with_same_profiles_is_byte_identical(self) -> None:
-        """With unchanged inputs, replay must reproduce live refine_assignments."""
-        from rallycut.tracking.match_tracker import (
-            replay_refine_from_scratchpad,
-            scratchpad_to_dict,
-        )
-
-        # Live path: Pass 1 → Pass 2.
-        tracker, pass1_results = self._build_three_rally_match()
-        # Snapshot scratchpad + final profiles BEFORE running refine, so the
-        # replay sees exactly what it would see in production (the tracker's
-        # state.players AS OF the end of Pass 1; refine_assignments doesn't
-        # mutate profiles per the verified diagnostic).
-        live_refined = tracker.refine_assignments(pass1_results)
-        scratchpad = scratchpad_to_dict(tracker)
-        profiles = {
-            pid: prof for pid, prof in tracker.state.players.items()
-            if prof.rally_count > 0
-        }
-
-        replay_results = replay_refine_from_scratchpad(
-            scratchpad=scratchpad,
-            player_profiles=profiles,
-            initial_results=[
-                RallyTrackingResult(
-                    rally_index=r.rally_index,
-                    track_to_player=dict(r.track_to_player),
-                    server_player_id=r.server_player_id,
-                    side_switch_detected=False,  # Pre-stage-0 view
-                    assignment_confidence=r.assignment_confidence,
-                )
-                for r in pass1_results
-            ],
-        )
-
-        assert len(replay_results) == len(live_refined)
-        for i, (live, replay) in enumerate(zip(live_refined, replay_results)):
-            assert live.track_to_player == replay.track_to_player, (
-                f"rally {i}: live={live.track_to_player} "
-                f"replay={replay.track_to_player}"
-            )
-
-    def test_replay_preserves_side_switch_partition(self) -> None:
-        """Replay must NOT re-detect side switches — partition is fixed."""
-        from rallycut.tracking.match_tracker import (
-            replay_refine_from_scratchpad,
-            scratchpad_to_dict,
-        )
-
-        tracker, pass1_results = self._build_three_rally_match()
-        tracker.refine_assignments(pass1_results)
-        scratchpad = scratchpad_to_dict(tracker)
-        original_switches = list(scratchpad["sideSwitches"])
-
-        # Inject a misleading rallyData that would trigger a different switch
-        # detection — the replay must ignore that and use scratchpad switches.
-        # (Tested implicitly: replay never calls _detect_side_switches.)
-        replay_refine_from_scratchpad(
-            scratchpad=scratchpad,
-            player_profiles=tracker.state.players,
-            initial_results=pass1_results,
-        )
-
-        # If replay had re-detected switches, the scratchpad would still have
-        # the originals. Also confirm: replaying twice gives the same answer.
-        again = replay_refine_from_scratchpad(
-            scratchpad=scratchpad,
-            player_profiles=tracker.state.players,
-            initial_results=pass1_results,
-        )
-        first = replay_refine_from_scratchpad(
-            scratchpad=scratchpad,
-            player_profiles=tracker.state.players,
-            initial_results=pass1_results,
-        )
-        assert [r.track_to_player for r in again] == [r.track_to_player for r in first]
-        assert scratchpad["sideSwitches"] == original_switches
-
-    def test_replay_handles_empty_scratchpad(self) -> None:
-        """Empty scratchpad (no rallies) returns empty result, no errors."""
-        from rallycut.tracking.match_tracker import replay_refine_from_scratchpad
-
-        empty_scratchpad = {"rallies": [], "sideSwitches": [], "frozenPlayerIds": []}
-        result = replay_refine_from_scratchpad(
-            scratchpad=empty_scratchpad,
-            player_profiles={},
-            initial_results=[],
-        )
-        assert result == []
-
-    def test_replay_with_new_frozen_profiles_changes_assignments(self) -> None:
-        """The relabel use case: new frozen profiles re-anchor assignments."""
-        from rallycut.tracking.match_tracker import (
-            replay_refine_from_scratchpad,
-            scratchpad_to_dict,
-        )
-        from rallycut.tracking.player_features import PlayerAppearanceProfile
-
-        tracker, pass1_results = self._build_three_rally_match()
-        tracker.refine_assignments(pass1_results)
-        scratchpad = scratchpad_to_dict(tracker)
-        baseline_profiles = dict(tracker.state.players)
-
-        # Build a "swapped" frozen profile dict — pid 1 ↔ pid 2 features.
-        # This simulates the user telling us: "what blind pid called P1 is
-        # actually P2." A correct replay will assign track→pid differently.
-        swapped: dict[int, PlayerAppearanceProfile] = {}
-        for pid, prof in baseline_profiles.items():
-            other_pid = {1: 2, 2: 1, 3: 4, 4: 3}.get(pid, pid)
-            swapped[pid] = PlayerAppearanceProfile(player_id=pid)
-            other = baseline_profiles[other_pid]
-            swapped[pid].avg_lower_hist = other.avg_lower_hist
-            swapped[pid].avg_upper_hist = other.avg_upper_hist
-            swapped[pid].avg_skin_tone_hsv = other.avg_skin_tone_hsv
-            swapped[pid].avg_dominant_color_hsv = other.avg_dominant_color_hsv
-            swapped[pid].avg_head_hist = other.avg_head_hist
-            # Mark as frozen by giving it a high rally_count.
-            swapped[pid].rally_count = 100
-
-        baseline_replay = replay_refine_from_scratchpad(
-            scratchpad=scratchpad,
-            player_profiles=baseline_profiles,
-            initial_results=pass1_results,
-        )
-        swapped_replay = replay_refine_from_scratchpad(
-            scratchpad=scratchpad,
-            player_profiles=swapped,
-            initial_results=pass1_results,
-        )
-
-        # At least one rally should assign tracks to different pids when the
-        # profiles are swapped. (If none differ, the test is tautological —
-        # something's wrong with how swapped_profiles flow into stage 1.)
-        any_diff = any(
-            b.track_to_player != s.track_to_player
-            for b, s in zip(baseline_replay, swapped_replay)
-        )
-        assert any_diff, "swapped profiles should change at least one rally"
 
 
 class TestIdentityFirstPartialPass:
