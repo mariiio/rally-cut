@@ -40,12 +40,14 @@ These corrections are baked into the tasks below. The spec is left as-is — the
 
 **Baseline panel (must remain byte-identical):**
 ```
-5c756c41 = 86.7
-b5fb0594 = 100
-854bb250 = 100
-7d77980f = 88.4
-panel avg = 93.8 PERMUTED
+5c756c41 = 74.2 (23/31)
+b5fb0594 = 53.8 (21/39)
+854bb250 = 70.0 (14/20)
+7d77980f = 92.8 (64/69)
+panel avg = 72.7 PERMUTED
 ```
+
+**Baseline note (2026-05-07):** captured today from `main@f8fe8c2` after retracking 28 stale panel rallies. These numbers are below the memory-recorded `cross_fixture_gt_baseline_2026_05_05` (panel 93.8, 86.7/100/100/88.4) — a separate regression to investigate post-cleanup. For the cleanup itself, byte-identity against the current baseline is what matters; the cleanup is a pure refactor and should produce identical numbers regardless of how those numbers compare to memory. Saved log: `/tmp/refcrop_cleanup_baseline.log`.
 
 **Verification protocol before/after every phase:** reset state + run panel eval.
 ```bash
