@@ -248,6 +248,8 @@ def match_players(
             console.print("  Using general ReID model")
             console.print()
 
+    # Always blind path post-ref-crop-cleanup; tracker-side parameters are
+    # removed in phase 2-3 (this commit only drops the CLI surface).
     enable_track_split = False
     crops_by_pid_for_classifier: dict[int, list[Any]] | None = None
 

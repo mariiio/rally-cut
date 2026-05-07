@@ -2027,7 +2027,7 @@ class TestMatchScratchpadSerialization:
         assert result.scratchpad == {}
 
 
-@pytest.mark.skip(reason="replay_refine_from_scratchpad removed in ref-crop cleanup phase 3")
+@pytest.mark.skip(reason="caller (relabel_with_crops_cmd) gutted in ref-crop cleanup phase 1; function deleted phase 3; class deleted phase 4")
 class TestReplayFromScratchpad:
     """`replay_refine_from_scratchpad` reproduces refine_assignments stages 1+2.
 
