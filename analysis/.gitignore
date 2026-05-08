@@ -81,6 +81,10 @@ reports/gt_fixture_post_fix_*.log
 reports/*.sql.gz
 reports/*.sql
 
+# Eval / training run logs in reports/ (regeneratable; clutter git status)
+reports/*.log
+reports/**/*.log
+
 # Attribution visual debug surface (regeneratable from
 # scripts/render_attribution_viewer.py + scripts/extract_attribution_clips.py).
 reports/attribution_audit/

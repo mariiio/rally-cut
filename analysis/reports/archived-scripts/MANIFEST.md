@@ -24,6 +24,21 @@ See: `~/.claude/projects/-Users-mario-Personal-Projects-RallyCut/memory/MEMORY.m
 | `verify_camera_height_from_players.py` | Camera-height inference probe |
 | `visualize_ball_3d_rig.py` | Rig visualization for 3D ball workstream |
 
+## botsort_forensic_2026_04_30/
+
+Status: Investigation closed; chimera-stitching 2-layer fix SHIPPED 2026-05-05 (commits `987f572` + `5ae71f8`, MATCHER_VERSION→v7). The forensic harness was used to capture per-frame BoxMOT internal state during the diagnosis but is not part of any current pipeline.
+
+Activated only when env var `BOTSORT_FORENSIC_LOG_DIR` is set; otherwise behavior is byte-identical to stock BoT-SORT.
+
+See: `~/.claude/projects/-Users-mario-Personal-Projects-RallyCut/memory/chimera_stitching_dd042609_2026_05_04.md`.
+
+| File | Purpose |
+|---|---|
+| `botsort_instrumented.py` | Read-only `BotSort` subclass capturing IoU + embedding cost matrices, Hungarian matches, lost/removed track lifecycle to JSONL sidecars. |
+| `analyze_botsort_forensic.py` | Aggregates the JSONL sidecars across rallies into investigation summaries. |
+| `forensic_unit_test.py` | Synthetic-detection unit test for the instrumented wrapper. |
+| `forensic_smoke_test.py` / `forensic_capture_panel.py` / `forensic_panel_ground_truth.py` / `forensic_user_chimera_cases.py` | Capture and reproduction harnesses across panel + user-reported chimera cases. |
+
 ## occlusion_resolver_session5/
 
 Status: NO-GO 2026-04-17 (Session 5 of within-team ReID workstream). The post-hoc per-convergence within-team swap resolver couldn't separate the one labelled positive from the no-swap negatives at the required precision (≥0.95 / ≥0.5 recall) given the available feature set. Module + tests deleted on 2026-05-08; these reproduce the labelling pipeline if anyone wants to revisit with a richer feature set or larger labelled corpus.
