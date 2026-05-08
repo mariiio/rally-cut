@@ -1742,39 +1742,6 @@ class PlayerTracker:
                     len(team_assignments),
                 )
 
-            # Step 4b.5: Within-team occlusion-resolver (Session 5).
-            # Runs BEFORE global identity so same-team swap corrections
-            # become clean input — not something the coverage-revert guard
-            # tries to undo. Env-var gated; default off is byte-identical.
-            if (
-                os.environ.get("ENABLE_OCCLUSION_RESOLVER", "0") == "1"
-                and team_assignments
-                and primary_track_ids
-            ):
-                from rallycut.tracking.occlusion_resolver import (
-                    resolve_within_team_convergence_swaps,
-                )
-
-                positions, _resolver_result = resolve_within_team_convergence_swaps(
-                    positions,
-                    primary_track_ids=primary_track_ids,
-                    team_assignments=team_assignments,
-                    color_store=color_store,
-                    appearance_store=appearance_store,
-                    learned_store=learned_store,
-                    court_calibrator=court_calibrator,
-                    video_width=video_width,
-                    video_height=video_height,
-                    court_split_y=split_y,
-                )
-                if _resolver_result.n_swaps_applied > 0:
-                    logger.info(
-                        "occlusion_resolver: applied %d same-team swap(s) "
-                        "across %d within-team convergence(s)",
-                        _resolver_result.n_swaps_applied,
-                        _resolver_result.n_within_team,
-                    )
-
             # Step 4c: Global identity optimization
             if (
                 not skip_global_identity
@@ -1798,6 +1765,16 @@ class PlayerTracker:
                     court_split_y=split_y,
                     appearance_store=appearance_store,
                     learned_store=learned_store,
+                )
+                # optimize_global_identity may rewrite track_ids on positions
+                # via segment reassignment to canonical anchors. Re-derive
+                # team_assignments so its keys match the post-global track set:
+                # surviving tracks keep their labels via precomputed-passthrough,
+                # new tracks fall back to median-Y. Restores PID-invariant I-6.
+                team_assignments = classify_teams(
+                    positions,
+                    split_y if split_y is not None else 0.5,
+                    precomputed_assignments=team_assignments,
                 )
                 _num_global_segments = global_result.num_segments
                 _num_global_remapped = global_result.num_remapped
