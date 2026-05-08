@@ -428,6 +428,13 @@ uv run rallycut evaluate-tracking tune-ball-filter --all --grid segment-pruning
 ```
 
 
+## Scripts directory
+
+Live scripts are in `analysis/scripts/`. One-off diagnostic / probe scripts from closed investigations have been moved to `analysis/reports/archived-scripts/<category>/` — see the [manifest](reports/archived-scripts/MANIFEST.md) for what's archived and links to the corresponding NO-GO / SHIPPED memory memos. Restoring an archived script is a `git mv` away.
+
+Canonical entry points for the most common workflows live in the relevant skills (`ml-experiment`, `tracking-diagnosis`, `court-detection`, `contact-detection`, `video-analysis`); start there before grep-spelunking.
+
+
 ## Code Style
 
 - Ruff: E, F, I, N, W, UP rules (line length 100, E501 ignored)
