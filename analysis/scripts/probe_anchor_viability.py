@@ -32,8 +32,6 @@ import numpy as np
 # Ensure WEIGHT_LEARNED_REID > 0 so config_hash matches the cache built
 # during Sessions 4-8 (which stored learned embeddings).
 os.environ.setdefault("WEIGHT_LEARNED_REID", "0.05")
-# Disable optional passes that might not be relevant here
-os.environ.setdefault("ENABLE_OCCLUSION_RESOLVER", "0")
 
 ANALYSIS_ROOT = Path(__file__).resolve().parent.parent
 OUT_DIR = ANALYSIS_ROOT / "reports" / "merge_veto"

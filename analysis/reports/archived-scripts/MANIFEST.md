@@ -24,6 +24,18 @@ See: `~/.claude/projects/-Users-mario-Personal-Projects-RallyCut/memory/MEMORY.m
 | `verify_camera_height_from_players.py` | Camera-height inference probe |
 | `visualize_ball_3d_rig.py` | Rig visualization for 3D ball workstream |
 
+## occlusion_resolver_session5/
+
+Status: NO-GO 2026-04-17 (Session 5 of within-team ReID workstream). The post-hoc per-convergence within-team swap resolver couldn't separate the one labelled positive from the no-swap negatives at the required precision (≥0.95 / ≥0.5 recall) given the available feature set. Module + tests deleted on 2026-05-08; these reproduce the labelling pipeline if anyone wants to revisit with a richer feature set or larger labelled corpus.
+
+See: `~/.claude/projects/-Users-mario-Personal-Projects-RallyCut/memory/MEMORY_ARCHIVE.md` "Within-Team ReID Sessions 4–9" section, plus the in-tree `analysis/reports/occlusion_resolver/session5_gate_report.md`.
+
+| Script | Purpose |
+|---|---|
+| `enumerate_convergence_events.py` | Walks GT rallies → same-team primary convergences → emits `events.json` |
+| `render_occlusion_labeller.py` | Generates the static HTML labelling UI from `events.json` |
+| `eval_occlusion_resolver.py` | Scores labelled events against the resolver, grid-searches thresholds, optional 43-rally A/B sweep |
+
 ## class_a_investigation/
 
 Status: NO-GO 2026-05-06. Class A panel video (5c756c41) topped out at PERMUTED 93.8 even with permuted/oracle assignment; cost-matrix prefers wrong assignment due to feature-space ceiling, not matcher logic. Re-opening requires a new appearance signal — not new diagnostic scripts.
