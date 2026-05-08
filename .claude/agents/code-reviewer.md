@@ -1,7 +1,7 @@
 ---
 name: code-reviewer
 description: Review code quality, run linters, check types, and audit for security issues. Use for PR reviews or pre-commit quality checks.
-model: sonnet
+model: haiku
 allowed-tools: Read, Grep, Glob, Bash
 memory: project
 skills: pre-commit

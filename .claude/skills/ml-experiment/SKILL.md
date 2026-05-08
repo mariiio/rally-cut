@@ -19,6 +19,8 @@ Follow these rules for ALL eval/training/tuning runs:
 
 Read `analysis/baselines.json` for current baselines, per-rally metrics, video-to-rally ID mapping, and tuned filter config. Compare all results against these.
 
+⚠️ Pre-2026-05 baselines may be contaminated. Check MEMORY.md → `knowledge_state_2026_04_26.md` before treating `analysis/baselines.json` measurements from that window as authoritative.
+
 ## Ball Tracking (WASB)
 
 WASB is the sole ball tracking model (threshold=0.3).

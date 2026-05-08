@@ -19,18 +19,11 @@ Follow these rules for ALL diagnostic/eval runs:
 
 Read `analysis/baselines.json` for current per-rally baselines, tuned filter config, known problem rallies, and video-to-rally ID mapping.
 
-## Ball Filter Pipeline (in order)
+⚠️ Pre-2026-05 baselines may be contaminated. Check MEMORY.md → `knowledge_state_2026_04_26.md` before treating `analysis/baselines.json` measurements from that window as authoritative.
 
-1. Motion energy filter (zeroes stationary FPs, threshold=0.02)
-2. Stationarity filter (consecutive frames within tight spread, off by default)
-3. Exit ghost detection (on raw data)
-4. Segment pruning (split at large jumps, discard short fragments, anchor recovery)
-5. Exit ghost removal (applied to post-pruned data)
-6. Oscillation pruning (cluster-based, disabled in tuned config)
-7. Outlier removal
-8. Blip removal (two-pass, compact cluster check)
-9. Re-prune (clean up post-outlier shrunk segments)
-10. Interpolation (fill small gaps)
+## Ball Filter Pipeline
+
+For the canonical 10-stage filter pipeline order (motion-energy → stationarity → exit-ghost → segment-pruning → … → interpolation), see the `tracking-debugger` agent definition or the source in `analysis/rallycut/tracking/ball_filter.py`.
 
 ## Ball Tracking Diagnostics
 
