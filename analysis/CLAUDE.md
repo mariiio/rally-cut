@@ -369,6 +369,26 @@ scripts/eval_cross_fixture.sh <vid> <vid>    # custom panel
 
 Without this, sequential runs are non-deterministic relative to a clean baseline — see `feedback_validation_clean_state.md` for the original incident (a session of failed iterations chasing a "regression" that turned out to be stale state).
 
+#### Panel-tracking refresh protocol (MANDATORY before any panel-baseline change)
+
+The panel eval (`scripts/eval_cross_fixture.sh`) is **matcher-only** — it reads stored tracking from DB and never re-runs `player_tracker`. So the PERMUTED numbers reflect whatever tracking is currently in DB; they do NOT measure fresh `player_tracker` output.
+
+After ANY change to `analysis/rallycut/tracking/player_tracker.py` or its dependencies (chimera-stitching, BoT-SORT config, ReID model, court calibration), the panel videos must be retracked with the new code BEFORE re-baselining the panel. Otherwise the eval will measure the new matcher on stale tracking and produce misleading numbers.
+
+```bash
+# Refresh all panel tracking with current player_tracker code (~50 min)
+uv run python scripts/retrack_panel_stale.py        # 28 originally-fragmented panel rallies
+uv run python scripts/retrack_panel_remainder.py    # 12 panel rallies on older code
+# Or for one video at a time:
+uv run python scripts/retrack_b5fb0594_only.py      # all 11 b5fb0594 rallies
+
+# Then reset matcher cache + re-measure
+uv run python scripts/reset_matcher_state.py --all-with-gt
+scripts/eval_cross_fixture.sh
+```
+
+The committed snapshot (`analysis/tests/fixtures/panel_player_tracks/{video}_summary.csv` + `analysis/reports/cross_fixture_baseline_2026_05_08.log`) is the regression-floor reference for the post-cleanup baseline (90.1 panel avg). Diff `primary_track_ids` per rally against the snapshot to detect drift; significant changes mean the panel needs a refresh + new baseline log + memory update. See `panel_baseline_regression_2026_05_07.md` for the original incident (a 21pp drop diagnosed as mixed-vintage tracking, not code regression).
+
 `scripts/measure_pid_accuracy.py` reports THREE metrics:
 1. **DIRECT** (matcher_pid == gt_pid as-is) — diagnostic only.
 2. **PERMUTED** (Hungarian-permuted matcher → gt) — load-bearing quality metric. User has no canonical convention (`feedback_no_canonical_pid_convention.md`).
