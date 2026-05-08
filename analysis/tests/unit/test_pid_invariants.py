@@ -8,6 +8,7 @@ from rallycut.tracking.pid_invariants import (
     check_i3_action_attribution,
     check_i4_contact_attribution,
     check_i5_track_to_player_total,
+    check_i6_team_assignments_total,
 )
 
 
@@ -163,5 +164,41 @@ class TestCheckI5TrackToPlayerTotal:
     def test_empty_mapping_with_empty_primary_passes(self) -> None:
         violations = check_i5_track_to_player_total(
             rally_id="r1", primary_track_ids=[], track_to_player={},
+        )
+        assert violations == []
+
+
+class TestCheckI6TeamAssignmentsTotal:
+    def test_clean_total_passes(self) -> None:
+        violations = check_i6_team_assignments_total(
+            rally_id="r1",
+            primary_track_ids=[3, 7, 12, 15],
+            team_assignments={"3": "A", "7": "A", "12": "B", "15": "B"},
+        )
+        assert violations == []
+
+    def test_missing_primary_fails(self) -> None:
+        violations = check_i6_team_assignments_total(
+            rally_id="r1",
+            primary_track_ids=[3, 7, 12, 15],
+            team_assignments={"3": "A", "7": "A", "12": "B"},
+        )
+        assert len(violations) == 1
+        assert violations[0].invariant == "I-6"
+        assert "15" in violations[0].detail
+
+    def test_invalid_team_label_fails(self) -> None:
+        violations = check_i6_team_assignments_total(
+            rally_id="r1",
+            primary_track_ids=[3, 7, 12, 15],
+            team_assignments={"3": "A", "7": "A", "12": "B", "15": "X"},
+        )
+        assert len(violations) == 1
+        assert violations[0].invariant == "I-6"
+        assert "X" in violations[0].detail
+
+    def test_empty_mapping_with_empty_primary_passes(self) -> None:
+        violations = check_i6_team_assignments_total(
+            rally_id="r1", primary_track_ids=[], team_assignments={},
         )
         assert violations == []

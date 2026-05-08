@@ -167,3 +167,37 @@ def check_i5_track_to_player_total(
                 )
             )
     return violations
+
+
+def check_i6_team_assignments_total(
+    *,
+    rally_id: str,
+    primary_track_ids: list[int],
+    team_assignments: dict[str, str] | None,
+) -> list[Violation]:
+    """I-6: team_assignments must label every primary_track_id with team A or B."""
+    if not primary_track_ids:
+        return []
+    mapping = team_assignments or {}
+    normalized = {int(k): str(v) for k, v in mapping.items()}
+    violations: list[Violation] = []
+    for tid in primary_track_ids:
+        if tid not in normalized:
+            violations.append(
+                Violation(
+                    invariant="I-6",
+                    rally_id=rally_id,
+                    detail=f"primary track {tid} missing from team_assignments (have keys {sorted(normalized.keys())})",
+                )
+            )
+            continue
+        team = normalized[tid]
+        if team not in ("A", "B"):
+            violations.append(
+                Violation(
+                    invariant="I-6",
+                    rally_id=rally_id,
+                    detail=f"team_assignments[{tid}]={team!r}, expected 'A' or 'B'",
+                )
+            )
+    return violations
