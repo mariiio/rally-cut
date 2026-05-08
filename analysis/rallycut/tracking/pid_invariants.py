@@ -263,8 +263,8 @@ def run_all(*, video_id: str) -> list[Violation]:
     rally_to_track_to_player: dict[str, dict[str, int]] = {}
     if isinstance(match_analysis.get("rallies"), list):
         for entry in match_analysis["rallies"]:
-            rid = entry.get("rally_id")
-            ttp = entry.get("track_to_player")
+            rid = entry.get("rallyId")
+            ttp = entry.get("trackToPlayer")
             if rid and isinstance(ttp, dict):
                 rally_to_track_to_player[rid] = ttp
 

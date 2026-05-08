@@ -276,8 +276,8 @@ class TestRunAll:
         match_analysis = {
             "rallies": [
                 {
-                    "rally_id": "r1",
-                    "track_to_player": {"3": 1, "7": 2, "12": 3, "15": 4},
+                    "rallyId": "r1",
+                    "trackToPlayer": {"3": 1, "7": 2, "12": 3, "15": 4},
                 }
             ]
         }
@@ -304,8 +304,8 @@ class TestRunAll:
         match_analysis = {
             "rallies": [
                 {
-                    "rally_id": "r1",
-                    "track_to_player": {"3": 1, "7": 2},  # I-5: 12 missing
+                    "rallyId": "r1",
+                    "trackToPlayer": {"3": 1, "7": 2},  # I-5: 12 missing
                 }
             ]
         }
