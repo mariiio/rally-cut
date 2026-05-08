@@ -4,6 +4,7 @@ import typer
 from rich.console import Console
 
 from rallycut.cli.commands.analyze import app as analyze_app
+from rallycut.cli.commands.audit_pid_invariants import audit_pid_invariants_cmd
 from rallycut.cli.commands.compare_tracking import compare_tracking as compare_tracking_command
 from rallycut.cli.commands.compute_match_stats import compute_match_stats_cmd
 from rallycut.cli.commands.cut import cut as cut_command
@@ -46,6 +47,7 @@ app.command(name="reattribute-actions")(reattribute_actions_cmd)
 app.command(name="reinterpolate-primary")(reinterpolate_primary_cmd)
 app.command(name="remap-track-ids")(remap_track_ids_cmd)
 app.command(name="repair-identities")(repair_identities_cmd)
+app.command(name="audit-pid-invariants")(audit_pid_invariants_cmd)
 app.add_typer(evaluate_tracking_app, name="evaluate-tracking")
 app.add_typer(label_app, name="label")
 app.add_typer(evaluate_app, name="evaluate")
