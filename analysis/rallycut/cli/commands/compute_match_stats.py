@@ -153,7 +153,14 @@ def _load_rally_actions_and_positions(
                 action_type = ActionType.UNKNOWN
 
             orig_track_id = a.get("playerTrackId", -1)
-            mapped_track_id = player_map.get(orig_track_id, orig_track_id)
+            if orig_track_id == -1:
+                mapped_track_id = -1
+            elif orig_track_id in player_map:
+                mapped_track_id = player_map[orig_track_id]
+            else:
+                # Non-primary track leaked into actions — silent skip per
+                # PID-invariant I-7. Surfaced by `rallycut audit-pid-invariants`.
+                continue
 
             actions.append(ClassifiedAction(
                 action_type=action_type,
