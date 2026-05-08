@@ -3,17 +3,17 @@
 Eval-time enforcement only: production never imports these checks. The audit
 CLI (`rallycut audit-pid-invariants`) and the panel eval script wire them in.
 
-Each invariant has a dedicated `check_iN_*` function returning a list of
-Violation records. `run_all` orchestrates DB loading and aggregation.
-
-Invariants (see docs/superpowers/specs/2026-05-08-pid-leverage-audit-sub1-design.md):
+Invariants:
   I-1: len(primary_track_ids) == 4 (or 0 if filter disabled)
   I-2: every trackId in positionsJson ∈ primary_track_ids
   I-3: every action's playerTrackId ∈ primary_track_ids ∪ {-1}
   I-4: every contact's playerTrackId ∈ primary_track_ids ∪ {-1}
-  I-5: trackToPlayer is total over primary_track_ids
-  I-6: team_assignments is total over primary_track_ids
-  I-7: after stats mapping, every action's player_track_id ∈ {1..4} ∪ {-1}
+  I-5: trackToPlayer is total over primary_track_ids (each maps to PID 1..4)
+  I-6: team_assignments is total over primary_track_ids (team in {A, B})
+  I-7: post-mapping, every action's mapped_track_id ∈ {1..4} ∪ {-1}
+       (closed by silent-skip in compute_match_stats — see commit history)
+
+Spec: docs/superpowers/specs/2026-05-08-pid-leverage-audit-sub1-design.md
 """
 
 from __future__ import annotations
