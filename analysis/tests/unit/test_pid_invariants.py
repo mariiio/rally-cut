@@ -9,6 +9,7 @@ from rallycut.tracking.pid_invariants import (
     check_i4_contact_attribution,
     check_i5_track_to_player_total,
     check_i6_team_assignments_total,
+    check_i7_stats_canonical_pid,
 )
 
 
@@ -201,4 +202,34 @@ class TestCheckI6TeamAssignmentsTotal:
         violations = check_i6_team_assignments_total(
             rally_id="r1", primary_track_ids=[], team_assignments={},
         )
+        assert violations == []
+
+
+class TestCheckI7StatsCanonicalPid:
+    def test_clean_passes(self) -> None:
+        violations = check_i7_stats_canonical_pid(
+            rally_id="r1", mapped_track_ids=[1, 2, 3, 4, -1, 1, 2],
+        )
+        assert violations == []
+
+    def test_unmapped_fails(self) -> None:
+        # An unmapped raw track_id (e.g., 12) leaks through
+        violations = check_i7_stats_canonical_pid(
+            rally_id="r1", mapped_track_ids=[1, 2, 12, 4],
+        )
+        assert len(violations) == 1
+        assert violations[0].invariant == "I-7"
+        assert "12" in violations[0].detail
+
+    def test_collision_shifted_fails(self) -> None:
+        # 101 = collision-shifted unmapped ID
+        violations = check_i7_stats_canonical_pid(
+            rally_id="r1", mapped_track_ids=[1, 101, 3, 4],
+        )
+        assert len(violations) == 1
+        assert violations[0].invariant == "I-7"
+        assert "101" in violations[0].detail
+
+    def test_empty_passes(self) -> None:
+        violations = check_i7_stats_canonical_pid(rally_id="r1", mapped_track_ids=[])
         assert violations == []

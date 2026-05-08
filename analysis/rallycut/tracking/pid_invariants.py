@@ -201,3 +201,24 @@ def check_i6_team_assignments_total(
                 )
             )
     return violations
+
+
+def check_i7_stats_canonical_pid(
+    *,
+    rally_id: str,
+    mapped_track_ids: list[int],
+) -> list[Violation]:
+    """I-7: post-mapping, every action's mapped_track_id must be in {1..4} ∪ {-1}."""
+    allowed = {1, 2, 3, 4, -1}
+    offenders: set[int] = set()
+    for tid in mapped_track_ids:
+        if int(tid) not in allowed:
+            offenders.add(int(tid))
+    return [
+        Violation(
+            invariant="I-7",
+            rally_id=rally_id,
+            detail=f"post-mapping mapped_track_id={tid} not in {{1..4}} ∪ {{-1}}",
+        )
+        for tid in sorted(offenders)
+    ]
