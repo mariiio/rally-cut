@@ -19,7 +19,7 @@ Invariants (see docs/superpowers/specs/2026-05-08-pid-leverage-audit-sub1-design
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -45,4 +45,31 @@ def check_i1_primary_set_size(
             rally_id=rally_id,
             detail=f"primary_track_ids has size {n}, expected 4 (or 0 if filter disabled)",
         )
+    ]
+
+
+def check_i2_positions_in_primary(
+    *,
+    rally_id: str,
+    primary_track_ids: list[int],
+    positions_json: list[dict[str, Any]] | None,
+) -> list[Violation]:
+    """I-2: every trackId in positions_json must be in primary_track_ids."""
+    if not positions_json or not primary_track_ids:
+        return []
+    primary = set(primary_track_ids)
+    offenders: set[int] = set()
+    for p in positions_json:
+        tid = p.get("trackId")
+        if tid is None:
+            continue
+        if int(tid) not in primary:
+            offenders.add(int(tid))
+    return [
+        Violation(
+            invariant="I-2",
+            rally_id=rally_id,
+            detail=f"positions_json contains non-primary trackId={tid} (primary={sorted(primary)})",
+        )
+        for tid in sorted(offenders)
     ]
