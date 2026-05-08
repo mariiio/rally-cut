@@ -19,7 +19,7 @@ Invariants (see docs/superpowers/specs/2026-05-08-pid-leverage-audit-sub1-design
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
 
 @dataclass(frozen=True)
