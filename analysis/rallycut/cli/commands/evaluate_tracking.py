@@ -490,6 +490,13 @@ def _compute_tracker_config_hash() -> str:
     # existing 54 MB retrack cache is reused.
     if learned_reid_enabled:
         config_parts.append(f"learned_reid:True:{HEAD_SHA}")
+    # Session 5 — occlusion resolver runs AFTER cache load and before
+    # global_identity, so it doesn't change what's cached (same positions,
+    # same stores). BUT its position mutations change what's fed to the
+    # downstream stages, so we mark it in the hash ONLY to segregate
+    # results for apples-to-apples baseline comparison.
+    if os.environ.get("ENABLE_OCCLUSION_RESOLVER", "0") == "1":
+        config_parts.append("occlusion_resolver:True")
     # Session 6 — learned-head merge veto in tracklet_link runs entirely
     # during post-processing (doesn't change what's CACHED — raw positions
     # + learned_store + color_store are all threshold-invariant). A
