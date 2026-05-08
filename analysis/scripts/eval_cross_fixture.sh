@@ -19,6 +19,9 @@
 # `feedback_validation_clean_state.md` for the original incident.
 set -euo pipefail
 
+# Track audit failures to exit with error after all videos have been evaluated
+AUDIT_FAILED=0
+
 # Default panel: the 4 originally GT-labeled fixtures. Swap or expand
 # by passing video IDs as positional args.
 DEFAULT_PANEL=(
@@ -70,6 +73,12 @@ for vid in "${VIDEO_IDS[@]}"; do
     # Step 3: Run remap-track-ids.
     uv run rallycut remap-track-ids "$vid" > /tmp/eval_remap.log 2>&1
 
+    # PID-invariant audit (Sub-1: catches regressions in primary-set, attribution, and stats mapping)
+    if ! uv run rallycut audit-pid-invariants "$vid" --quiet; then
+        echo "  [FAIL] PID-invariant audit failed for $vid"
+        AUDIT_FAILED=1
+    fi
+
     # Step 4: Measure + print summary. Tolerate per-video failures
     # (e.g., GT not yet loaded) so the panel run completes for the
     # videos that ARE measurable.
@@ -78,6 +87,14 @@ for vid in "${VIDEO_IDS[@]}"; do
         echo "  (measure_pid_accuracy.py failed for $vid — likely no GT loaded)"
     fi
 done
+
+if [ "$AUDIT_FAILED" = "1" ]; then
+    echo ""
+    echo "[!] One or more videos failed the PID-invariant audit. Run:"
+    echo "    uv run rallycut audit-pid-invariants <video_id>"
+    echo "    for full details on the offending video."
+    exit 1
+fi
 
 echo ""
 echo "==== Done. ===="
