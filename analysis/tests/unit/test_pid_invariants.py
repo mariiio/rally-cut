@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 from rallycut.tracking.pid_invariants import (
     check_i1_primary_set_size,
     check_i2_positions_in_primary,
@@ -10,6 +12,7 @@ from rallycut.tracking.pid_invariants import (
     check_i5_track_to_player_total,
     check_i6_team_assignments_total,
     check_i7_stats_canonical_pid,
+    run_all,
 )
 
 
@@ -233,3 +236,84 @@ class TestCheckI7StatsCanonicalPid:
     def test_empty_passes(self) -> None:
         violations = check_i7_stats_canonical_pid(rally_id="r1", mapped_track_ids=[])
         assert violations == []
+
+
+class TestRunAll:
+    def _mock_conn(
+        self,
+        *,
+        rallies: list[tuple],
+        match_analysis: dict | None,
+    ) -> MagicMock:
+        """Build a mock connection that yields the given rally rows + video row."""
+        cur = MagicMock()
+        # Two execute calls happen: one for rallies, one for video.
+        # fetchall returns rallies; fetchone returns (match_analysis_json,) tuple.
+        cur.fetchall.return_value = rallies
+        cur.fetchone.return_value = (match_analysis,)
+        cur.__enter__ = lambda self: self
+        cur.__exit__ = lambda self, *a: None
+
+        conn = MagicMock()
+        conn.cursor.return_value = cur
+        conn.__enter__ = lambda self: self
+        conn.__exit__ = lambda self, *a: None
+        return conn
+
+    def test_clean_video_returns_no_violations(self) -> None:
+        rallies = [
+            (
+                "r1",
+                [3, 7, 12, 15],  # primary_track_ids
+                [{"trackId": 3, "frameNumber": 0}],  # positions_json
+                {
+                    "actions": [{"playerTrackId": 3, "action": "spike", "frame": 5}],
+                    "teamAssignments": {"3": "A", "7": "A", "12": "B", "15": "B"},
+                },  # actions_json
+                [{"playerTrackId": 3, "frame": 5}],  # contacts_json
+            ),
+        ]
+        match_analysis = {
+            "rallies": [
+                {
+                    "rally_id": "r1",
+                    "track_to_player": {"3": 1, "7": 2, "12": 3, "15": 4},
+                }
+            ]
+        }
+        conn = self._mock_conn(rallies=rallies, match_analysis=match_analysis)
+
+        with patch("rallycut.tracking.pid_invariants.get_connection", return_value=conn):
+            violations = run_all(video_id="v1")
+
+        assert violations == []
+
+    def test_dirty_video_aggregates_violations(self) -> None:
+        rallies = [
+            (
+                "r1",
+                [3, 7, 12],  # I-1: only 3 primary tracks
+                [{"trackId": 99, "frameNumber": 0}],  # I-2: 99 not in primary
+                {
+                    "actions": [{"playerTrackId": 99, "action": "spike", "frame": 5}],  # I-3
+                    "teamAssignments": {"3": "A", "7": "A"},  # I-6: 12 missing
+                },
+                [{"playerTrackId": 88, "frame": 5}],  # I-4: 88 not in primary
+            ),
+        ]
+        match_analysis = {
+            "rallies": [
+                {
+                    "rally_id": "r1",
+                    "track_to_player": {"3": 1, "7": 2},  # I-5: 12 missing
+                }
+            ]
+        }
+        conn = self._mock_conn(rallies=rallies, match_analysis=match_analysis)
+
+        with patch("rallycut.tracking.pid_invariants.get_connection", return_value=conn):
+            violations = run_all(video_id="v1")
+
+        invariants_seen = {v.invariant for v in violations}
+        # Expect I-1, I-2, I-3, I-4, I-5, I-6 to all fire
+        assert {"I-1", "I-2", "I-3", "I-4", "I-5", "I-6"}.issubset(invariants_seen)
