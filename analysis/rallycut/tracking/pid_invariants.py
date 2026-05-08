@@ -19,7 +19,7 @@ Invariants (see docs/superpowers/specs/2026-05-08-pid-leverage-audit-sub1-design
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from rallycut.evaluation.tracking.db import get_connection
 
@@ -269,7 +269,11 @@ def run_all(*, video_id: str) -> list[Violation]:
                 rally_to_track_to_player[rid] = ttp
 
     for row in rally_rows:
-        rally_id, primary_raw, positions_json, actions_json, contacts_json = row
+        rally_id = cast(str, row[0])
+        primary_raw = row[1]
+        positions_json = row[2]
+        actions_json = row[3]
+        contacts_json = row[4]
         primary_track_ids: list[int] = []
         if isinstance(primary_raw, list):
             primary_track_ids = [int(t) for t in primary_raw]
