@@ -28,3 +28,21 @@ class Violation:
     rally_id: str
     detail: str
     severity: Literal["error", "warn"] = "error"
+
+
+def check_i1_primary_set_size(
+    *,
+    rally_id: str,
+    primary_track_ids: list[int],
+) -> list[Violation]:
+    """I-1: primary_track_ids must have exactly 4 entries (or 0 if filter disabled)."""
+    n = len(primary_track_ids)
+    if n in (0, 4):
+        return []
+    return [
+        Violation(
+            invariant="I-1",
+            rally_id=rally_id,
+            detail=f"primary_track_ids has size {n}, expected 4 (or 0 if filter disabled)",
+        )
+    ]
