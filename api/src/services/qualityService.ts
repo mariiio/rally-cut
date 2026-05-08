@@ -21,16 +21,10 @@ import { generateDownloadUrl } from '../lib/s3.js';
 import { NotFoundError } from '../middleware/errorHandler.js';
 import {
   mergeQualityReports,
-  pickTopIssues,
   type Issue,
   type QualityReport,
-  type Tier,
 } from './qualityReport.js';
 import { expireStaleBatchTrackingJobs, expireStaleDetectionJobs } from './staleJobRecovery.js';
-
-// Re-export pure types and functions so callers can import from this module.
-export { mergeQualityReports, pickTopIssues };
-export type { Issue, QualityReport, Tier };
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
