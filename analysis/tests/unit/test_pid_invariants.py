@@ -6,6 +6,7 @@ from rallycut.tracking.pid_invariants import (
     check_i1_primary_set_size,
     check_i2_positions_in_primary,
     check_i3_action_attribution,
+    check_i4_contact_attribution,
 )
 
 
@@ -99,3 +100,30 @@ class TestCheckI3ActionAttribution:
         assert all(v.invariant == "I-3" for v in violations)
         assert any("99" in v.detail for v in violations)
         assert any("101" in v.detail for v in violations)
+
+
+class TestCheckI4ContactAttribution:
+    def test_clean_passes(self) -> None:
+        contacts = [
+            {"playerTrackId": 7, "frame": 12},
+            {"playerTrackId": -1, "frame": 20},
+        ]
+        violations = check_i4_contact_attribution(
+            rally_id="r1", primary_track_ids=[3, 7, 12, 15], contacts_json=contacts,
+        )
+        assert violations == []
+
+    def test_none_passes(self) -> None:
+        violations = check_i4_contact_attribution(
+            rally_id="r1", primary_track_ids=[3, 7, 12, 15], contacts_json=None,
+        )
+        assert violations == []
+
+    def test_non_primary_contact_fails(self) -> None:
+        contacts = [{"playerTrackId": 88, "frame": 30}]
+        violations = check_i4_contact_attribution(
+            rally_id="r1", primary_track_ids=[3, 7, 12, 15], contacts_json=contacts,
+        )
+        assert len(violations) == 1
+        assert violations[0].invariant == "I-4"
+        assert "88" in violations[0].detail

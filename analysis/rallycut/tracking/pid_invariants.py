@@ -103,3 +103,32 @@ def check_i3_action_attribution(
                 )
             )
     return violations
+
+
+def check_i4_contact_attribution(
+    *,
+    rally_id: str,
+    primary_track_ids: list[int],
+    contacts_json: list[dict[str, Any]] | None,
+) -> list[Violation]:
+    """I-4: every contact's playerTrackId must be in primary ∪ {-1}."""
+    if not contacts_json or not primary_track_ids:
+        return []
+    allowed = set(primary_track_ids) | {-1}
+    violations: list[Violation] = []
+    for idx, c in enumerate(contacts_json):
+        tid = c.get("playerTrackId")
+        if tid is None:
+            continue
+        if int(tid) not in allowed:
+            violations.append(
+                Violation(
+                    invariant="I-4",
+                    rally_id=rally_id,
+                    detail=(
+                        f"contact[{idx}] playerTrackId={tid} not in primary "
+                        f"{sorted(primary_track_ids)} ∪ {{-1}} (frame={c.get('frame')})"
+                    ),
+                )
+            )
+    return violations
