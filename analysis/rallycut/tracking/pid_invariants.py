@@ -132,3 +132,38 @@ def check_i4_contact_attribution(
                 )
             )
     return violations
+
+
+def check_i5_track_to_player_total(
+    *,
+    rally_id: str,
+    primary_track_ids: list[int],
+    track_to_player: dict[str, int] | None,
+) -> list[Violation]:
+    """I-5: trackToPlayer must map every primary_track_id to a PID in {1..4}."""
+    if not primary_track_ids:
+        return []
+    mapping = track_to_player or {}
+    # Normalize keys: JSON serializes int keys as strings.
+    normalized = {int(k): int(v) for k, v in mapping.items()}
+    violations: list[Violation] = []
+    for tid in primary_track_ids:
+        if tid not in normalized:
+            violations.append(
+                Violation(
+                    invariant="I-5",
+                    rally_id=rally_id,
+                    detail=f"primary track {tid} missing from trackToPlayer (have keys {sorted(normalized.keys())})",
+                )
+            )
+            continue
+        pid = normalized[tid]
+        if pid not in (1, 2, 3, 4):
+            violations.append(
+                Violation(
+                    invariant="I-5",
+                    rally_id=rally_id,
+                    detail=f"trackToPlayer[{tid}]=pid={pid}, expected 1..4",
+                )
+            )
+    return violations

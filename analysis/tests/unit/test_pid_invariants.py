@@ -7,6 +7,7 @@ from rallycut.tracking.pid_invariants import (
     check_i2_positions_in_primary,
     check_i3_action_attribution,
     check_i4_contact_attribution,
+    check_i5_track_to_player_total,
 )
 
 
@@ -127,3 +128,40 @@ class TestCheckI4ContactAttribution:
         assert len(violations) == 1
         assert violations[0].invariant == "I-4"
         assert "88" in violations[0].detail
+
+
+class TestCheckI5TrackToPlayerTotal:
+    def test_clean_total_passes(self) -> None:
+        # Note: trackToPlayer keys are str in JSON
+        violations = check_i5_track_to_player_total(
+            rally_id="r1",
+            primary_track_ids=[3, 7, 12, 15],
+            track_to_player={"3": 1, "7": 2, "12": 3, "15": 4},
+        )
+        assert violations == []
+
+    def test_missing_primary_fails(self) -> None:
+        violations = check_i5_track_to_player_total(
+            rally_id="r1",
+            primary_track_ids=[3, 7, 12, 15],
+            track_to_player={"3": 1, "7": 2, "12": 3},  # 15 missing
+        )
+        assert len(violations) == 1
+        assert violations[0].invariant == "I-5"
+        assert "15" in violations[0].detail
+
+    def test_pid_out_of_range_fails(self) -> None:
+        violations = check_i5_track_to_player_total(
+            rally_id="r1",
+            primary_track_ids=[3, 7, 12, 15],
+            track_to_player={"3": 1, "7": 2, "12": 3, "15": 7},  # 7 not in {1..4}
+        )
+        assert len(violations) == 1
+        assert violations[0].invariant == "I-5"
+        assert "pid=7" in violations[0].detail or "7" in violations[0].detail
+
+    def test_empty_mapping_with_empty_primary_passes(self) -> None:
+        violations = check_i5_track_to_player_total(
+            rally_id="r1", primary_track_ids=[], track_to_player={},
+        )
+        assert violations == []
