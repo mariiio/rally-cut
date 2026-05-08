@@ -73,3 +73,33 @@ def check_i2_positions_in_primary(
         )
         for tid in sorted(offenders)
     ]
+
+
+def check_i3_action_attribution(
+    *,
+    rally_id: str,
+    primary_track_ids: list[int],
+    actions_json: list[dict[str, Any]] | None,
+) -> list[Violation]:
+    """I-3: every action's playerTrackId must be in primary ∪ {-1}."""
+    if not actions_json or not primary_track_ids:
+        return []
+    allowed = set(primary_track_ids) | {-1}
+    violations: list[Violation] = []
+    for idx, a in enumerate(actions_json):
+        tid = a.get("playerTrackId")
+        if tid is None:
+            continue
+        if int(tid) not in allowed:
+            violations.append(
+                Violation(
+                    invariant="I-3",
+                    rally_id=rally_id,
+                    detail=(
+                        f"action[{idx}] playerTrackId={tid} not in primary "
+                        f"{sorted(primary_track_ids)} ∪ {{-1}} "
+                        f"(action={a.get('action')!r}, frame={a.get('frame')})"
+                    ),
+                )
+            )
+    return violations

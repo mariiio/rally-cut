@@ -5,6 +5,7 @@ from __future__ import annotations
 from rallycut.tracking.pid_invariants import (
     check_i1_primary_set_size,
     check_i2_positions_in_primary,
+    check_i3_action_attribution,
 )
 
 
@@ -67,3 +68,34 @@ class TestCheckI2PositionsInPrimary:
         assert len(violations) == 1  # one violation per offending trackId
         assert violations[0].invariant == "I-2"
         assert "99" in violations[0].detail
+
+
+class TestCheckI3ActionAttribution:
+    def test_clean_passes(self) -> None:
+        actions = [
+            {"playerTrackId": 3, "action": "spike", "frame": 10},
+            {"playerTrackId": -1, "action": "serve", "frame": 0, "isSynthetic": True},
+        ]
+        violations = check_i3_action_attribution(
+            rally_id="r1", primary_track_ids=[3, 7, 12, 15], actions_json=actions,
+        )
+        assert violations == []
+
+    def test_none_passes(self) -> None:
+        violations = check_i3_action_attribution(
+            rally_id="r1", primary_track_ids=[3, 7, 12, 15], actions_json=None,
+        )
+        assert violations == []
+
+    def test_non_primary_attribution_fails(self) -> None:
+        actions = [
+            {"playerTrackId": 99, "action": "set", "frame": 5},
+            {"playerTrackId": 101, "action": "dig", "frame": 8},
+        ]
+        violations = check_i3_action_attribution(
+            rally_id="r1", primary_track_ids=[3, 7, 12, 15], actions_json=actions,
+        )
+        assert len(violations) == 2
+        assert all(v.invariant == "I-3" for v in violations)
+        assert any("99" in v.detail for v in violations)
+        assert any("101" in v.detail for v in violations)
