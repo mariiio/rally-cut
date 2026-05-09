@@ -135,7 +135,7 @@ const completingLock = new Set<string>();
 // assume the backend job is gone and surface an error instead of looping forever.
 const stalePollCounts = new Map<string, number>();
 const MAX_STALE_POLLS = 6; // 6 × 10s = 60s
-const STALE_TIMEOUT_MS = 30 * 60 * 1000; // 30 min absolute timeout
+const STALE_TIMEOUT_MS = 60 * 60 * 1000; // 60 min absolute timeout — accommodates local-CPU tracking on multi-rally videos when MODAL_TRACKING_URL is unset
 const POLL_INTERVAL_MS = 10_000;
 
 function clearPollTimer(videoId: string) {
