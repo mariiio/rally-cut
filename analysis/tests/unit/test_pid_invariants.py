@@ -317,3 +317,42 @@ class TestRunAll:
         invariants_seen = {v.invariant for v in violations}
         # Expect I-1, I-2, I-3, I-4, I-5, I-6 to all fire
         assert {"I-1", "I-2", "I-3", "I-4", "I-5", "I-6"}.issubset(invariants_seen)
+
+    def test_snake_case_match_analysis_keys_are_accepted(self) -> None:
+        """Some videos persist match_analysis with snake_case rally entry keys.
+
+        Regression for Sub-1.1 follow-up: 073cb11b's match_analysis stores
+        rally entries with `rally_id`/`track_to_player` instead of
+        `rallyId`/`trackToPlayer`. The orchestrator must accept both forms,
+        otherwise I-5 fires spuriously for every primary track on every rally.
+        """
+        rallies = [
+            (
+                "r1",
+                [3, 7, 12, 15],
+                [{"trackId": 3, "frameNumber": 0}],
+                {
+                    "actions": [{"playerTrackId": 3, "action": "spike", "frame": 5}],
+                    "teamAssignments": {"3": "A", "7": "A", "12": "B", "15": "B"},
+                },
+                [{"playerTrackId": 3, "frame": 5}],
+            ),
+        ]
+        match_analysis = {
+            "rallies": [
+                {
+                    # snake_case form, no camelCase counterpart
+                    "rally_id": "r1",
+                    "track_to_player": {"3": 1, "7": 2, "12": 3, "15": 4},
+                }
+            ]
+        }
+        conn = self._mock_conn(rallies=rallies, match_analysis=match_analysis)
+
+        with patch("rallycut.tracking.pid_invariants.get_connection", return_value=conn):
+            violations = run_all(video_id="v1")
+
+        # I-5 must NOT fire because the orchestrator accepts snake_case.
+        assert all(v.invariant != "I-5" for v in violations)
+        # And the video should be clean overall.
+        assert violations == []

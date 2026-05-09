@@ -263,8 +263,10 @@ def run_all(*, video_id: str) -> list[Violation]:
     rally_to_track_to_player: dict[str, dict[str, int]] = {}
     if isinstance(match_analysis.get("rallies"), list):
         for entry in match_analysis["rallies"]:
-            rid = entry.get("rallyId")
-            ttp = entry.get("trackToPlayer")
+            # Some videos persist rally entries with snake_case keys
+            # (rally_id / track_to_player) instead of camelCase. Accept either.
+            rid = entry.get("rallyId") or entry.get("rally_id")
+            ttp = entry.get("trackToPlayer") or entry.get("track_to_player")
             if rid and isinstance(ttp, dict):
                 rally_to_track_to_player[rid] = ttp
 
