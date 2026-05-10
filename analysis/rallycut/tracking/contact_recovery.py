@@ -12,8 +12,11 @@ Spec: docs/superpowers/specs/2026-05-10-coherence-driven-contact-recovery-design
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any
+from dataclasses import dataclass, field
+from typing import Any, cast
+
+from rallycut.tracking.ball_tracker import BallPosition
+from rallycut.tracking.player_tracker import PlayerPosition
 
 _POSSESSION_END_ACTIONS = frozenset({"attack", "serve"})
 
@@ -130,3 +133,122 @@ def derive_gaps_from_actions(
             contacts_in_possession = 1 if t != prev_team else contacts_in_possession + 1
 
     return gaps
+
+
+@dataclass
+class RallyInputs:
+    """Everything detect_contacts + get_sequence_probs need for one rally.
+
+    Loaded from the rally's persisted `player_tracks` row + parent rally row.
+    """
+
+    rally_id: str
+    video_id: str
+    rally_start_frame: int
+    fps: float
+    frame_count: int
+    court_split_y: float | None
+    ball_positions: list[BallPosition] = field(default_factory=list)
+    player_positions: list[PlayerPosition] = field(default_factory=list)
+    actions_json: dict[str, Any] = field(default_factory=dict)
+    # team_assignments stored two ways for downstream convenience:
+    #  - str-keyed "A"/"B" (matches actions_json + coherence_invariants)
+    #  - int-keyed 0/1 (matches detect_contacts + get_sequence_probs API)
+    team_assignments_str: dict[str, str] = field(default_factory=dict)
+    team_assignments_int: dict[int, int] = field(default_factory=dict)
+    primary_track_ids: list[int] = field(default_factory=list)
+
+
+def _ball_position_from_dict(d: dict[str, Any]) -> BallPosition:
+    return BallPosition(
+        frame_number=int(d.get("frameNumber", d.get("frame", 0))),
+        x=float(d.get("x", 0.0)),
+        y=float(d.get("y", 0.0)),
+        confidence=float(d.get("confidence", 0.0)),
+        motion_energy=float(d.get("motionEnergy", 0.0)),
+    )
+
+
+def _player_position_from_dict(d: dict[str, Any]) -> PlayerPosition:
+    return PlayerPosition(
+        frame_number=int(d.get("frameNumber", 0)),
+        track_id=int(d.get("trackId", -1)),
+        x=float(d.get("x", 0.0)),
+        y=float(d.get("y", 0.0)),
+        width=float(d.get("width", 0.0)),
+        height=float(d.get("height", 0.0)),
+        confidence=float(d.get("confidence", 0.0)),
+        keypoints=d.get("keypoints"),
+    )
+
+
+def load_rally_inputs(rally_id: str) -> RallyInputs:
+    """Load all per-rally inputs needed for recovery from the DB."""
+    from rallycut.evaluation.db import get_connection
+
+    query = """
+        SELECT
+            r.id, r.video_id, r.start_ms,
+            pt.fps, pt.frame_count, pt.court_split_y,
+            pt.ball_positions_json, pt.positions_json, pt.actions_json,
+            pt.primary_track_ids
+        FROM rallies r
+        JOIN player_tracks pt ON pt.rally_id = r.id
+        WHERE r.id = %s
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, [rally_id])
+            row = cur.fetchone()
+    if row is None:
+        raise ValueError(f"No player_tracks row for rally {rally_id}")
+
+    rid = cast(Any, row[0])
+    vid = cast(Any, row[1])
+    _start_ms = cast(Any, row[2])
+    fps = cast(Any, row[3])
+    frame_count = cast(Any, row[4])
+    court_split_y = cast(Any, row[5])
+    bp_json = cast(Any, row[6])
+    pp_json = cast(Any, row[7])
+    actions_json = cast(Any, row[8])
+    primary_raw = cast(Any, row[9])
+
+    ball_positions = [
+        _ball_position_from_dict(b) for b in (bp_json or [])
+        if isinstance(b, dict)
+    ]
+    player_positions = [
+        _player_position_from_dict(p) for p in (pp_json or [])
+        if isinstance(p, dict)
+    ]
+    aj = cast(dict[str, Any], actions_json or {})
+    ta_str_raw = aj.get("teamAssignments")
+    ta_str: dict[str, str] = (
+        cast(dict[str, str], ta_str_raw)
+        if isinstance(ta_str_raw, dict)
+        else {}
+    )
+    ta_int: dict[int, int] = {}
+    for k, v in ta_str.items():
+        if v == "A":
+            ta_int[int(k)] = 0
+        elif v == "B":
+            ta_int[int(k)] = 1
+
+    primary = [int(t) for t in (primary_raw or [])]
+
+    return RallyInputs(
+        rally_id=str(rid),
+        video_id=str(vid),
+        rally_start_frame=0,  # actions/ball/positions are rally-relative
+        fps=float(fps or 30.0),
+        frame_count=int(frame_count or 0),
+        court_split_y=(float(court_split_y) if court_split_y is not None else None),
+        ball_positions=ball_positions,
+        player_positions=player_positions,
+        actions_json=aj,
+        team_assignments_str=ta_str,
+        team_assignments_int=ta_int,
+        primary_track_ids=primary,
+    )

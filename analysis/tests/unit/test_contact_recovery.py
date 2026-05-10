@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
+
 from rallycut.tracking.contact_recovery import (
+    RallyInputs,
     derive_gaps_from_actions,
+    load_rally_inputs,
 )
 
 
@@ -87,3 +91,24 @@ def test_no_gap_when_clean() -> None:
         rally_start_frame=0,
     )
     assert gaps == [], gaps
+
+
+# fb7f9c23 in 073cb11b is the working example; integration data must exist.
+FB7F9C23 = "fb7f9c23-3544-48bd-910d-10a8f12fd594"
+
+
+@pytest.mark.integration
+def test_load_rally_inputs_for_fb7f9c23() -> None:
+    inputs = load_rally_inputs(FB7F9C23)
+    assert isinstance(inputs, RallyInputs)
+    assert inputs.rally_id == FB7F9C23
+    # Ball positions span the rally; expect ≥ 200 entries.
+    assert len(inputs.ball_positions) >= 200, len(inputs.ball_positions)
+    # Players tracked through the rally — expect ≥ 4 unique track IDs.
+    track_ids = {p.track_id for p in inputs.player_positions}
+    assert len(track_ids) >= 4, track_ids
+    # teamAssignments has the four primary tracks.
+    assert set(["1", "2", "4"]).issubset(set(inputs.team_assignments_str.keys()))
+    # Frame count and fps positive.
+    assert inputs.frame_count > 0
+    assert inputs.fps > 0
