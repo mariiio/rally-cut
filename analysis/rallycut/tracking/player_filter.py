@@ -715,10 +715,12 @@ def classify_teams(
     near_count = sum(1 for t in team_assignments.values() if t == 0)
     far_count = sum(1 for t in team_assignments.values() if t == 1)
 
-    # Fallback: if all players ended up on the same team (court_split_y
-    # is too extreme, e.g. above/below all players), split by median Y
-    # index.  This guarantees a valid 2-team split.
-    if len(team_assignments) >= 4 and (near_count == 0 or far_count == 0):
+    # Fallback: if the per-track Y classification did not produce an exact
+    # 2v2 partition (the structurally valid shape for 4-player beach
+    # volleyball), force 2v2 by sorting tracks by median-Y and splitting at
+    # the midpoint. Triggers on 1v3, 3v1, 0v4, and 4v0 inputs. Closes I-8
+    # at the producer (companion to Sub-1.1.E cleanup CLI for legacy data).
+    if len(team_assignments) == 4 and not (near_count == 2 and far_count == 2):
         sorted_tids = sorted(
             team_assignments.keys(),
             key=lambda t: np.median([p.y for p in track_positions[t][:window_frames]]),
