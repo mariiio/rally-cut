@@ -20,9 +20,11 @@ Spec: docs/superpowers/specs/2026-05-10-coherence-invariants-v1-design.md
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
+from rallycut.evaluation.tracking.db import get_connection
 from rallycut.tracking.pid_invariants import Violation
+from rallycut.tracking.pid_invariants import run_all as pid_run_all
 
 
 def _team_for_action(
@@ -187,3 +189,74 @@ def check_c3_first_action_is_serve(
             ),
         )
     ]
+
+
+# PID invariants whose failures should exclude a rally from coherence checks.
+# These directly affect action attribution / team labeling, so coherence
+# violations on these rallies would be downstream noise.
+_UPSTREAM_BLOCKER_INVARIANTS = frozenset({"I-1", "I-3", "I-6"})
+
+
+def run_all(*, video_id: str) -> list[Violation]:
+    """Run all 3 coherence invariants against a video's persisted state.
+
+    Skips rallies that fail upstream PID invariants (I-1 / I-3 / I-6) to
+    avoid flagging downstream effects of structural problems.
+    """
+    upstream = pid_run_all(video_id=video_id)
+    excluded_rallies: set[str] = {
+        v.rally_id for v in upstream
+        if v.invariant in _UPSTREAM_BLOCKER_INVARIANTS
+    }
+
+    rally_query = """
+        SELECT
+            r.id AS rally_id,
+            pt.actions_json
+        FROM rallies r
+        JOIN player_tracks pt ON pt.rally_id = r.id
+        WHERE r.video_id = %s
+          AND (r.status = 'CONFIRMED' OR r.status IS NULL)
+        ORDER BY r.start_ms
+    """
+
+    violations: list[Violation] = []
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(rally_query, [video_id])
+            rally_rows = cur.fetchall()
+
+    for row in rally_rows:
+        rally_id = cast(str, row[0])
+        if rally_id in excluded_rallies:
+            continue
+        actions_json = row[1]
+        if not isinstance(actions_json, dict):
+            continue
+        actions = actions_json.get("actions")
+        team_assignments = actions_json.get("teamAssignments")
+        if not isinstance(actions, list):
+            continue
+        if not isinstance(team_assignments, dict):
+            team_assignments = {}
+
+        violations.extend(
+            check_c1_three_contact_rule(
+                rally_id=rally_id, actions=actions,
+                team_assignments=team_assignments,
+            )
+        )
+        violations.extend(
+            check_c2_alternating_possessions(
+                rally_id=rally_id, actions=actions,
+                team_assignments=team_assignments,
+            )
+        )
+        violations.extend(
+            check_c3_first_action_is_serve(
+                rally_id=rally_id, actions=actions,
+            )
+        )
+
+    return violations

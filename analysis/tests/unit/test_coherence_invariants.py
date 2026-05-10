@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock, patch
+
 from rallycut.tracking.coherence_invariants import (
     check_c1_three_contact_rule,
     check_c2_alternating_possessions,
     check_c3_first_action_is_serve,
+    run_all,
 )
+from rallycut.tracking.pid_invariants import Violation as PidViolation
 
 
 def _action(frame: int, action: str, player_track_id: int) -> dict:
@@ -170,3 +174,95 @@ class TestCheckC3FirstActionIsServe:
     def test_zero_actions_skips(self) -> None:
         result = check_c3_first_action_is_serve(rally_id="r1", actions=[])
         assert result == []
+
+
+class TestRunAll:
+    def _mock_db_conn(
+        self,
+        *,
+        rally_rows: list[tuple],
+    ) -> MagicMock:
+        cur = MagicMock()
+        cur.fetchall.return_value = rally_rows
+        cur.__enter__ = lambda self: self
+        cur.__exit__ = lambda self, *a: None
+        conn = MagicMock()
+        conn.cursor.return_value = cur
+        conn.__enter__ = lambda self: self
+        conn.__exit__ = lambda self, *a: None
+        return conn
+
+    def test_clean_video_returns_no_violations(self) -> None:
+        # One rally with a clean alternating sequence.
+        actions_json = {
+            "actions": [
+                _action(100, "serve", 3),
+                _action(140, "receive", 1),
+                _action(170, "set", 2),
+                _action(200, "attack", 1),
+                _action(230, "dig", 4),
+            ],
+            "teamAssignments": {"1": "B", "2": "B", "3": "A", "4": "A"},
+        }
+        rally_rows = [("r1", actions_json)]
+        conn = self._mock_db_conn(rally_rows=rally_rows)
+        with patch(
+            "rallycut.tracking.coherence_invariants.get_connection", return_value=conn
+        ), patch(
+            "rallycut.tracking.coherence_invariants.pid_run_all", return_value=[]
+        ):
+            violations = run_all(video_id="v1")
+        assert violations == []
+
+    def test_dirty_video_aggregates_violations(self) -> None:
+        # First action is `attack` (C-3 fires), and 4 consecutive same-team contacts (C-1 fires).
+        actions_json = {
+            "actions": [
+                _action(100, "attack", 1),  # C-3: should be serve
+                _action(140, "set", 2),     # B (1)
+                _action(170, "set", 1),     # B (2)
+                _action(200, "set", 2),     # B (3)
+                _action(230, "attack", 1),  # B (4 — C-1 fires)
+            ],
+            "teamAssignments": {"1": "B", "2": "B"},
+        }
+        rally_rows = [("r1", actions_json)]
+        conn = self._mock_db_conn(rally_rows=rally_rows)
+        with patch(
+            "rallycut.tracking.coherence_invariants.get_connection", return_value=conn
+        ), patch(
+            "rallycut.tracking.coherence_invariants.pid_run_all", return_value=[]
+        ):
+            violations = run_all(video_id="v1")
+        invariants_seen = {v.invariant for v in violations}
+        assert "C-1" in invariants_seen
+        assert "C-3" in invariants_seen
+
+    def test_skips_rally_with_upstream_i6_violation(self) -> None:
+        # Rally has illegal sequence (would fire C-1) BUT also has I-6 violation
+        # — orchestrator should skip it entirely.
+        actions_json = {
+            "actions": [
+                _action(100, "serve", 1),
+                _action(140, "set", 1),    # 4 consecutive A
+                _action(170, "set", 1),
+                _action(200, "set", 1),
+                _action(230, "attack", 1),
+            ],
+            "teamAssignments": {"1": "A"},
+        }
+        rally_rows = [("r1", actions_json)]
+        conn = self._mock_db_conn(rally_rows=rally_rows)
+        upstream = [
+            PidViolation(
+                invariant="I-6", rally_id="r1",
+                detail="primary track 2 missing from team_assignments",
+            )
+        ]
+        with patch(
+            "rallycut.tracking.coherence_invariants.get_connection", return_value=conn
+        ), patch(
+            "rallycut.tracking.coherence_invariants.pid_run_all", return_value=upstream
+        ):
+            violations = run_all(video_id="v1")
+        assert violations == []  # Skipped due to upstream I-6
