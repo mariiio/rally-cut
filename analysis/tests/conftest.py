@@ -16,6 +16,9 @@ def pytest_addoption(parser):
 def pytest_configure(config):
     """Configure pytest markers."""
     config.addinivalue_line("markers", "slow: marks tests as slow (run with --run-slow)")
+    config.addinivalue_line(
+        "markers", "integration: marks tests that require live DB or external services"
+    )
 
 
 def pytest_collection_modifyitems(config, items):
