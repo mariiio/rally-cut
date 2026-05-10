@@ -1447,7 +1447,14 @@ class PlayerTracker:
                 Caller must pass a disposable copy.
             color_store: Per-frame color histograms (deep-copied internally).
             appearance_store: Per-frame appearance descriptors (deep-copied internally).
-            ball_positions: Ball tracking data for court filtering.
+            ball_positions: Ball tracking data for court filtering. Caller
+                passes rally-relative frame numbers (frame 0 = first frame
+                of the rally segment); this matches the WASB ball_tracker
+                output convention. The function deep-copies internally to
+                avoid mutating the caller's list — see the deep-copy in
+                the function body and the regression test
+                `TestApplyPostProcessingPurity` in
+                `tests/unit/test_player_tracker.py`.
             video_fps: Video frame rate.
             video_width: Frame width in pixels.
             video_height: Frame height in pixels.
@@ -1487,6 +1494,27 @@ class PlayerTracker:
             appearance_store = copy.deepcopy(appearance_store)
         if learned_store is not None:
             learned_store = copy.deepcopy(learned_store)
+
+        # ball_positions arrive in rally-relative frame numbers (WASB
+        # convention). During this function's body, `positions` and
+        # `raw_positions` carry ABSOLUTE frame numbers (until the
+        # end-of-function normalization), and several filter helpers (e.g.
+        # `compute_ball_proximity_scores`) cross-reference frame numbers
+        # between balls and players. Make a local shifted copy so the
+        # internal frame conventions match — never mutate the caller's
+        # list. See `TestApplyPostProcessingPurity` for the contract.
+        if ball_positions is not None:
+            from rallycut.tracking.ball_tracker import BallPosition as _BallPosition
+            ball_positions = [
+                _BallPosition(
+                    frame_number=bp.frame_number + start_frame,
+                    x=bp.x,
+                    y=bp.y,
+                    confidence=bp.confidence,
+                    motion_energy=bp.motion_energy,
+                )
+                for bp in ball_positions
+            ]
 
         court_split_y: float | None = None
         primary_track_ids: list[int] = []
@@ -1878,16 +1906,18 @@ class PlayerTracker:
                 interpolated_position_count=num_interpolated,
             )
 
-        # Normalize frame numbers to rally-relative (0-based)
+        # Normalize frame numbers to rally-relative (0-based).
+        # `ball_positions` is intentionally absent from this block — the
+        # local copy was already shifted to absolute at function entry, is
+        # not part of the returned PlayerTrackingResult, and is throwaway.
+        # Mutating it here would have no observable effect now that the
+        # caller's list is decoupled.
         if start_frame > 0:
             for p in positions:
                 p.frame_number -= start_frame
             if raw_positions:
                 for p in raw_positions:
                     p.frame_number -= start_frame
-            if ball_positions:
-                for bp in ball_positions:
-                    bp.frame_number -= start_frame
             if color_store is not None and color_store.has_data():
                 color_store.shift_frames(-start_frame)
             if appearance_store is not None and appearance_store.has_data():

@@ -6,9 +6,51 @@ from rallycut.court.calibration import CourtCalibrator
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.player_tracker import (
     DEFAULT_COURT_ROI,
+    PlayerTracker,
     compute_court_roi_from_ball,
     compute_court_roi_from_calibration,
 )
+
+
+class TestApplyPostProcessingPurity:
+    """apply_post_processing must NOT mutate caller-owned ball_positions.
+
+    Pre-2026-05-10 the function subtracted start_frame from each
+    ball_position.frame_number on its way out, assuming ball_positions
+    were in absolute video frames. WASB ball_tracker actually returns
+    rally-relative frames, so the subtraction produced negative frames
+    on every retrack_single_rally-style call (start_frame > 0). 40 fleet
+    rallies were silently corrupted before the bug surfaced. This test
+    pins the contract: the caller's list is read-only.
+    """
+
+    def test_ball_positions_not_mutated_when_start_frame_nonzero(self) -> None:
+        # Caller passes rally-relative frames (matches WASB output convention).
+        ball_positions = [
+            BallPosition(frame_number=i, x=0.5, y=0.5, confidence=1.0)
+            for i in range(10)
+        ]
+        before = [(bp.frame_number, bp.x, bp.y) for bp in ball_positions]
+
+        PlayerTracker.apply_post_processing(
+            positions=[],
+            raw_positions=[],
+            color_store=None,
+            appearance_store=None,
+            ball_positions=ball_positions,
+            video_fps=30.0,
+            video_width=640,
+            video_height=480,
+            frame_count=100,
+            start_frame=100,  # > 0 — bug-trigger condition
+            filter_enabled=False,
+        )
+
+        after = [(bp.frame_number, bp.x, bp.y) for bp in ball_positions]
+        assert after == before, (
+            f"apply_post_processing mutated caller's ball_positions list.\n"
+            f"  before: {before}\n  after:  {after}"
+        )
 
 
 class TestComputeCourtRoiFromBall:
