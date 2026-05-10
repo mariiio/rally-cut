@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
+from rallycut.tracking.contact_detector import Contact
 from rallycut.tracking.contact_recovery import (
+    GATE_GBM_MIN,
+    GATE_SEQ_TAU,
+    Gap,
     RallyInputs,
     derive_gaps_from_actions,
+    filter_candidates_in_gap,
     load_rally_inputs,
+    pick_best_candidate,
 )
 
 
@@ -112,3 +119,127 @@ def test_load_rally_inputs_for_fb7f9c23() -> None:
     # Frame count and fps positive.
     assert inputs.frame_count > 0
     assert inputs.fps > 0
+
+
+def _candidate(
+    *,
+    frame: int,
+    conf: float,
+    track_id: int,
+    court_side: str = "near",
+) -> Contact:
+    """Helper: create a Contact for testing."""
+    return Contact(
+        frame=frame,
+        ball_x=0.5,
+        ball_y=0.4,
+        velocity=0.05,
+        direction_change_deg=30.0,
+        player_track_id=track_id,
+        player_distance=0.05,
+        player_candidates=[(track_id, 0.05)],
+        court_side=court_side,
+        is_at_net=False,
+        is_validated=True,
+        confidence=conf,
+        arc_fit_residual=0.01,
+    )
+
+
+def test_filter_drops_outside_gap() -> None:
+    """filter_candidates_in_gap drops contacts outside the gap window."""
+    contacts = [
+        _candidate(frame=200, conf=0.30, track_id=1),
+        _candidate(frame=290, conf=0.30, track_id=3),  # in gap
+        _candidate(frame=350, conf=0.30, track_id=1),
+    ]
+    seq_probs = np.zeros((7, 500))
+    seq_probs[2, 290] = 0.95  # non-bg peak in gap
+    gap = Gap(rule="C-2", lo=276, hi=306, expected_team="A", expected_action=None)
+    out = filter_candidates_in_gap(
+        contacts=contacts,
+        gap=gap,
+        sequence_probs=seq_probs,
+        team_assignments_str={"1": "B", "3": "A"},
+        ball_positions={290: 1.0, 200: 1.0, 350: 1.0},
+        existing_action_frames=[],
+    )
+    assert [c.frame for c in out] == [290], out
+
+
+def test_filter_drops_wrong_team() -> None:
+    """filter_candidates_in_gap drops contacts from wrong team."""
+    contacts = [_candidate(frame=290, conf=0.30, track_id=1)]
+    seq_probs = np.zeros((7, 500))
+    seq_probs[2, 290] = 0.95
+    gap = Gap(rule="C-2", lo=276, hi=306, expected_team="A", expected_action=None)
+    out = filter_candidates_in_gap(
+        contacts=contacts,
+        gap=gap,
+        sequence_probs=seq_probs,
+        team_assignments_str={"1": "B"},  # track 1 is B; expected A
+        ball_positions={290: 1.0},
+        existing_action_frames=[],
+    )
+    assert out == []
+
+
+def test_filter_drops_low_seq() -> None:
+    """filter_candidates_in_gap drops contacts below seq tau."""
+    contacts = [_candidate(frame=290, conf=0.30, track_id=3)]
+    seq_probs = np.zeros((7, 500))
+    seq_probs[2, 290] = GATE_SEQ_TAU - 0.05  # below tau
+    gap = Gap(rule="C-2", lo=276, hi=306, expected_team="A", expected_action=None)
+    out = filter_candidates_in_gap(
+        contacts=contacts,
+        gap=gap,
+        sequence_probs=seq_probs,
+        team_assignments_str={"3": "A"},
+        ball_positions={290: 1.0},
+        existing_action_frames=[],
+    )
+    assert out == []
+
+
+def test_filter_drops_low_gbm() -> None:
+    """filter_candidates_in_gap drops contacts below GBM minimum."""
+    contacts = [_candidate(frame=290, conf=GATE_GBM_MIN - 0.01, track_id=3)]
+    seq_probs = np.zeros((7, 500))
+    seq_probs[2, 290] = 0.95
+    gap = Gap(rule="C-2", lo=276, hi=306, expected_team="A", expected_action=None)
+    out = filter_candidates_in_gap(
+        contacts=contacts,
+        gap=gap,
+        sequence_probs=seq_probs,
+        team_assignments_str={"3": "A"},
+        ball_positions={290: 1.0},
+        existing_action_frames=[],
+    )
+    assert out == []
+
+
+def test_filter_drops_duplicate_of_existing_action() -> None:
+    """filter_candidates_in_gap drops candidates near existing actions."""
+    contacts = [_candidate(frame=290, conf=0.30, track_id=3)]
+    seq_probs = np.zeros((7, 500))
+    seq_probs[2, 290] = 0.95
+    gap = Gap(rule="C-2", lo=276, hi=306, expected_team="A", expected_action=None)
+    out = filter_candidates_in_gap(
+        contacts=contacts,
+        gap=gap,
+        sequence_probs=seq_probs,
+        team_assignments_str={"3": "A"},
+        ball_positions={290: 1.0},
+        existing_action_frames=[295],  # within ±15
+    )
+    assert out == []
+
+
+def test_pick_best_prefers_highest_gbm() -> None:
+    """pick_best_candidate returns the contact with highest GBM confidence."""
+    contacts = [
+        _candidate(frame=285, conf=0.30, track_id=3),
+        _candidate(frame=295, conf=0.42, track_id=3),
+    ]
+    best = pick_best_candidate(contacts)
+    assert best is not None and best.frame == 295

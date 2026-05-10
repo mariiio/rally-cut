@@ -15,6 +15,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+import numpy as np
+
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.player_tracker import PlayerPosition
 
@@ -252,3 +254,102 @@ def load_rally_inputs(rally_id: str) -> RallyInputs:
         team_assignments_int=ta_int,
         primary_track_ids=primary,
     )
+
+
+# Gate constants — match the validated 2026-04-07 two-signal rescue thresholds
+# (see fn_sequence_signal_2026_04.md). Hardcoded by intent: this is a
+# production parameter, not a runtime knob.
+GATE_GBM_MIN: float = 0.10
+GATE_SEQ_TAU: float = 0.80
+GATE_BALL_CONF_MIN: float = 0.5
+GATE_DUPLICATE_FRAME_WINDOW: int = 15
+
+
+def _seq_peak_nonbg(seq_probs: np.ndarray, frame: int, window: int = 5) -> float:
+    """Find max non-background probability in a window around frame.
+
+    Args:
+        seq_probs: Shape (num_actions, num_frames). seq_probs[0, :] = background.
+        frame: Frame number to check.
+        window: Half-width of the window in frames.
+
+    Returns:
+        Maximum non-background probability, or 0.0 if out of bounds.
+    """
+    if seq_probs.ndim != 2 or seq_probs.shape[0] < 2:
+        return 0.0
+    t = seq_probs.shape[1]
+    lo = max(0, frame - window)
+    hi = min(t - 1, frame + window)
+    if hi < lo:
+        return 0.0
+    return float(seq_probs[1:, lo : hi + 1].max())
+
+
+def filter_candidates_in_gap(
+    *,
+    contacts: list[Any],
+    gap: Gap,
+    sequence_probs: np.ndarray,
+    team_assignments_str: dict[str, str],
+    ball_positions: dict[int, float],
+    existing_action_frames: list[int],
+) -> list[Any]:
+    """Apply the recovery gates to candidates produced by detect_contacts.
+
+    Order of gates matches the spec: window, duplicate, team, ball-conf, gbm,
+    seq. Each gate is a hard reject. Returns the surviving candidates.
+
+    Args:
+        contacts: List of Contact objects to filter.
+        gap: The Gap window this recovery is attempting to fill.
+        sequence_probs: MS-TCN++ output, shape (num_actions, num_frames).
+        team_assignments_str: Map of track_id (as string) to team ("A" or "B").
+        ball_positions: Map of frame to ball confidence (0-1).
+        existing_action_frames: List of frames with already-detected actions.
+
+    Returns:
+        Filtered list of Contact objects that pass all gates.
+    """
+    out: list[Any] = []
+    for c in contacts:
+        # Gate 1: window
+        if not (gap.lo <= c.frame <= gap.hi):
+            continue
+        # Gate 2: duplicate
+        if any(
+            abs(c.frame - f) <= GATE_DUPLICATE_FRAME_WINDOW
+            for f in existing_action_frames
+        ):
+            continue
+        # Gate 3: team
+        if gap.expected_team is not None:
+            tlabel = team_assignments_str.get(str(c.player_track_id))
+            if tlabel != gap.expected_team:
+                continue
+        # Gate 4: ball confidence
+        bconf = ball_positions.get(c.frame, 0.0)
+        if bconf < GATE_BALL_CONF_MIN:
+            continue
+        # Gate 5: GBM confidence
+        if c.confidence < GATE_GBM_MIN:
+            continue
+        # Gate 6: MS-TCN++ sequence peak
+        if _seq_peak_nonbg(sequence_probs, c.frame) < GATE_SEQ_TAU:
+            continue
+        out.append(c)
+    return out
+
+
+def pick_best_candidate(candidates: list[Any]) -> Any | None:
+    """Highest GBM confidence wins; ties broken by frame proximity to gap center.
+
+    Args:
+        candidates: List of Contact objects to pick from.
+
+    Returns:
+        The Contact with highest confidence, or None if empty.
+    """
+    if not candidates:
+        return None
+    return max(candidates, key=lambda c: (c.confidence, -c.frame))
