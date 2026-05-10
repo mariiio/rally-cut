@@ -1,0 +1,36 @@
+video  rally       #GT  #Pred  best_off  base_match  aligned_match  base_FN  align_FN  base_FP  align_FP class         
+----------------------------------------------------------------------------------------------------------------------------------
+ruru   be3134ba      8      7        +0           7              7        1         1        0         0 ALIGNED       
+ruru   57a588b2      4      5        +0           4              4        0         0        1         1 ALIGNED       
+ruru   cc2b967b      5      5        +0           5              5        0         0        0         0 ALIGNED       
+ruru   3e61838c     11     11        +0          10             10        1         1        1         1 ALIGNED       
+ruru   3655eb69      7      7      +410           1              7        6         0        6         0 MISMATCH(+410)
+ruru   9d5f5152     14     10        +0          10             10        4         4        0         0 ALIGNED       
+tata   8b0b9e13     18     18        +0          18             18        0         0        0         0 ALIGNED       
+tata   09553ef1      4      3        +0           3              3        1         1        0         0 ALIGNED       
+tata   ad7cccbf      8      8        +0           8              8        0         0        0         0 ALIGNED       
+tata   97c42190      5      5        +0           5              5        0         0        0         0 ALIGNED       
+tata   e50f127e      4      5        +0           4              4        0         0        1         1 ALIGNED       
+tata   30ffb876      1      0        +0           0              0        1         1        0         0 ALIGNED       
+tata   8c802c26      9      9        +0           9              9        0         0        0         0 ALIGNED       
+tata   724ead56      8      7        +0           7              7        1         1        0         0 ALIGNED       
+tata   03144243      7      7        +0           7              7        0         0        0         0 ALIGNED       
+tata   4bfafd6d      3      3        +0           3              3        0         0        0         0 ALIGNED       
+tata   db841666      5      4        +0           4              4        1         1        0         0 ALIGNED       
+vovo   38d9e796      5      6        +0           5              5        0         0        1         1 ALIGNED       
+vovo   55c2c6e5      7      7        +0           6              6        1         1        1         1 ALIGNED       
+vovo   e4a5349e     14     13        +0          13             13        1         1        0         0 ALIGNED       
+vovo   c039ef17      1      1        +0           1              1        0         0        0         0 ALIGNED       
+wuwu   37e14e1e      4      4        +0           4              4        0         0        0         0 ALIGNED       
+wuwu   fb7f9c23      4      3        +0           2              2        2         2        1         1 ALIGNED       
+wuwu   99a01ce4     11     11        +0          10             10        1         1        1         1 ALIGNED       
+wuwu   5e8af221      4      4        +0           3              3        1         1        1         1 ALIGNED       
+wawa   7094136a      5      4        +1           2              3        3         2        2         1 ALIGNED       
+wawa   8c49e480      8      5        +0           3              3        5         5        2         2 ALIGNED       
+wawa   fb6e37bf      5      3        +0           3              3        2         2        0         0 ALIGNED       
+wawa   7f0f540a     10     10        +0           9              9        1         1        1         1 ALIGNED       
+wawa   06c13117      5      3        +0           3              3        2         2        0         0 ALIGNED       
+----------------------------------------------------------------------------------------------------------------------------------
+BASE  : GT=204  Pred=188  matched=169  FN=35  FP=19  F1=0.862
+ALIGN : GT=204  Pred=188  matched=176  FN=28  FP=12  F1=0.898
+DELTA : aligned_rallies=29  mismatched_rallies=1  FN: 35 -> 28 (-7)  FP: 19 -> 12 (-7)

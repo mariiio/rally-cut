@@ -1,0 +1,180 @@
+video  rally    FN_frame GT_action  bucket               detail                                                      
+------------------------------------------------------------------------------------------------------------------------
+ruru   be3134ba      575 attack     out_of_gap           no gap covers frame 575                                     
+ruru   3e61838c     1147 dig        out_of_gap           no gap covers frame 1147                                    
+ruru   3655eb69      563 serve      out_of_gap           no gap covers frame 563                                     
+ruru   3655eb69      733 set        out_of_gap           no gap covers frame 733                                     
+ruru   3655eb69      833 attack     out_of_gap           no gap covers frame 833                                     
+ruru   3655eb69      874 dig        out_of_gap           no gap covers frame 874                                     
+ruru   3655eb69      946 set        out_of_gap           no gap covers frame 946                                     
+ruru   3655eb69     1040 attack     out_of_gap           no gap covers frame 1040                                    
+ruru   9d5f5152      240 serve      no_candidate         no contact near frame 240                                   
+ruru   9d5f5152      554 dig        out_of_gap           no gap covers frame 554                                     
+ruru   9d5f5152      772 attack     out_of_gap           no gap covers frame 772                                     
+ruru   9d5f5152     1054 set        out_of_gap           no gap covers frame 1054                                    
+tata   09553ef1       93 serve      no_candidate         no contact near frame 93                                    
+tata   30ffb876       54 serve      out_of_gap           no gap covers frame 54                                      
+tata   724ead56      246 dig        out_of_gap           no gap covers frame 246                                     
+tata   db841666      223 block      out_of_gap           no gap covers frame 223                                     
+vovo   55c2c6e5       23 serve      out_of_gap           no gap covers frame 23                                      
+vovo   e4a5349e      834 dig        out_of_gap           no gap covers frame 834                                     
+wuwu   fb7f9c23      154 serve      out_of_gap           no gap covers frame 154                                     
+wuwu   fb7f9c23      230 receive    out_of_gap           no gap covers frame 230                                     
+wuwu   99a01ce4      371 dig        out_of_gap           no gap covers frame 371                                     
+wuwu   5e8af221      157 serve      out_of_gap           no gap covers frame 157                                     
+wawa   7094136a       49 serve      out_of_gap           no gap covers frame 49                                      
+wawa   7094136a      209 set        out_of_gap           no gap covers frame 209                                     
+wawa   7094136a      367 dig        out_of_gap           no gap covers frame 367                                     
+wawa   8c49e480      101 serve      out_of_gap           no gap covers frame 101                                     
+wawa   8c49e480      186 receive    out_of_gap           no gap covers frame 186                                     
+wawa   8c49e480      251 set        out_of_gap           no gap covers frame 251                                     
+wawa   8c49e480      338 attack     out_of_gap           no gap covers frame 338                                     
+wawa   8c49e480      434 dig        out_of_gap           no gap covers frame 434                                     
+wawa   fb6e37bf      210 serve      out_of_gap           no gap covers frame 210                                     
+wawa   fb6e37bf      277 receive    out_of_gap           no gap covers frame 277                                     
+wawa   7f0f540a      197 serve      out_of_gap           no gap covers frame 197                                     
+wawa   06c13117      365 set        out_of_gap           no gap covers frame 365                                     
+wawa   06c13117      514 attack     out_of_gap           no gap covers frame 514                                     
+
+========================================================================================================================
+SUMMARY (35 FNs):
+
+  no_candidate              :   2 (  5.7%)
+  out_of_gap                :  33 ( 94.3%)
+
+Total FNs: 35
+
+** OUT_OF_GAP ANALYSIS (33) **
+
+  ruru / be3134ba:
+    Gaps: ['(C-2 695-739)']
+    Pred frames: [204, 286, 386, 481, 646, 695, 739]
+    FN@575 (attack): no gap covers frame 575
+      → Could extend gap to [481, 646] to include FN@575
+
+  ruru / 3e61838c:
+    Gaps: ['(C-1 458-499)', '(C-2 458-499)', '(C-2 821-892)']
+    Pred frames: [186, 253, 368, 458, 499, 627, 722, 821, 892, 976, 1082]
+    FN@1147 (dig): no gap covers frame 1147
+      → Could extend gap to [1082, 1308] to include FN@1147
+
+  ruru / 3655eb69:
+    Gaps: []
+    Pred frames: [141, 212, 308, 413, 454, 527, 620]
+    FN@563 (serve): no gap covers frame 563
+      → Could extend gap to [527, 620] to include FN@563
+    FN@733 (set): no gap covers frame 733
+      → Could extend gap to [620, 858] to include FN@733
+    FN@833 (attack): no gap covers frame 833
+      → Could extend gap to [620, 858] to include FN@833
+    FN@874 (dig): no gap covers frame 874
+      → Could extend gap to [620, 858] to include FN@874
+    FN@946 (set): no gap covers frame 946
+      → Could extend gap to [620, 858] to include FN@946
+    FN@1040 (attack): no gap covers frame 1040
+      → Could extend gap to [620, 858] to include FN@1040
+
+  ruru / 9d5f5152:
+    Gaps: ['(C-3 0-319)']
+    Pred frames: [319, 415, 509, 654, 813, 876, 982, 1142, 1203, 1286]
+    FN@554 (dig): no gap covers frame 554
+      → Could extend gap to [509, 654] to include FN@554
+    FN@772 (attack): no gap covers frame 772
+      → Could extend gap to [654, 813] to include FN@772
+    FN@1054 (set): no gap covers frame 1054
+      → Could extend gap to [982, 1142] to include FN@1054
+
+  tata / 30ffb876:
+    Gaps: []
+    Pred frames: []
+    FN@54 (serve): no gap covers frame 54
+
+  tata / 724ead56:
+    Gaps: ['(C-1 339-351)', '(C-2 38-72)', '(C-2 339-351)']
+    Pred frames: [38, 72, 119, 174, 290, 339, 351]
+    FN@246 (dig): no gap covers frame 246
+      → Could extend gap to [174, 290] to include FN@246
+
+  tata / db841666:
+    Gaps: []
+    Pred frames: [81, 120, 170, 217]
+    FN@223 (block): no gap covers frame 223
+      → Could extend gap to [217, 341] to include FN@223
+
+  vovo / 55c2c6e5:
+    Gaps: ['(C-1 210-309)', '(C-2 59-108)', '(C-2 309-349)']
+    Pred frames: [59, 108, 210, 309, 349, 440, 522]
+    FN@23 (serve): no gap covers frame 23
+      → Could extend gap to [0, 59] to include FN@23
+
+  vovo / e4a5349e:
+    Gaps: []
+    Pred frames: [106, 179, 312, 424, 514, 554, 678, 768, 937, 1028, 1088, 1179, 1276]
+    FN@834 (dig): no gap covers frame 834
+      → Could extend gap to [768, 937] to include FN@834
+
+  wuwu / fb7f9c23:
+    Gaps: ['(C-2 276-306)']
+    Pred frames: [276, 306, 398]
+    FN@154 (serve): no gap covers frame 154
+      → Could extend gap to [0, 276] to include FN@154
+    FN@230 (receive): no gap covers frame 230
+      → Could extend gap to [0, 276] to include FN@230
+
+  wuwu / 99a01ce4:
+    Gaps: []
+    Pred frames: [168, 218, 303, 476, 565, 601, 684, 805, 915, 981, 1036]
+    FN@371 (dig): no gap covers frame 371
+      → Could extend gap to [303, 476] to include FN@371
+
+  wuwu / 5e8af221:
+    Gaps: ['(C-2 184-214)']
+    Pred frames: [184, 214, 329, 423]
+    FN@157 (serve): no gap covers frame 157
+      → Could extend gap to [0, 184] to include FN@157
+
+  wawa / 7094136a:
+    Gaps: ['(C-1 306-351)', '(C-2 83-113)', '(C-2 306-351)']
+    Pred frames: [83, 113, 306, 351]
+    FN@49 (serve): no gap covers frame 49
+      → Could extend gap to [0, 83] to include FN@49
+    FN@209 (set): no gap covers frame 209
+      → Could extend gap to [113, 306] to include FN@209
+    FN@367 (dig): no gap covers frame 367
+      → Could extend gap to [351, 498] to include FN@367
+
+  wawa / 8c49e480:
+    Gaps: ['(C-1 681-733)', '(C-2 628-681)']
+    Pred frames: [504, 534, 628, 681, 733]
+    FN@101 (serve): no gap covers frame 101
+      → Could extend gap to [0, 504] to include FN@101
+    FN@186 (receive): no gap covers frame 186
+      → Could extend gap to [0, 504] to include FN@186
+    FN@251 (set): no gap covers frame 251
+      → Could extend gap to [0, 504] to include FN@251
+    FN@338 (attack): no gap covers frame 338
+      → Could extend gap to [0, 504] to include FN@338
+    FN@434 (dig): no gap covers frame 434
+      → Could extend gap to [0, 504] to include FN@434
+
+  wawa / fb6e37bf:
+    Gaps: ['(C-2 442-476)']
+    Pred frames: [352, 442, 476]
+    FN@210 (serve): no gap covers frame 210
+      → Could extend gap to [0, 352] to include FN@210
+    FN@277 (receive): no gap covers frame 277
+      → Could extend gap to [0, 352] to include FN@277
+
+  wawa / 7f0f540a:
+    Gaps: ['(C-2 613-694)']
+    Pred frames: [249, 279, 383, 477, 521, 613, 694, 766, 877, 973]
+    FN@197 (serve): no gap covers frame 197
+      → Could extend gap to [0, 249] to include FN@197
+
+  wawa / 06c13117:
+    Gaps: []
+    Pred frames: [184, 254, 623]
+    FN@365 (set): no gap covers frame 365
+      → Could extend gap to [254, 623] to include FN@365
+    FN@514 (attack): no gap covers frame 514
+      → Could extend gap to [254, 623] to include FN@514
