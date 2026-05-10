@@ -12,6 +12,7 @@ from rallycut.tracking.pid_invariants import (
     check_i5_track_to_player_total,
     check_i6_team_assignments_total,
     check_i7_stats_canonical_pid,
+    check_i8_team_partition_is_2v2,
     run_all,
 )
 
@@ -235,6 +236,94 @@ class TestCheckI7StatsCanonicalPid:
 
     def test_empty_passes(self) -> None:
         violations = check_i7_stats_canonical_pid(rally_id="r1", mapped_track_ids=[])
+        assert violations == []
+
+
+class TestCheckI8TeamPartitionIs2v2:
+    def test_clean_2v2_passes(self) -> None:
+        violations = check_i8_team_partition_is_2v2(
+            rally_id="r1",
+            primary_track_ids=[1, 2, 3, 4],
+            team_assignments={"1": "A", "2": "A", "3": "B", "4": "B"},
+        )
+        assert violations == []
+
+    def test_side_switched_2v2_passes(self) -> None:
+        # After a side-switch, A↔B labels flip but it's still a valid 2v2.
+        violations = check_i8_team_partition_is_2v2(
+            rally_id="r1",
+            primary_track_ids=[1, 2, 3, 4],
+            team_assignments={"1": "B", "2": "B", "3": "A", "4": "A"},
+        )
+        assert violations == []
+
+    def test_cross_team_partition_passes(self) -> None:
+        # Unusual partition (P1+P3 vs P2+P4) is still valid 2v2 — I-8 only
+        # asserts the SHAPE, not which players are partnered.
+        violations = check_i8_team_partition_is_2v2(
+            rally_id="r1",
+            primary_track_ids=[1, 2, 3, 4],
+            team_assignments={"1": "A", "2": "B", "3": "A", "4": "B"},
+        )
+        assert violations == []
+
+    def test_1v3_partition_fails(self) -> None:
+        violations = check_i8_team_partition_is_2v2(
+            rally_id="r1",
+            primary_track_ids=[1, 2, 3, 4],
+            team_assignments={"1": "A", "2": "B", "3": "B", "4": "B"},
+        )
+        assert len(violations) == 1
+        assert violations[0].invariant == "I-8"
+        assert violations[0].rally_id == "r1"
+        assert "1A+3B" in violations[0].detail
+
+    def test_3v1_partition_fails(self) -> None:
+        violations = check_i8_team_partition_is_2v2(
+            rally_id="r1",
+            primary_track_ids=[1, 2, 3, 4],
+            team_assignments={"1": "A", "2": "A", "3": "A", "4": "B"},
+        )
+        assert len(violations) == 1
+        assert violations[0].invariant == "I-8"
+        assert "3A+1B" in violations[0].detail
+
+    def test_skips_when_fewer_than_4_primary(self) -> None:
+        # Rally with size != 4 is caught by I-1; I-8 must skip to avoid
+        # double-firing on an already-flagged condition.
+        violations = check_i8_team_partition_is_2v2(
+            rally_id="r1",
+            primary_track_ids=[1, 2, 3],
+            team_assignments={"1": "A", "2": "B", "3": "B"},
+        )
+        assert violations == []
+
+    def test_skips_when_team_assignments_missing(self) -> None:
+        # I-6 catches missing team_assignments. I-8 skips to avoid noise.
+        violations = check_i8_team_partition_is_2v2(
+            rally_id="r1",
+            primary_track_ids=[1, 2, 3, 4],
+            team_assignments=None,
+        )
+        assert violations == []
+
+    def test_skips_when_a_primary_lacks_label(self) -> None:
+        # If even one primary track has no label, I-6 already fires.
+        # I-8 skips because the partition is undefined for a missing label.
+        violations = check_i8_team_partition_is_2v2(
+            rally_id="r1",
+            primary_track_ids=[1, 2, 3, 4],
+            team_assignments={"1": "A", "2": "A", "3": "B"},  # 4 missing
+        )
+        assert violations == []
+
+    def test_invalid_label_value_skips(self) -> None:
+        # Non-A/B label is caught by I-6. I-8 doesn't double-flag.
+        violations = check_i8_team_partition_is_2v2(
+            rally_id="r1",
+            primary_track_ids=[1, 2, 3, 4],
+            team_assignments={"1": "A", "2": "A", "3": "B", "4": "X"},
+        )
         assert violations == []
 
 

@@ -12,6 +12,9 @@ Invariants:
   I-6: team_assignments is total over primary_track_ids (team in {A, B})
   I-7: post-mapping, every action's mapped_track_id ∈ {1..4} ∪ {-1}
        (closed by silent-skip in compute_match_stats — see commit history)
+  I-8: when 4 primary tracks all have team labels, partition must be 2A + 2B
+       (beach volleyball is definitionally 2v2 — fires on classify_teams
+       errors caused by late arrivers or Y-ambiguous starts)
 
 Spec: docs/superpowers/specs/2026-05-08-pid-leverage-audit-sub1-design.md
 """
@@ -226,6 +229,66 @@ def check_i7_stats_canonical_pid(
     ]
 
 
+def check_i8_team_partition_is_2v2(
+    *,
+    rally_id: str,
+    primary_track_ids: list[int],
+    team_assignments: dict[str, str] | None,
+) -> list[Violation]:
+    """I-8: when 4 primary tracks all have team labels, partition must be 2A + 2B.
+
+    Beach volleyball is definitionally 2v2: any rally with 4 detected on-court
+    players must have exactly 2 on team A and 2 on team B. A rally where the
+    label distribution is 1A+3B, 3A+1B, etc., reflects a classification error
+    from `classify_teams` (typically caused by late-arriving tracks or by
+    Y-ambiguous rally starts where two players sit on opposite sides of the
+    court split by a small margin).
+
+    Skips when:
+      - len(primary_track_ids) != 4 — caught by I-1; not enough tracks for a
+        2v2 partition (e.g., a player was occluded the entire rally, or an
+        off-frame server never re-entered the frame).
+      - team_assignments is None or empty — caught by I-6; no labels to check.
+      - Any primary track lacks a label — caught by I-6.
+      - Any primary's label is not in {"A", "B"} — caught by I-6.
+
+    These skips are intentional: I-8 only fires on cases that survive the
+    earlier structural checks. The remaining violations are CORRECTNESS
+    failures, not data-quality artifacts. A future producer-side fix in
+    `classify_teams` should handle late arrivers (use appearance signal when
+    Y data is sparse) and Y-ambiguous starts (use bbox-size or color
+    tiebreak); until then, I-8 is the visibility surface.
+    """
+    if len(primary_track_ids) != 4 or not team_assignments:
+        return []
+    primary_set = {int(t) for t in primary_track_ids}
+    labels: list[str] = []
+    for tid in primary_set:
+        label = team_assignments.get(str(tid))
+        if label not in ("A", "B"):
+            # Missing or invalid label — I-6 will catch this.
+            return []
+        labels.append(label)
+    a_count = labels.count("A")
+    b_count = labels.count("B")
+    if a_count == 2 and b_count == 2:
+        return []
+    partition_view = {
+        str(t): team_assignments.get(str(t)) for t in sorted(primary_set)
+    }
+    return [
+        Violation(
+            invariant="I-8",
+            rally_id=rally_id,
+            detail=(
+                f"team partition is {a_count}A+{b_count}B; "
+                f"beach volleyball requires 2A+2B "
+                f"(team_assignments for primary {sorted(primary_set)} = {partition_view})"
+            ),
+        )
+    ]
+
+
 def run_all(*, video_id: str) -> list[Violation]:
     """Run all 7 PID invariants against a video's persisted state.
 
@@ -323,6 +386,13 @@ def run_all(*, video_id: str) -> list[Violation]:
         )
         violations.extend(
             check_i6_team_assignments_total(
+                rally_id=rally_id,
+                primary_track_ids=primary_track_ids,
+                team_assignments=team_assignments,
+            )
+        )
+        violations.extend(
+            check_i8_team_partition_is_2v2(
                 rally_id=rally_id,
                 primary_track_ids=primary_track_ids,
                 team_assignments=team_assignments,
