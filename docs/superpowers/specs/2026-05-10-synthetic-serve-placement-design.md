@@ -12,14 +12,18 @@ Default-on production change. Behavior-preserving when neither signal is availab
 
 ## Motivation
 
-### Panel diagnostic, 2026-05-10
+### Fleet diagnostic, 2026-05-10
 
-On the 5-video panel + 073cb11b (post-GT-fix), restricted to rallies that have GT serve labels:
+Across all 66 videos with action GT (338 rallies, 313 with a pred serve, 335 with a GT serve):
 
 | Serve type | Count | Mis-placed (>15 frames off GT) | Hit rate |
 |---|---:|---:|---:|
-| Real (detected) serves | 15 | 1 | **93%** |
-| Synthetic serves | 10 | **6** | **40%** |
+| Real (detected) serves | 218 | 24 | **89%** |
+| Synthetic serves | **95** | **51** | **46%** |
+
+(For reference — the 5-video panel + 073cb11b subset showed 14/15 real hits and 4/10 synthetic hits, consistent with the fleet rates within sampling noise.)
+
+**~22 rallies have no pred serve at all** — the synthesis fallback didn't fire either; investigated separately, out-of-scope for this workstream.
 
 The pipeline is excellent at *detecting* serves when they're detectable. The bottleneck is the synthesis fallback, which uses a placeholder formula:
 
@@ -42,7 +46,7 @@ A synthetic serve at the wrong frame:
 - **Adds an FP** at the synthetic frame (fake contact at a frame that has no GT contact).
 - Cascades to downstream stats: `servingTeam`, score tracking, player attribution all use serve frame.
 
-So fixing the placement saves **both** an FN and an FP per affected rally. On the panel, that's ~6 FN + ~6 FP recovered → estimated F1 89.8% → ~92.4%.
+So fixing the placement saves **both** an FN and an FP per affected rally. **Fleet-wide: ~51 FN + ~51 FP recoverable** by this single fix, vastly more than the panel-only target. Conservative estimate: if the helper closes 60% of mis-placed synthetics, that's ~30 FN + ~30 FP recovered across 313 rallies with GT serves.
 
 ## Scope
 
@@ -139,13 +143,13 @@ No DB migration. No retraining. No production-default flag.
 
 ## Done criteria (ship gate)
 
-Measured on the panel + 073cb11b (5 videos, 25 rallies with GT serves):
+Measured on the **full GT pool** (66 videos, 313 rallies with both GT serve and pred serve):
 
-- ≥ **4 of 6** currently-mis-placed synthetic serves now within ±15 frames of GT serve.
-- **0 regressions** on the 15 currently-correctly-placed real serves (none get displaced by ≥15 frames).
-- Panel F1 ≥ **91.0%** (up from 89.8%).
+- ≥ **30 of 51** currently-mis-placed synthetic serves now within ±15 frames of GT serve (≥ 60% catch rate on the addressable population).
+- **≤ 5 regressions** on the 194 currently-correctly-placed real serves (allows for minor frame drift; no systemic displacement).
+- Synthetic hit rate jumps from **46% → ≥ 75%**.
 - Synthetic-serve `confidence` field reflects signal grounding (≥ 0.6 when picked from signals; legacy 0.4 when fallen back).
-- Visual spot-check on 3 rallies (one good fix, one fallback, one disagreement-low-confidence): the synthetic frame matches the visible serve.
+- Visual spot-check on 5 rallies (mix of fixed, regressed-if-any, and signal-disagreement low-confidence): the synthetic frame matches the visible serve.
 
 ## Risks
 
