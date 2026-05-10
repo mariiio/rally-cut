@@ -82,3 +82,83 @@ def check_c1_three_contact_rule(
                 )
             )
     return violations
+
+
+# Action types that always end the current possession (ball crosses to the
+# other side or starts a new turn).
+_POSSESSION_END_ACTIONS = {"attack", "serve"}
+
+
+def check_c2_alternating_possessions(
+    *,
+    rally_id: str,
+    actions: list[dict[str, Any]],
+    team_assignments: dict[str, str],
+) -> list[Violation]:
+    """C-2: possessions alternate teams.
+
+    Possession ends when:
+      - The action is `attack` (ball crosses to other team).
+      - The action is `serve` (rally turn starts).
+      - The current team has accumulated 3 contacts.
+
+    After a possession ends, the next action must be by the OTHER team.
+    """
+    if len(actions) < 2:
+        return []
+    sorted_actions = _actions_sorted_by_frame(actions)
+
+    violations: list[Violation] = []
+    contacts_in_possession: int = 0
+    last_team: str | None = None
+    last_action: dict[str, Any] | None = None
+    last_index: int = -1
+
+    for idx, action in enumerate(sorted_actions):
+        team = _team_for_action(action, team_assignments)
+        if team is None:
+            return []  # defensive
+        action_type = str(action.get("action", ""))
+
+        if last_team is not None and last_action is not None:
+            last_action_type = str(last_action.get("action", ""))
+            possession_ended = (
+                last_action_type in _POSSESSION_END_ACTIONS
+                or contacts_in_possession >= 3
+            )
+            if possession_ended:
+                # New action must be the OTHER team.
+                if team == last_team:
+                    other = "B" if last_team == "A" else "A"
+                    violations.append(
+                        Violation(
+                            invariant="C-2",
+                            rally_id=rally_id,
+                            detail=(
+                                f"team {last_team} action[{last_index}] "
+                                f"(frame {last_action.get('frame')}, "
+                                f"{last_action_type}) ended possession; "
+                                f"next action[{idx}] (frame {action.get('frame')}, "
+                                f"{action_type}) was also team {team} — "
+                                f"expected team {other}"
+                            ),
+                        )
+                    )
+                # Reset possession either way (don't keep cascading violations
+                # if the same wrong team has multiple actions).
+                contacts_in_possession = 1
+            else:
+                if team != last_team:
+                    # Possession transferred without an end-action — also a violation
+                    # (mid-possession crossover). For v1, just track and move on.
+                    contacts_in_possession = 1
+                else:
+                    contacts_in_possession += 1
+        else:
+            contacts_in_possession = 1
+
+        last_team = team
+        last_action = action
+        last_index = idx
+
+    return violations
