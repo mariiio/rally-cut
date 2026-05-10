@@ -162,3 +162,28 @@ def check_c2_alternating_possessions(
         last_index = idx
 
     return violations
+
+
+def check_c3_first_action_is_serve(
+    *,
+    rally_id: str,
+    actions: list[dict[str, Any]],
+) -> list[Violation]:
+    """C-3: rally's first action must be `serve`."""
+    if not actions:
+        return []
+    sorted_actions = _actions_sorted_by_frame(actions)
+    first = sorted_actions[0]
+    first_type = str(first.get("action", ""))
+    if first_type == "serve":
+        return []
+    return [
+        Violation(
+            invariant="C-3",
+            rally_id=rally_id,
+            detail=(
+                f"first action is {first_type!r} (frame {first.get('frame')}); "
+                f"expected 'serve'"
+            ),
+        )
+    ]

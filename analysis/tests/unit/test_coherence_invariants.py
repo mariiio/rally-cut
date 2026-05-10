@@ -5,6 +5,7 @@ from __future__ import annotations
 from rallycut.tracking.coherence_invariants import (
     check_c1_three_contact_rule,
     check_c2_alternating_possessions,
+    check_c3_first_action_is_serve,
 )
 
 
@@ -135,4 +136,37 @@ class TestCheckC2AlternatingPossessions:
         result = check_c2_alternating_possessions(
             rally_id="r1", actions=actions, team_assignments=team_assignments,
         )
+        assert result == []
+
+
+class TestCheckC3FirstActionIsServe:
+    def test_clean_first_serve_passes(self) -> None:
+        actions = [
+            _action(100, "serve", 1),
+            _action(140, "receive", 2),
+        ]
+        result = check_c3_first_action_is_serve(rally_id="r1", actions=actions)
+        assert result == []
+
+    def test_first_action_attack_fails(self) -> None:
+        actions = [
+            _action(100, "attack", 1),
+            _action(140, "dig", 2),
+        ]
+        result = check_c3_first_action_is_serve(rally_id="r1", actions=actions)
+        assert len(result) == 1
+        assert result[0].invariant == "C-3"
+        assert "attack" in result[0].detail
+
+    def test_first_action_receive_fails(self) -> None:
+        actions = [
+            _action(100, "receive", 1),
+        ]
+        result = check_c3_first_action_is_serve(rally_id="r1", actions=actions)
+        assert len(result) == 1
+        assert result[0].invariant == "C-3"
+        assert "receive" in result[0].detail
+
+    def test_zero_actions_skips(self) -> None:
+        result = check_c3_first_action_is_serve(rally_id="r1", actions=[])
         assert result == []
