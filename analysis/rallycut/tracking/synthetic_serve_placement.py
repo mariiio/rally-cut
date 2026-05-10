@@ -26,6 +26,12 @@ SERVE_SEQ_FLOOR: float = 0.50
 SEARCH_GUARD: int = 5
 MAX_PRESERVE_FRAMES: int = 150
 
+# Test/measurement-only flag. When True, pick_synthetic_serve_frame returns
+# None unconditionally — used by the measurement script to compare
+# v1.1-enabled vs v1.1-disabled output through the SAME pipeline (isolates
+# v1.1's effect from detector-version drift artifacts).
+_DISABLE_V11_PLACEMENT: bool = False
+
 # Index of "serve" in the seq_probs array (offset by 1 for the bg row).
 _SERVE_SEQ_INDEX: int = ACTION_TYPES.index("serve") + 1
 
@@ -42,6 +48,8 @@ def pick_synthetic_serve_frame(
     when the serve-class peak in that window exceeds SERVE_SEQ_FLOOR.
     Returns None otherwise (caller falls back to the legacy placeholder).
     """
+    if _DISABLE_V11_PLACEMENT:
+        return None
     lo = max(0, rally_start_frame)
     hi = first_contact_frame - SEARCH_GUARD
     if hi < lo:

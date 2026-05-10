@@ -1,0 +1,459 @@
+video    rally      kind        base_f  post_f  gt_f  base_diff  post_diff  verdict                  
+----------------------------------------------------------------------------------------------------
+tutu     0585f707   real           153     153   154         -1         -1  no change                
+gugu     fc53d8ef   real            77      77    75         +2         +2  no change                
+gugu     62b6c286   real            92      92    90         +2         +2  no change                
+Rally : >3 contacts on near side (contact #4 at frame 224). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 224). Possible missed net crossing or wrong court_side.
+gugu     2e8b3ce2   real            96      96    91         +5         +5  no change                
+gugu     c7e20480   synth           35      67    63        -28         +4  FIXED                    
+gugu     e84deef3   real            69      69    66         +3         +3  no change                
+yaya     de08f58e   real           120     120   121         -1         -1  no change                
+yaya     193be78f   real           120     120   121         -1         -1  no change                
+yaya     639daf33   real           139     139   144         -5         -5  no change                
+yaya     2ddba1a7   real           144     144   147         -3         -3  no change                
+yaya     17a26488   real           113     113   113         +0         +0  no change                
+Rally : consecutive net-crossing actions at frame 304 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 304 (attack). Missing same-side contact between them.
+yaya     1f5ff17d   real           126     126   127         -1         -1  no change                
+yaya     ae617088   real            72      72    79         -7         -7  no change                
+Rally : consecutive net-crossing actions at frame 571 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 571 (attack). Missing same-side contact between them.
+yoyo     740ffd88   real            82      82    85         -3         -3  no change                
+yoyo     0ab56722   real           100     100   100         +0         +0  no change                
+yoyo     21a9b203   real           184     184   128        +56        +56  no change                
+yoyo     eb956886   real           161     161   163         -2         -2  no change                
+yoyo     2eee878b   real            99      99    98         +1         +1  no change                
+yoyo     9d24aa93   real            90      90    90         +0         +0  no change                
+yoyo     f9327b6e   real           171     171   174         -3         -3  no change                
+yoyo     e99733e3   real           103     103   103         +0         +0  no change                
+yoyo     11942746   real           167     167    95        +72        +72  no change                
+yoyo     eb74d667   real            96      96    94         +2         +2  no change                
+Rally : >3 contacts on near side (contact #4 at frame 198). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 226). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 198). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 226). Possible missed net crossing or wrong court_side.
+matttch  d724bbf0   real            59      59    61         -2         -2  no change                
+matttch  17fa7f9c   real            48      48    50         -2         -2  no change                
+caca     f0fdfcdb   real           246     246   248         -2         -2  no change                
+Rally : >3 contacts on near side (contact #4 at frame 433). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 474). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 550). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 576). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #8 at frame 627). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #9 at frame 695). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 433). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 474). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 550). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 576). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #8 at frame 627). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #9 at frame 695). Possible missed net crossing or wrong court_side.
+gigi     72c8229b   real            94      94    92         +2         +2  no change                
+gigi     39e866fd   synth           85      85    87         -2         -2  no change                
+gigi     df3de8ed   real           100     100   102         -2         -2  no change                
+ruru     be3134ba   real           198     198   206         -8         -8  no change                
+muchi    d5b199ea   real            70      70    73         -3         -3  no change                
+Rally : >3 contacts on near side (contact #4 at frame 310). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 310). Possible missed net crossing or wrong court_side.
+muchi    ec483e08   real            72      72    73         -1         -1  no change                
+caco     5b23ee5f   real            51      51    51         +0         +0  no change                
+caco     cfc464a7   real            53      53    54         -1         -1  no change                
+caco     9452ee5a   real            39      39    37         +2         +2  no change                
+natch    e5e4c0b7   real            86      86    86         +0         +0  no change                
+natch    0d84f858   real            35      35    46        -11        -11  no change                
+natch    3296c4a0   synth           16      16     6        +10        +10  no change                
+Rally : >3 contacts on far side (contact #4 at frame 563). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 563). Possible missed net crossing or wrong court_side.
+yaya     67abc72e   real            65      65    68         -3         -3  no change                
+yaya     8a542678   real            57      57    56         +1         +1  no change                
+lili     e8c95aea   real            71      71    75         -4         -4  no change                
+lili     a7b017cd   real            84      84    83         +1         +1  no change                
+lili     f6ac99c0   synth           36      36    43         -7         -7  no change                
+lili     57f3d7df   real            77      77    84         -7         -7  no change                
+lili     b5a0c6b5   synth           74      83    86        -12         -3  no change                
+lili     05f7dae1   real            85      85    88         -3         -3  no change                
+lili     bace791b   real            74      74    74         +0         +0  no change                
+lili     19a53e20   synth          121     116   114         +7         +2  no change                
+lili     15691670   real            71      71    75         -4         -4  no change                
+lili     879a8cff   real            86      86    87         -1         -1  no change                
+lolo     c48eeb7d   synth          111     102   101        +10         +1  no change                
+lolo     1f6a9b94   real            84      84    82         +2         +2  no change                
+lolo     173a4a61   real           125     125   127         -2         -2  no change                
+lolo     3151a902   real           135     135   137         -2         -2  no change                
+lolo     059d1c87   real            92      92    88         +4         +4  no change                
+lolo     8ce36875   real            29      29    40        -11        -11  no change                
+lolo     bb1c9802   real           106     106   108         -2         -2  no change                
+matchc   c31d12b2   real            87      87    81         +6         +6  no change                
+matchope bd77efd1   real            45      45    54         -9         -9  no change                
+matchope eff4febd   synth           39      39    29        +10        +10  no change                
+mame     27964520   real            96      96   102         -6         -6  no change                
+mame     5cc5127f   real           117     117   115         +2         +2  no change                
+mame     52b0ca76   synth          128     128   125         +3         +3  no change                
+mame     9c70e73a   real           112     112   121         -9         -9  no change                
+veve     7b5a6973   real            53      53    56         -3         -3  no change                
+veve     8276604f   real            41      41    56        -15        -15  no change                
+Rally : >3 contacts on near side (contact #4 at frame 232). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 157 (attack). Missing same-side contact between them.
+Rally : >3 contacts on near side (contact #4 at frame 232). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 157 (attack). Missing same-side contact between them.
+veve     cecb6ebf   real            27      27    28         -1         -1  no change                
+Rally : >3 contacts on near side (contact #4 at frame 284). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 312). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 284). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 312). Possible missed net crossing or wrong court_side.
+veve     4c27b635   real            85      85    20        +65        +65  no change                
+veve     a51a6746   real            78      78    79         -1         -1  no change                
+veve     24b025fa   real            64      64    65         -1         -1  no change                
+Rally : >3 contacts on near side (contact #4 at frame 739). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 548 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 577 (attack). Missing same-side contact between them.
+Rally : >3 contacts on near side (contact #4 at frame 739). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 548 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 577 (attack). Missing same-side contact between them.
+gaga     d474b2ad   real           153     153   156         -3         -3  no change                
+Rally : >3 contacts on far side (contact #4 at frame 289). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 289). Possible missed net crossing or wrong court_side.
+gaga     a11d3733   real           118     118    88        +30        +30  no change                
+Rally : >3 contacts on near side (contact #4 at frame 280). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 280). Possible missed net crossing or wrong court_side.
+gaga     c9c9bdc2   real           121     121   121         +0         +0  no change                
+Rally : >3 contacts on far side (contact #4 at frame 224). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 224). Possible missed net crossing or wrong court_side.
+gaga     19089729   real            92      92    87         +5         +5  no change                
+gaga     a9bd5acb   real           109     109   110         -1         -1  no change                
+Rally : >3 contacts on near side (contact #4 at frame 245). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 287). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 326). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 245). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 287). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 326). Possible missed net crossing or wrong court_side.
+lele     c4eb6810   real            80      80    84         -4         -4  no change                
+lele     a8ef3948   synth           31      79    82        -51         -3  FIXED                    
+lele     7ff96129   real            82      82    85         -3         -3  no change                
+Rally : >3 contacts on near side (contact #4 at frame 245). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 555). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #5 at frame 598). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #6 at frame 615). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 245). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 555). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #5 at frame 598). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #6 at frame 615). Possible missed net crossing or wrong court_side.
+lele     d4938222   synth           87      89    90         -3         -1  no change                
+lele     fcabf602   synth           58      58    58         +0         +0  no change                
+lele     c9015cb0   synth           94      95   100         -6         -5  no change                
+pipi     8500f776   real            70      70    73         -3         -3  no change                
+pipi     75295533   real            54      54    56         -2         -2  no change                
+Rally : >3 contacts on near side (contact #4 at frame 220). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 220). Possible missed net crossing or wrong court_side.
+pipi     89bd8f53   real            64      64    65         -1         -1  no change                
+pipi     076cb0fe   real            47      47    55         -8         -8  no change                
+dark     1f87460b   real            53      53    55         -2         -2  no change                
+dark     a154c554   real            53      53    55         -2         -2  no change                
+dark     cf4cdd43   real            45      45    43         +2         +2  no change                
+lala     793625cd   real            97      97    61        +36        +36  no change                
+lala     ce316bb4   real           115     115    72        +43        +43  no change                
+lala     6a467cf6   synth           58      75    75        -17         +0  FIXED                    
+lala     276985b8   real            75      75    76         -1         -1  no change                
+lala     a80db496   synth           81     117   110        -29         +7  FIXED                    
+Rally : >3 contacts on near side (contact #4 at frame 737). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 784). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 806). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 912). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 737). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 784). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 806). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 912). Possible missed net crossing or wrong court_side.
+lala     2eeb3ae6   real            90      90    92         -2         -2  no change                
+michu    2dff5eeb   real            48      48    48         +0         +0  no change                
+Rally : >3 contacts on near side (contact #4 at frame 189). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 189). Possible missed net crossing or wrong court_side.
+michu    e86152b7   real            50      50    51         -1         -1  no change                
+wewe     0b8c1d2b   real           170     170   172         -2         -2  no change                
+wewe     bb984d2d   real           319     319   248        +71        +71  no change                
+wewe     8c2d30ce   real           311     311   239        +72        +72  no change                
+wewe     0d835edf   synth          201     201   182        +19        +19  no change                
+wewe     ecfed131   real           192     192   189         +3         +3  no change                
+wewe     83790ce7   real           206     206   204         +2         +2  no change                
+wewe     7a49d939   real           211     211   217         -6         -6  no change                
+wewe     247ab722   real           273     273   273         +0         +0  no change                
+wewe     bed98d84   synth          279     279   252        +27        +27  no change                
+yeye     df3ba73b   real           111     111   111         +0         +0  no change                
+yeye     a67c04fb   synth          112     112   109         +3         +3  no change                
+Rally : consecutive net-crossing actions at frame 507 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 507 (attack). Missing same-side contact between them.
+yeye     4c0f4c83   synth           92      92    91         +1         +1  no change                
+yeye     cbf17cce   real           102     102   104         -2         -2  no change                
+yeye     721bb968   real           111     111   112         -1         -1  no change                
+yeye     61f79c70   real           101     101   102         -1         -1  no change                
+yeye     2d3cb54b   synth           78      82    81         -3         +1  no change                
+wowo     3eb37b1b   real           249     249   194        +55        +55  no change                
+Rally : >3 contacts on near side (contact #4 at frame 619). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 619). Possible missed net crossing or wrong court_side.
+wowo     169292de   real           213     213   214         -1         -1  no change                
+wowo     2c9092e3   real           178     178   184         -6         -6  no change                
+Rally : >3 contacts on near side (contact #4 at frame 298). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 298). Possible missed net crossing or wrong court_side.
+pepe     e2db8571   real           100     100   104         -4         -4  no change                
+pepe     a738f65f   real           129     129   100        +29        +29  no change                
+pepe     fcbd34b5   real            65      65    66         -1         -1  no change                
+pepe     4ea1bfa2   real           114     114   121         -7         -7  no change                
+pepe     a43fb033   real           154     154   124        +30        +30  no change                
+pepe     6ed4d6fc   synth          131     131   127         +4         +4  no change                
+pepe     25edb83f   real            86      86    92         -6         -6  no change                
+matchop  0af554b5   real            51      51    53         -2         -2  no change                
+matchop  b6c744e6   synth           33      33    29         +4         +4  no change                
+Rally : consecutive net-crossing actions at frame 358 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 653 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 358 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 653 (attack). Missing same-side contact between them.
+tata     8b0b9e13   synth           86      86    90         -4         -4  no change                
+tata     09553ef1   synth           91      94    93         -2         +1  no change                
+tata     97c42190   real            81      81    77         +4         +4  no change                
+tata     e50f127e   real           115     115   117         -2         -2  no change                
+Rally : >3 contacts on far side (contact #4 at frame 225). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 225). Possible missed net crossing or wrong court_side.
+tata     8c802c26   synth           76      69    67         +9         +2  no change                
+tata     4bfafd6d   real            76      76    66        +10        +10  no change                
+rere     c7ef5f89   real           148     148   149         -1         -1  no change                
+rere     184650b5   real           123     123   126         -3         -3  no change                
+rere     7029ace1   real           120     120   116         +4         +4  no change                
+rere     c036a173   real           114     114   116         -2         -2  no change                
+cece     f978201e   real            55      55    57         -2         -2  no change                
+cece     55e78d3a   synth           64      64    45        +19        +19  no change                
+cece     5c35e049   real            76      76    78         -2         -2  no change                
+cece     8f17a3ed   synth          101     101    89        +12        +12  no change                
+pupu     512f9467   real            41      41    49         -8         -8  no change                
+pupu     f644387b   real            57      57    58         -1         -1  no change                
+pupu     db3a3503   real            74      74    80         -6         -6  no change                
+Rally : consecutive net-crossing actions at frame 258 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 258 (attack). Missing same-side contact between them.
+pupu     e11fa028   real            57      57    51         +6         +6  no change                
+pupu     cc50cf7e   real            48      48    49         -1         -1  no change                
+moma     fb8fd612   real            58      58    59         -1         -1  no change                
+moma     5447e090   synth           53      53    51         +2         +2  no change                
+moma     e1929103   real            65      65    66         -1         -1  no change                
+Rally : consecutive net-crossing actions at frame 348 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 348 (attack). Missing same-side contact between them.
+moma     753a4ec7   real            52      52    57         -5         -5  no change                
+moma     9bb60892   real            88      88    91         -3         -3  no change                
+popo     59f2a9a0   real            70      70    72         -2         -2  no change                
+popo     c1a37b5e   real             8       8    10         -2         -2  no change                
+Rally : >3 contacts on near side (contact #4 at frame 282). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 282). Possible missed net crossing or wrong court_side.
+popo     c1052008   real            49      49    56         -7         -7  no change                
+popo     95c3db02   real            27      27    31         -4         -4  no change                
+popo     7501a7b7   real            75      75    85        -10        -10  no change                
+popo     15a57d49   real            43      43    45         -2         -2  no change                
+titi     21029e9f   real            47      47    64        -17        -17  no change                
+titi     42757e1a   real            46      46    48         -2         -2  no change                
+Rally : >3 contacts on far side (contact #4 at frame 150). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 150). Possible missed net crossing or wrong court_side.
+titi     12b8ff15   real            20      20    20         +0         +0  no change                
+titi     375405ff   synth           56      56    51         +5         +5  no change                
+Rally : >3 contacts on near side (contact #4 at frame 173). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 187). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 173). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 187). Possible missed net crossing or wrong court_side.
+titi     caa96651   real            53      53    56         -3         -3  no change                
+titi     ce7b8505   real            41      41    40         +1         +1  no change                
+titi     43b849ec   synth           38      42    46         -8         -4  no change                
+Rally : >3 contacts on far side (contact #4 at frame 412). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #5 at frame 437). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #6 at frame 471). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 412). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #5 at frame 437). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #6 at frame 471). Possible missed net crossing or wrong court_side.
+titi     1e38daab   synth           14      39    39        -25         +0  FIXED                    
+titi     414cff1b   real            40      40    36         +4         +4  no change                
+vovo     38d9e796   real            22      22    99        -77        -77  no change                
+cici     ef07c839   real            86      86    85         +1         +1  no change                
+cici     b4747e0d   real            87      87    89         -2         -2  no change                
+Rally : >3 contacts on near side (contact #4 at frame 362). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 362). Possible missed net crossing or wrong court_side.
+cici     17b080fa   real           120     120   123         -3         -3  no change                
+cici     aeffed7c   real           107     107   109         -2         -2  no change                
+cici     34430b2e   real           138     138   139         -1         -1  no change                
+Rally : >3 contacts on near side (contact #4 at frame 257). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 257). Possible missed net crossing or wrong court_side.
+cici     4f4e0a0a   real           119     119   120         -1         -1  no change                
+lulu     14d9a87b   real           199     199   199         +0         +0  no change                
+lulu     060e5898   real           339     339   260        +79        +79  no change                
+lulu     69df24f0   real           202     202   205         -3         -3  no change                
+lulu     8da4f0dc   real           147     147   149         -2         -2  no change                
+lulu     35ca5d33   real           294     294   248        +46        +46  no change                
+lulu     2adb9d80   real           237     237   241         -4         -4  no change                
+lulu     69117837   real           176     176   174         +2         +2  no change                
+lulu     55565c2b   real           172     172   175         -3         -3  no change                
+mimi     c3b31af2   real            72      72    42        +30        +30  no change                
+mimi     b5d6f2e9   real            37      37    39         -2         -2  no change                
+Rally : >3 contacts on near side (contact #4 at frame 187). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 187). Possible missed net crossing or wrong court_side.
+mimi     1de2b211   real            59      59    58         +1         +1  no change                
+mimi     f3695225   synth           70      81    79         -9         +2  no change                
+mimi     bbb22a1a   synth           80      79    79         +1         +0  no change                
+rara     c99fdd78   real           127     127   128         -1         -1  no change                
+Rally : >3 contacts on near side (contact #4 at frame 215). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 215). Possible missed net crossing or wrong court_side.
+rara     04ef801f   real            95      95    90         +5         +5  no change                
+rara     8941e6e4   real            90      90    93         -3         -3  no change                
+Rally : >3 contacts on far side (contact #4 at frame 480). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 480). Possible missed net crossing or wrong court_side.
+rara     da366ddb   real           195     195   197         -2         -2  no change                
+rara     1cf3ad14   real            53      53    54         -1         -1  no change                
+rara     d36a8281   synth          100     125   118        -18         +7  FIXED                    
+rara     a44a2a94   real           115     115   115         +0         +0  no change                
+rara     24249be3   real           125     125   125         +0         +0  no change                
+meme     572bff7e   real           107     107   127        -20        -20  no change                
+meme     ea02a014   real            76      76    77         -1         -1  no change                
+meme     49582c29   real            42      42    43         -1         -1  no change                
+meme     65c54107   real            76      76    77         -1         -1  no change                
+Rally : >3 contacts on near side (contact #4 at frame 184). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 184). Possible missed net crossing or wrong court_side.
+meme     e5327806   real            50      50    49         +1         +1  no change                
+meme     6bc59398   synth           91      87    88         +3         -1  no change                
+meme     d6dfef25   real            60      60    59         +1         +1  no change                
+meme     11723e2b   real            91      91    93         -2         -2  no change                
+matahtach 73581b32   real            58      58    52         +6         +6  no change                
+Rally : >3 contacts on near side (contact #4 at frame 206). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 206). Possible missed net crossing or wrong court_side.
+matahtach cf33c17d   real            61      61    64         -3         -3  no change                
+wiwi     67166481   real           281     281   207        +74        +74  no change                
+Rally : >3 contacts on near side (contact #4 at frame 1514). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 913 (attack). Missing same-side contact between them.
+Rally : >3 contacts on near side (contact #4 at frame 1514). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 913 (attack). Missing same-side contact between them.
+wiwi     7aef7188   synth          181     181   170        +11        +11  no change                
+wiwi     e73267b4   synth          183     183   163        +20        +20  no change                
+wiwi     5b486730   real           178     178   181         -3         -3  no change                
+wiwi     8f008df7   real           183     183   186         -3         -3  no change                
+Rally : consecutive net-crossing actions at frame 523 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 523 (attack). Missing same-side contact between them.
+wiwi     0f82a711   real           212     212   212         +0         +0  no change                
+wiwi     eb4c4b8e   real           226     226   232         -6         -6  no change                
+wiwi     682130d2   real           240     240   241         -1         -1  no change                
+Rally : >3 contacts on near side (contact #4 at frame 189). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 228). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 189). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 228). Possible missed net crossing or wrong court_side.
+machi    032ec267   real            43      43    46         -3         -3  no change                
+wuwu     37e14e1e   real           157     157   158         -1         -1  no change                
+wuwu     fb7f9c23   synth          276     158   154       +122         +4  FIXED                    
+wuwu     99a01ce4   real           168     168   161         +7         +7  no change                
+wuwu     5e8af221   real           159     159   157         +2         +2  no change                
+yeye     9dbe457a   real           435     435   168       +267       +267  no change                
+cucu     70e5834b   real            81      81    83         -2         -2  no change                
+toto     fcc5dcba   real            39      39    53        -14        -14  no change                
+toto     d24901dd   real            43      43    40         +3         +3  no change                
+toto     e5a1da4f   real            70      70    77         -7         -7  no change                
+toto     66921886   real            74      74    74         +0         +0  no change                
+Rally : >3 contacts on far side (contact #4 at frame 682). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #5 at frame 712). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 682). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #5 at frame 712). Possible missed net crossing or wrong court_side.
+toto     248aaf83   synth           13      59    60        -47         -1  FIXED                    
+roro     e35ccb8f   real           142     142   147         -5         -5  no change                
+roro     75886ef9   real           156     156   158         -2         -2  no change                
+roro     2b7cf325   synth           25      81   125       -100        -44  no change                
+roro     1a6e05d5   real           144     144   146         -2         -2  no change                
+roro     c9fb06b6   real            69      69    70         -1         -1  no change                
+papa     36130cbc   real            33      33    40         -7         -7  no change                
+papa     e55b433d   real            64      64    68         -4         -4  no change                
+papa     89c53e08   real            84      84    85         -1         -1  no change                
+papa     047c5e5f   synth           55      55    44        +11        +11  no change                
+papa     8e1e5e61   real            56      56    62         -6         -6  no change                
+papa     1eac2bd6   synth           62      62    57         +5         +5  no change                
+Rally : >3 contacts on far side (contact #4 at frame 475). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 475). Possible missed net crossing or wrong court_side.
+mama     87ce7bff   real            34      34    34         +0         +0  no change                
+Rally : >3 contacts on near side (contact #4 at frame 186). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 186). Possible missed net crossing or wrong court_side.
+mama     696e302a   real            65      65    64         +1         +1  no change                
+mama     b7f92cdc   real            88      88    80         +8         +8  no change                
+mama     7c7f0ba3   real            78      78    85         -7         -7  no change                
+mechi    618002a8   real            67      67    49        +18        +18  no change                
+mechi    c56d4b01   real           116     116    55        +61        +61  no change                
+match    6c147b7a   synth            3      62    62        -59         +0  FIXED                    
+Rally : >3 contacts on near side (contact #4 at frame 205). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 246). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 205). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 246). Possible missed net crossing or wrong court_side.
+match    e3348468   real            59      59    62         -3         -3  no change                
+mochi    1bfcbc4f   real            75      75    76         -1         -1  no change                
+Rally : >3 contacts on near side (contact #4 at frame 473). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 473). Possible missed net crossing or wrong court_side.
+mochi    5d35c3bf   real            84      84    86         -2         -2  no change                
+mochi    ac39ca88   real            62      62    64         -2         -2  no change                
+Rally : consecutive net-crossing actions at frame 269 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 269 (attack). Missing same-side contact between them.
+mochi    39139435   real            73      73    75         -2         -2  no change                
+mochi    675413bb   real            65      65    66         -1         -1  no change                
+mochi    89ac798c   real            82      82    86         -4         -4  no change                
+mochi    7d9fde90   real            81      81    84         -3         -3  no change                
+Rally : >3 contacts on far side (contact #4 at frame 150). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 185 (attack). Missing same-side contact between them.
+Rally : >3 contacts on far side (contact #4 at frame 150). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 185 (attack). Missing same-side contact between them.
+cuco     ba7c42c5   real            37      37    18        +19        +19  no change                
+cuco     d0d64de1   synth            0      44    37        -37         +7  FIXED                    
+cuco     f127f3d5   real            84      84    85         -1         -1  no change                
+cuco     d2995693   real           120     120   121         -1         -1  no change                
+cuco     106e295e   real            84      84    85         -1         -1  no change                
+vivi     0e6d2151   real           103     103   108         -5         -5  no change                
+vivi     6d2e3df2   synth          219     182   180        +39         +2  FIXED                    
+Rally : >3 contacts on near side (contact #4 at frame 529). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 529). Possible missed net crossing or wrong court_side.
+vivi     1f09287f   synth           51      62    46         +5        +16  REGRESSION               
+vava     9db9cb6b   real            56      56    61         -5         -5  no change                
+vava     5f32d512   real            63      63    66         -3         -3  no change                
+vava     6560f8a3   real            40      40    40         +0         +0  no change                
+vava     64896fac   real            61      61    62         -1         -1  no change                
+vuvu     86c9106d   real           139     139    91        +48        +48  no change                
+vuvu     2391489e   real           238     238    80       +158       +158  no change                
+vuvu     4549a879   synth          119      90    87        +32         +3  FIXED                    
+vuvu     e25858c4   real           118     118   113         +5         +5  no change                
+vuvu     499c4ec8   real           118     118   121         -3         -3  no change                
+mumu     4c993a75   real            61      61    61         +0         +0  no change                
+Rally : >3 contacts on near side (contact #4 at frame 186). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 186). Possible missed net crossing or wrong court_side.
+mumu     9c1c438b   real            54      54    56         -2         -2  no change                
+Rally : >3 contacts on near side (contact #4 at frame 195). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 195). Possible missed net crossing or wrong court_side.
+mumu     f373c7c1   real            70      70    66         +4         +4  no change                
+mumu     6397a7d9   real            55      55    55         +0         +0  no change                
+mumu     e7020bac   real            50      50    50         +0         +0  no change                
+mumu     b96331f2   synth           32      74    72        -40         +2  FIXED                    
+riri     ef32c552   real           120     120   127         -7         -7  no change                
+riri     9d443de0   real           109     109   109         +0         +0  no change                
+riri     bc15bf77   real           124     124   129         -5         -5  no change                
+riri     53ca3586   real           113     113   111         +2         +2  no change                
+riri     de7136d1   synth          101     104   105         -4         -1  no change                
+riri     8de78319   real           103     103   103         +0         +0  no change                
+riri     c079b2be   real           130     130   126         +4         +4  no change                
+riri     f99f99f7   synth          114     114   113         +1         +1  no change                
+riri     9e1c8911   synth          100      88   131        -31        -43  no change                
+riri     bb6ca329   synth          115     123   116         -1         +7  no change                
+Rally : >3 contacts on near side (contact #4 at frame 352). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 352). Possible missed net crossing or wrong court_side.
+mech     fad29c31   real            51      51    53         -2         -2  no change                
+mech     3391198d   real            64      64    57         +7         +7  no change                
+Rally : >3 contacts on near side (contact #4 at frame 208). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 252). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 208). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 252). Possible missed net crossing or wrong court_side.
+mech     b9b93b87   real            48      48    48         +0         +0  no change                
+Rally : consecutive net-crossing actions at frame 276 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 276 (attack). Missing same-side contact between them.
+mech     6d5e04f4   real            50      50    46         +4         +4  no change                
+mech     0a95a5e8   real            55      55    57         -2         -2  no change                
+Rally : >3 contacts on far side (contact #4 at frame 605). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #5 at frame 699). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 605). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #5 at frame 699). Possible missed net crossing or wrong court_side.
+yiyi     4b7ad71f   real           104     104    95         +9         +9  no change                
+yiyi     eaaa5305   real            87      87    88         -1         -1  no change                
+macho    5e2e58fb   real            36      36    43         -7         -7  no change                
+macho    c094b07f   real            35      35    40         -5         -5  no change                
+----------------------------------------------------------------------------------------------------
+Synthetic: 33/52 -> 45/52 hits
+Real:      213/237 -> 213/237 hits
+Total fixed: +12 synth, +0 real
