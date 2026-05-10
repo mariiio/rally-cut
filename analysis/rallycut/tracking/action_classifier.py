@@ -1415,47 +1415,63 @@ def _make_synthetic_serve(
     net_y: float,
     rally_start_frame: int | None = None,
     server_track_id: int = -1,
+    sequence_probs: np.ndarray | None = None,
 ) -> ClassifiedAction:
     """Create a synthetic serve action for a missed serve.
 
-    Places the serve at the rally start frame when available and
-    reasonably close to the first detected contact, otherwise ~1s
-    (30 frames) before the first contact.
+    When `sequence_probs` is provided, places the serve at the MS-TCN++
+    serve-class peak in [rally_start, first_contact - 5] via
+    `pick_synthetic_serve_frame`. Falls back to the legacy placement
+    formula (rally_start when close, else first_contact_frame - 30) when
+    no peak exceeds the floor.
 
-    When server_track_id is provided (from position-based server
-    detection), the synthetic serve becomes an attributed contact
-    that anchors the action chain — enabling team-seeded
-    reattribution and correct downstream action classification.
+    The synthetic's `confidence` reflects the placement source:
+      0.40 — fallback formula, no server identity.
+      0.55 — fallback formula but server identified by position detection.
+      0.60 — frame chosen via MS-TCN++ peak (no server identity).
+      0.70 — frame chosen via MS-TCN++ peak + server identity.
 
     Args:
         serve_side: Court side of the serve ("near" or "far").
         first_contact_frame: Frame of the first detected contact.
         net_y: Net Y position.
-        rally_start_frame: Frame when the rally segment starts (from
-            detection). Used for more accurate serve placement.
-        server_track_id: Track ID of the server from position
-            detection. -1 if server could not be identified (e.g.
-            off-screen near-side serve).
+        rally_start_frame: Frame when the rally segment starts.
+        server_track_id: Track ID of the server. -1 if unknown.
+        sequence_probs: Optional MS-TCN++ per-frame action probs (NUM_CLASSES, T).
 
     Returns:
         A synthetic ClassifiedAction for the serve.
     """
+    from rallycut.tracking.synthetic_serve_placement import (
+        pick_synthetic_serve_frame,
+    )
+
     baseline_near, baseline_far = _serve_baselines(net_y)
 
-    # Use rally_start_frame if available and within ~3s (90 frames) of
-    # first contact. Beyond that, the rally start may be unreliable.
-    if (
-        rally_start_frame is not None
-        and rally_start_frame < first_contact_frame
-        and (first_contact_frame - rally_start_frame) <= 90
-    ):
-        serve_frame = rally_start_frame
-    else:
-        serve_frame = max(0, first_contact_frame - 30)
+    serve_frame: int | None = None
+    placement_confident = False
+    if sequence_probs is not None:
+        serve_frame = pick_synthetic_serve_frame(
+            sequence_probs=sequence_probs,
+            rally_start_frame=rally_start_frame or 0,
+            first_contact_frame=first_contact_frame,
+        )
+        placement_confident = serve_frame is not None
 
-    # Higher confidence when we have a real server identity from
-    # position detection (game-structure inference + attribution).
-    confidence = 0.55 if server_track_id >= 0 else 0.4
+    if serve_frame is None:
+        if (
+            rally_start_frame is not None
+            and rally_start_frame < first_contact_frame
+            and (first_contact_frame - rally_start_frame) <= 90
+        ):
+            serve_frame = rally_start_frame
+        else:
+            serve_frame = max(0, first_contact_frame - 30)
+
+    if placement_confident:
+        confidence = 0.70 if server_track_id >= 0 else 0.60
+    else:
+        confidence = 0.55 if server_track_id >= 0 else 0.40
 
     return ClassifiedAction(
         action_type=ActionType.SERVE,
@@ -1501,6 +1517,7 @@ class ActionClassifier:
         match_team_assignments: dict[int, int] | None = None,
         calibrator: CourtCalibrator | None = None,
         camera_height: float = 0.0,
+        sequence_probs: np.ndarray | None = None,
     ) -> RallyActions:
         """Classify all contacts in a rally into action types.
 
@@ -1516,6 +1533,9 @@ class ActionClassifier:
             match_team_assignments: Optional high-confidence match-level team mapping
                 (track_id → team). Used for team-aware touch counting.
             calibrator: Optional court calibrator for court-space server detection.
+            sequence_probs: Optional MS-TCN++ per-frame action probs (NUM_CLASSES, T).
+                When provided, passed to `_make_synthetic_serve` for peak-based
+                serve frame placement.
 
         Returns:
             RallyActions with classified actions.
@@ -1896,6 +1916,7 @@ class ActionClassifier:
                             contact_sequence.net_y,
                             rally_start_frame=start_frame,
                             server_track_id=server_pos_tid,
+                            sequence_probs=sequence_probs,
                         )
                         actions.append(synth)
                         action_type = ActionType.RECEIVE
@@ -2259,6 +2280,7 @@ def repair_action_sequence(
     rally_start_frame: int | None = ...,
     server_track_id: int = ...,
     disabled_rules: None = ...,
+    sequence_probs: np.ndarray | None = ...,
 ) -> list[ClassifiedAction]: ...
 
 
@@ -2270,6 +2292,7 @@ def repair_action_sequence(
     rally_start_frame: int | None = ...,
     server_track_id: int = ...,
     disabled_rules: set[int] = ...,
+    sequence_probs: np.ndarray | None = ...,
 ) -> tuple[list[ClassifiedAction], dict[int, int]]: ...
 
 
@@ -2280,6 +2303,7 @@ def repair_action_sequence(
     rally_start_frame: int | None = None,
     server_track_id: int = -1,
     disabled_rules: set[int] | None = None,
+    sequence_probs: np.ndarray | None = None,
 ) -> list[ClassifiedAction] | tuple[list[ClassifiedAction], dict[int, int]]:
     """Repair volleyball-illegal action sequences.
 
@@ -2378,6 +2402,7 @@ def repair_action_sequence(
                     opposite, serve.frame, net_y,
                     rally_start_frame=rally_start_frame,
                     server_track_id=server_track_id,
+                    sequence_probs=sequence_probs,
                 )
                 repaired[serve_idx] = _reclassify(serve, ActionType.RECEIVE)
                 repaired.insert(serve_idx, synthetic)
@@ -3484,6 +3509,7 @@ def classify_rally_actions(
         match_team_assignments=match_team_assignments,
         calibrator=calibrator,
         camera_height=camera_height,
+        sequence_probs=sequence_probs,
     )
 
     # Repair with only Rule 1 (consecutive recv/dig → set, +0.8pp LOO-CV).
