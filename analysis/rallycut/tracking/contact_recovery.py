@@ -12,6 +12,7 @@ Spec: docs/superpowers/specs/2026-05-10-coherence-driven-contact-recovery-design
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -462,3 +463,151 @@ def audit_violation_count_for_actions(
     ))
     _ = rally_start_frame  # currently unused — reserved for future per-rally rules
     return n
+
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RecoveryResult:
+    """Result of one rally's recovery attempt."""
+
+    rally_id: str
+    gaps_attempted: int = 0
+    recovered_actions: list[dict[str, Any]] = field(default_factory=list)
+    rejected_by_gate: int = 0
+    rejected_by_audit: int = 0
+    notes: list[str] = field(default_factory=list)
+
+    @property
+    def has_changes(self) -> bool:
+        return bool(self.recovered_actions)
+
+
+# Cap on the number of candidates we consider per gap. Sanity bound to catch
+# pathological rallies where enable_rescue floods the candidate list. If we
+# ever exceed this, log + skip the rally rather than commit anything.
+MAX_CANDIDATES_PER_GAP: int = 30
+
+
+def recover_rally(inputs: RallyInputs) -> RecoveryResult:
+    """Run coherence-driven recovery on one rally's persisted state.
+
+    Returns a `RecoveryResult` describing what (if anything) would be
+    inserted into `inputs.actions_json["actions"]`. Pure: does NOT mutate
+    the DB, does not mutate `inputs`.
+    """
+    from rallycut.tracking.contact_detector import (
+        ContactDetectionConfig,
+        detect_contacts,
+    )
+    from rallycut.tracking.sequence_action_runtime import get_sequence_probs
+
+    result = RecoveryResult(rally_id=inputs.rally_id)
+    actions: list[dict[str, Any]] = list(inputs.actions_json.get("actions") or [])
+    if not actions:
+        result.notes.append("no actions in rally")
+        return result
+
+    gaps = derive_gaps_from_actions(
+        actions=actions,
+        team_assignments=inputs.team_assignments_str,
+        rally_start_frame=inputs.rally_start_frame,
+    )
+    if not gaps:
+        return result
+
+    # Compute MS-TCN++ probs once. Returns None if the model isn't available;
+    # we abort recovery in that case (the seq gate is mandatory).
+    seq_probs = get_sequence_probs(
+        inputs.ball_positions, inputs.player_positions,
+        inputs.court_split_y, inputs.frame_count,
+        inputs.team_assignments_int, calibrator=None,
+    )
+    if seq_probs is None:
+        result.notes.append("sequence_probs unavailable; aborting")
+        return result
+
+    # Re-run detect_contacts once with enable_rescue=True. This produces the
+    # superset of accepted contacts (current default + conservative rescue
+    # branch). The recovery gates apply on top.
+    contact_seq = detect_contacts(
+        ball_positions=inputs.ball_positions,
+        player_positions=inputs.player_positions,
+        config=ContactDetectionConfig(),
+        net_y=inputs.court_split_y,
+        frame_count=inputs.frame_count or None,
+        team_assignments=inputs.team_assignments_int,
+        court_calibrator=None,
+        sequence_probs=seq_probs,
+        enable_rescue=True,
+        primary_track_ids=list(inputs.primary_track_ids) or None,
+    )
+
+    ball_conf_by_frame = {
+        bp.frame_number: bp.confidence for bp in inputs.ball_positions
+    }
+
+    # Process gaps in order of window size (smallest first). A commit may
+    # invalidate later gaps (the audit re-counts on the updated actions).
+    gaps_sorted = sorted(gaps, key=lambda g: g.hi - g.lo)
+    working_actions = list(actions)
+    baseline_violations = audit_violation_count_for_actions(
+        actions=working_actions,
+        team_assignments=inputs.team_assignments_str,
+        rally_start_frame=inputs.rally_start_frame,
+    )
+
+    for gap in gaps_sorted:
+        result.gaps_attempted += 1
+        existing_frames = [int(a.get("frame", 0)) for a in working_actions]
+        cands = filter_candidates_in_gap(
+            contacts=contact_seq.contacts,
+            gap=gap,
+            sequence_probs=seq_probs,
+            team_assignments_str=inputs.team_assignments_str,
+            ball_positions=ball_conf_by_frame,
+            existing_action_frames=existing_frames,
+        )
+        if len(cands) > MAX_CANDIDATES_PER_GAP:
+            result.notes.append(
+                f"gap {gap.rule} {gap.lo}-{gap.hi}: "
+                f"{len(cands)} candidates (cap {MAX_CANDIDATES_PER_GAP}); skipping"
+            )
+            result.rejected_by_gate += len(cands)
+            continue
+        if not cands:
+            result.rejected_by_gate += 1
+            continue
+
+        best = pick_best_candidate(cands)
+        if best is None:
+            result.rejected_by_gate += 1
+            continue
+        atype = action_type_for_candidate(
+            frame=best.frame, gap=gap, sequence_probs=seq_probs,
+        )
+        if atype is None:
+            result.rejected_by_gate += 1
+            continue
+
+        recovered = build_recovered_action_dict(
+            contact=best, action_type=atype,
+            team_assignments_str=inputs.team_assignments_str,
+        )
+        probe_actions = sorted(
+            working_actions + [recovered], key=lambda a: int(a.get("frame", 0)),
+        )
+        new_violations = audit_violation_count_for_actions(
+            actions=probe_actions,
+            team_assignments=inputs.team_assignments_str,
+            rally_start_frame=inputs.rally_start_frame,
+        )
+        if new_violations < baseline_violations:
+            result.recovered_actions.append(recovered)
+            working_actions = probe_actions
+            baseline_violations = new_violations
+        else:
+            result.rejected_by_audit += 1
+
+    return result

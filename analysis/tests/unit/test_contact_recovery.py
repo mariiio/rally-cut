@@ -13,12 +13,14 @@ from rallycut.tracking.contact_recovery import (
     GATE_SEQ_TAU,
     Gap,
     RallyInputs,
+    RecoveryResult,
     action_type_for_candidate,
     audit_violation_count_for_actions,
     derive_gaps_from_actions,
     filter_candidates_in_gap,
     load_rally_inputs,
     pick_best_candidate,
+    recover_rally,
 )
 
 
@@ -296,3 +298,28 @@ def test_audit_count_decreases_after_inserting_recovered_receive() -> None:
         actions=after_actions, team_assignments=team_assignments, rally_start_frame=0,
     )
     assert after < before, (before, after)
+
+
+@pytest.mark.integration
+def test_recover_rally_fb7f9c23() -> None:
+    """End-to-end on a known-bad rally — must recover a team-A contact in the gap.
+
+    Asserts the gap contact and team match (the firewall the recovery is
+    designed to enforce). Action type is left loose because MS-TCN++ argmax
+    can pick {receive, dig, set} on a serve-receive contact depending on
+    trajectory features — that's a per-class action-confusion problem
+    orthogonal to the recovery's job.
+    """
+    inputs = load_rally_inputs(FB7F9C23)
+    result = recover_rally(inputs)
+    assert isinstance(result, RecoveryResult)
+    # The audit-flagged gap on this rally is C-2 between frames ~276 and 306.
+    gap_recoveries = [
+        a for a in result.recovered_actions
+        if 276 <= a.get("frame", 0) <= 306 and a.get("team") == "A"
+    ]
+    assert gap_recoveries, f"no team-A contact recovered in C-2 gap; result={result}"
+    a0 = gap_recoveries[0]
+    assert a0.get("recovered") is True, a0
+    # Should be a non-serve action (we explicitly reject seq=serve outside C-3).
+    assert a0.get("action") in ("receive", "dig", "set", "attack", "block"), a0
