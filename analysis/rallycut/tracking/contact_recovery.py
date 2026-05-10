@@ -13,6 +13,7 @@ Spec: docs/superpowers/specs/2026-05-10-coherence-driven-contact-recovery-design
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 _POSSESSION_END_ACTIONS = frozenset({"attack", "serve"})
 
@@ -41,7 +42,7 @@ class Gap:
     expected_action: str | None
 
 
-def _team_for(action: dict, team_assignments: dict[str, str]) -> str | None:
+def _team_for(action: dict[str, Any], team_assignments: dict[str, str]) -> str | None:
     tid = action.get("playerTrackId")
     if tid is None:
         return None
@@ -55,7 +56,7 @@ def _other(team: str) -> str:
 
 def derive_gaps_from_actions(
     *,
-    actions: list[dict],
+    actions: list[dict[str, Any]],
     team_assignments: dict[str, str],
     rally_start_frame: int,
 ) -> list[Gap]:
