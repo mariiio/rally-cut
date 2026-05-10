@@ -539,10 +539,14 @@ def recover_rally(inputs: RallyInputs) -> RecoveryResult:
     # Re-run detect_contacts once with enable_rescue=True. This produces the
     # superset of accepted contacts (current default + conservative rescue
     # branch). The recovery gates apply on top.
+    # Override the GBM accept threshold to match the recovery's own gate
+    # (GATE_GBM_MIN=0.10). Without this override, candidates in the
+    # [0.10, 0.35) band never reach `filter_candidates_in_gap` because
+    # detect_contacts's standard threshold (0.35) rejects them upstream.
     contact_seq = detect_contacts(
         ball_positions=inputs.ball_positions,
         player_positions=inputs.player_positions,
-        config=ContactDetectionConfig(),
+        config=ContactDetectionConfig(classifier_threshold_override=GATE_GBM_MIN),
         net_y=inputs.court_split_y,
         frame_count=inputs.frame_count or None,
         team_assignments=inputs.team_assignments_int,
