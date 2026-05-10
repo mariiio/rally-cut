@@ -70,22 +70,25 @@ So fixing the placement saves **both** an FN and an FP per affected rally. **Fle
 
 ## Architecture
 
+### Calibration finding (2026-05-10): Signal B dropped
+
+A calibration pass on 194 correctly-placed real serves across the 66-video GT pool measured trajectory direction-change at serve vs non-serve frames. Distributions overlap heavily:
+
+- Serve frames: median 12.3°, min 0.0°, max 179.2°.
+- Pre-serve non-serve frames in the search window: median 175.5°, min 0.0°, max 180.0°.
+
+Direction-change is NOT discriminative for serves in beach volleyball. The deeper reason: the synthesis fallback fires precisely *because* per-frame trajectory signals were weak at the actual serve frame. Adding trajectory-based logic on top is fundamentally limited by the same root cause. Dropped from v1.1 design; revisit only with a different trajectory metric (e.g., velocity envelope, net-crossing detection) in v1.2.
+
+**v1.1 uses Signal A (MS-TCN++ serve-class peak) alone.**
+
 ### `pick_synthetic_serve_frame` algorithm
 
-Given `sequence_probs: np.ndarray (NUM_CLASSES, T)`, `ball_positions: list[BallPosition]`, `rally_start_frame: int`, `first_contact_frame: int`, `net_y: float`:
+Given `sequence_probs: np.ndarray (NUM_CLASSES, T)`, `rally_start_frame: int`, `first_contact_frame: int`:
 
 1. **Define the search window** as `[max(0, rally_start_frame), first_contact_frame - SEARCH_GUARD]` where `SEARCH_GUARD = 5` (don't pick a frame too close to the next detected contact — that creates dedup artifacts).
-2. **Signal A — MS-TCN++ serve peak**: scan `sequence_probs[SERVE_CLASS_INDEX, :]` over the window; record the argmax frame `f_seq` and its probability `p_seq`. Strong signal iff `p_seq >= 0.50`. (Lower than the typical 0.80 because serves are inherently harder for MS-TCN++ — see `contact_detection_ceiling.md`.)
-3. **Signal B — Ball trajectory burst**: scan ball_positions in the window; for each frame `f`, compute the windowed velocity over `[f-3, f+3]`; record the frame `f_ball` with the maximum velocity `v_max`. Strong signal iff `v_max >= BURST_THRESHOLD` (an empirical threshold; suggested initial value `0.012` in normalized-y per frame, calibrated against the 14 correctly-placed real serves on the panel — verify in the implementation plan).
-4. **Decision matrix**:
-   | Signal A strong | Signal B strong | Decision |
-   |:-:|:-:|---|
-   | ✓ | ✓ AND `\|f_seq − f_ball\| <= 30` | Return `f_ball` (trajectory is more frame-precise than seq peak) |
-   | ✓ | ✓ AND signals disagree | Return `f_seq` (seq more reliable on action class) — **and** set caller-visible `low_confidence: bool = True` |
-   | ✓ | ✗ | Return `f_seq` |
-   | ✗ | ✓ | Return `f_ball` |
-   | ✗ | ✗ | Return `None` (caller falls back to current formula) |
-5. **Sanity cap**: if the picked frame is more than `MAX_PRESERVE_FRAMES = 150` before `first_contact_frame` (5s+ at 30fps, 2.5s+ at 60fps), clamp to `first_contact_frame - 150`. Long pre-rally windows risk picking up a previous rally's tail.
+2. **Signal A — MS-TCN++ serve peak**: scan `sequence_probs[SERVE_SEQ_INDEX, :]` over the window; record the argmax frame `f_seq` and its probability `p_seq`. Strong signal iff `p_seq >= SERVE_SEQ_FLOOR = 0.50`. (Lower than the typical 0.80 because serves are inherently harder for MS-TCN++ — see `contact_detection_ceiling.md`.)
+3. **Decision**: if Signal A is strong, return `f_seq`. Otherwise return `None` (caller falls back to the current `first_contact_frame - 30` placeholder formula).
+4. **Sanity cap**: if `f_seq` is more than `MAX_PRESERVE_FRAMES = 150` before `first_contact_frame` (5s+ at 30fps, 2.5s+ at 60fps), clamp to `first_contact_frame - 150`. Long pre-rally windows risk picking up a previous rally's tail.
 
 ### `_make_synthetic_serve` signature change
 
@@ -109,13 +112,14 @@ def _make_synthetic_serve(
     rally_start_frame: int | None = None,
     server_track_id: int = -1,
     sequence_probs: np.ndarray | None = None,
-    ball_positions: list[BallPosition] | None = None,
 ) -> ClassifiedAction
 ```
 
-Body change: try `pick_synthetic_serve_frame` first when both new args are not None. If that returns a frame, use it. Otherwise fall back to the existing formula.
+Body change: try `pick_synthetic_serve_frame` first when `sequence_probs` is not None. If that returns a frame, use it. Otherwise fall back to the existing formula.
 
 When `pick_synthetic_serve_frame` returns a frame derived from a high-confidence signal, also bump the synthetic's `confidence` from the current `0.4 / 0.55` to `0.6 / 0.7` respectively — the synthetic now has signal-grounded placement, not a placeholder.
+
+(`ball_positions` was originally proposed as the input for Signal B; Signal B was dropped after calibration, so it's no longer needed.)
 
 ### Plumbing changes
 

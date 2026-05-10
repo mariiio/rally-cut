@@ -219,6 +219,8 @@ git commit -m "diag(serve): calibrate trajectory direction-change threshold for 
 - Create: `analysis/rallycut/tracking/synthetic_serve_placement.py`
 - Create: `analysis/tests/unit/test_synthetic_serve_placement.py`
 
+**v1.1 design note** (per Task 1 calibration outcome): Signal B (trajectory direction-change) was DROPPED — distributions overlap heavily and direction-change is not discriminative for serves. The helper uses Signal A (MS-TCN++ serve-class peak) only.
+
 - [ ] **Step 1: Write failing tests**
 
 Create `analysis/tests/unit/test_synthetic_serve_placement.py`:
@@ -230,97 +232,43 @@ from __future__ import annotations
 
 import numpy as np
 
-from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.synthetic_serve_placement import (
-    BURST_THRESHOLD,
+    MAX_PRESERVE_FRAMES,
     SEARCH_GUARD,
     SERVE_SEQ_FLOOR,
     pick_synthetic_serve_frame,
 )
 
 
-def _flat_ball_then_burst(burst_frame: int, n_frames: int) -> list[BallPosition]:
-    """Ball stays put for `burst_frame` frames, then moves sharply.
-
-    Generates a 90-degree direction change at burst_frame so
-    compute_direction_change produces a large value there.
-    """
-    pos = []
-    for f in range(n_frames):
-        if f < burst_frame:
-            pos.append(BallPosition(frame_number=f, x=0.50, y=0.50, confidence=1.0))
-        else:
-            # Move diagonally after the burst.
-            dx = (f - burst_frame) * 0.01
-            pos.append(BallPosition(frame_number=f, x=0.50 + dx, y=0.50 - dx, confidence=1.0))
-    return pos
-
-
-def test_returns_seq_peak_when_only_seq_signal() -> None:
-    """Strong seq peak, weak ball signal -> return seq frame."""
+def test_returns_seq_peak_frame() -> None:
+    """Strong seq peak in window -> return that frame."""
     seq = np.zeros((7, 400))
     seq[1, 80] = 0.85  # serve-class peak at frame 80 (index 1 in seq_probs)
-    ball = []  # empty -> no Signal B
     result = pick_synthetic_serve_frame(
         sequence_probs=seq,
-        ball_positions=ball,
         rally_start_frame=0,
         first_contact_frame=200,
     )
     assert result == 80, result
 
 
-def test_returns_burst_frame_when_only_ball_signal() -> None:
-    """Weak seq, strong burst -> return burst frame."""
-    seq = np.zeros((7, 400))  # all flat -> no Signal A
-    ball = _flat_ball_then_burst(burst_frame=120, n_frames=200)
+def test_returns_none_when_seq_peak_below_floor() -> None:
+    """Seq peak below SERVE_SEQ_FLOOR -> None."""
+    seq = np.zeros((7, 400))
+    seq[1, 80] = SERVE_SEQ_FLOOR - 0.01
     result = pick_synthetic_serve_frame(
         sequence_probs=seq,
-        ball_positions=ball,
         rally_start_frame=0,
         first_contact_frame=200,
     )
-    assert result is not None
-    assert abs(result - 120) <= 5, result
+    assert result is None
 
 
-def test_returns_burst_when_both_agree() -> None:
-    """Both signals strong + within 30 frames -> return burst (more precise)."""
+def test_returns_none_when_seq_probs_empty() -> None:
+    """All-zero seq probs -> argmax falls below floor -> None."""
     seq = np.zeros((7, 400))
-    seq[1, 100] = 0.85
-    ball = _flat_ball_then_burst(burst_frame=110, n_frames=200)
     result = pick_synthetic_serve_frame(
         sequence_probs=seq,
-        ball_positions=ball,
-        rally_start_frame=0,
-        first_contact_frame=200,
-    )
-    # When agreeing, helper returns burst frame.
-    assert result is not None
-    assert abs(result - 110) <= 5, result
-
-
-def test_returns_seq_when_signals_disagree_widely() -> None:
-    """Both strong but >30 frames apart -> return seq (more reliable on class)."""
-    seq = np.zeros((7, 400))
-    seq[1, 60] = 0.85
-    ball = _flat_ball_then_burst(burst_frame=180, n_frames=200)
-    result = pick_synthetic_serve_frame(
-        sequence_probs=seq,
-        ball_positions=ball,
-        rally_start_frame=0,
-        first_contact_frame=200,
-    )
-    assert result == 60, result
-
-
-def test_returns_none_when_neither_signal() -> None:
-    """No seq peak, no ball burst -> None (caller falls back)."""
-    seq = np.zeros((7, 400))
-    ball = [BallPosition(frame_number=f, x=0.5, y=0.5, confidence=1.0) for f in range(200)]
-    result = pick_synthetic_serve_frame(
-        sequence_probs=seq,
-        ball_positions=ball,
         rally_start_frame=0,
         first_contact_frame=200,
     )
@@ -328,13 +276,11 @@ def test_returns_none_when_neither_signal() -> None:
 
 
 def test_returns_none_when_search_window_collapses() -> None:
-    """rally_start ~ first_contact -> nothing to search."""
+    """rally_start within SEARCH_GUARD of first_contact -> nothing to search."""
     seq = np.zeros((7, 400))
     seq[1, 50] = 0.85
-    ball = []
     result = pick_synthetic_serve_frame(
         sequence_probs=seq,
-        ball_positions=ball,
         rally_start_frame=100,
         first_contact_frame=100 + SEARCH_GUARD - 1,
     )
@@ -342,25 +288,35 @@ def test_returns_none_when_search_window_collapses() -> None:
 
 
 def test_clamps_when_picked_frame_too_early() -> None:
-    """Picked frame > 150 frames before first_contact -> clamp to first_contact - 150."""
+    """Picked frame > MAX_PRESERVE_FRAMES before first_contact -> clamp."""
     seq = np.zeros((7, 400))
     seq[1, 10] = 0.85  # very early peak
-    ball = []
     result = pick_synthetic_serve_frame(
         sequence_probs=seq,
-        ball_positions=ball,
         rally_start_frame=0,
         first_contact_frame=300,
     )
-    # 300 - 150 = 150 max.
-    assert result == 150, result
+    assert result == 300 - MAX_PRESERVE_FRAMES, result
+
+
+def test_picks_only_within_search_window() -> None:
+    """Seq peaks outside [rally_start, first_contact - SEARCH_GUARD] are ignored."""
+    seq = np.zeros((7, 400))
+    seq[1, 350] = 0.95   # outside (after first_contact)
+    seq[1, 80] = 0.60    # inside, below the 350 peak globally but should still be argmax inside window
+    result = pick_synthetic_serve_frame(
+        sequence_probs=seq,
+        rally_start_frame=0,
+        first_contact_frame=200,
+    )
+    assert result == 80, result
 
 
 def test_constants_present() -> None:
-    """Smoke check: the calibrated constants are exposed for monkey-patching."""
-    assert isinstance(BURST_THRESHOLD, float)
+    """Smoke check: the constants are exposed for monkey-patching."""
     assert isinstance(SERVE_SEQ_FLOOR, float)
     assert isinstance(SEARCH_GUARD, int)
+    assert isinstance(MAX_PRESERVE_FRAMES, int)
 ```
 
 - [ ] **Step 2: Run failing tests**
@@ -374,24 +330,23 @@ Expected: FAIL (module not yet defined).
 
 - [ ] **Step 3: Implement the helper**
 
-Create `analysis/rallycut/tracking/synthetic_serve_placement.py` with this content (replace `BURST_THRESHOLD = 50.0` with the value from Task 1):
+Create `analysis/rallycut/tracking/synthetic_serve_placement.py` with this content:
 
 ```python
-"""Two-signal frame placement for synthetic serves.
+"""Frame placement for synthetic serves via MS-TCN++ serve-class peak.
 
 Used by `_make_synthetic_serve` to land synthetic serves at the actual
-serve frame instead of the placeholder `first_contact_frame - 30`. Two
-independent signals:
+serve frame instead of the placeholder `first_contact_frame - 30`.
 
-  Signal A — MS-TCN++ serve-class peak in the search window.
-  Signal B — Ball trajectory direction-change burst in the search window.
+Signal: MS-TCN++ serve-class peak in [rally_start, first_contact - SEARCH_GUARD].
+Strong iff peak probability >= SERVE_SEQ_FLOOR. Returns None when no peak
+exceeds the floor (caller falls back to the legacy formula).
 
-Decision matrix (see spec §"Architecture"):
-  Both strong + |fA - fB| <= 30: return fB (trajectory more frame-precise).
-  Both strong + disagree:        return fA (seq more reliable on class).
-  Only A strong: return fA.
-  Only B strong: return fB.
-  Neither:       return None (caller falls back to placeholder formula).
+(An earlier design also considered a ball-trajectory direction-change
+"burst" signal, but the 2026-05-10 calibration on 194 correctly-placed
+real serves found direction-change is not discriminative — pre-rally
+non-serve frames routinely exceed the direction-change of real serves.
+Dropped from v1.1; revisit with a different trajectory metric in v1.2.)
 
 Spec: docs/superpowers/specs/2026-05-10-synthetic-serve-placement-design.md
 """
@@ -401,95 +356,48 @@ from __future__ import annotations
 import numpy as np
 
 from rallycut.actions.trajectory_features import ACTION_TYPES
-from rallycut.tracking.ball_tracker import BallPosition
-from rallycut.tracking.contact_detector import compute_direction_change
 
-# Constants (calibrated 2026-05-10 — see
-# scripts/calibrate_serve_burst_threshold.py + the spec):
 SERVE_SEQ_FLOOR: float = 0.50
-BURST_THRESHOLD: float = 50.0  # degrees; replaced by Task 1's calibrated value
-SEARCH_GUARD: int = 5  # don't pick a frame within SEARCH_GUARD of first_contact
-MAX_PRESERVE_FRAMES: int = 150  # cap on how early a synthetic can be relative to first_contact
-AGREEMENT_WINDOW: int = 30  # frames within which seq and burst signals "agree"
+SEARCH_GUARD: int = 5
+MAX_PRESERVE_FRAMES: int = 150
 
 # Index of "serve" in the seq_probs array (offset by 1 for the bg row).
 _SERVE_SEQ_INDEX: int = ACTION_TYPES.index("serve") + 1
 
 
-def _seq_serve_peak(
-    sequence_probs: np.ndarray, lo: int, hi: int
-) -> tuple[int, float]:
-    """Argmax frame and value in sequence_probs[SERVE, lo:hi+1]. (-1, 0.0) if invalid."""
-    if (
-        sequence_probs.ndim != 2
-        or sequence_probs.shape[0] <= _SERVE_SEQ_INDEX
-        or hi < lo
-    ):
-        return -1, 0.0
-    t = sequence_probs.shape[1]
-    hi_clip = min(t - 1, hi)
-    if hi_clip < lo:
-        return -1, 0.0
-    slice_ = sequence_probs[_SERVE_SEQ_INDEX, lo:hi_clip + 1]
-    if slice_.size == 0:
-        return -1, 0.0
-    rel = int(np.argmax(slice_))
-    return lo + rel, float(slice_[rel])
-
-
-def _trajectory_burst_peak(
-    ball_positions: list[BallPosition], lo: int, hi: int
-) -> tuple[int, float]:
-    """Argmax direction-change frame in [lo, hi]. (-1, 0.0) if no signal."""
-    if hi < lo or not ball_positions:
-        return -1, 0.0
-    bbf = {bp.frame_number: bp for bp in ball_positions}
-    best_f, best_v = -1, 0.0
-    for f in range(lo, hi + 1):
-        if f not in bbf:
-            continue
-        v = compute_direction_change(bbf, f, 6)
-        if v > best_v:
-            best_f, best_v = f, v
-    return best_f, best_v
-
-
 def pick_synthetic_serve_frame(
     *,
     sequence_probs: np.ndarray,
-    ball_positions: list[BallPosition],
     rally_start_frame: int,
     first_contact_frame: int,
 ) -> int | None:
-    """Pick a frame for a synthetic serve using two-signal evidence.
+    """Pick a frame for a synthetic serve from the MS-TCN++ serve peak.
 
     Returns a frame in `[rally_start, first_contact_frame - SEARCH_GUARD]`
-    or None when neither signal is strong enough.
+    when the serve-class peak in that window exceeds SERVE_SEQ_FLOOR.
+    Returns None otherwise (caller falls back to the legacy placeholder).
     """
     lo = max(0, rally_start_frame)
     hi = first_contact_frame - SEARCH_GUARD
     if hi < lo:
         return None
-
-    f_seq, p_seq = _seq_serve_peak(sequence_probs, lo, hi)
-    f_burst, v_burst = _trajectory_burst_peak(ball_positions, lo, hi)
-
-    seq_strong = f_seq >= 0 and p_seq >= SERVE_SEQ_FLOOR
-    burst_strong = f_burst >= 0 and v_burst >= BURST_THRESHOLD
-
-    if seq_strong and burst_strong:
-        if abs(f_seq - f_burst) <= AGREEMENT_WINDOW:
-            picked = f_burst  # trajectory is more frame-precise
-        else:
-            picked = f_seq    # seq more reliable on action class
-    elif seq_strong:
-        picked = f_seq
-    elif burst_strong:
-        picked = f_burst
-    else:
+    if (
+        sequence_probs.ndim != 2
+        or sequence_probs.shape[0] <= _SERVE_SEQ_INDEX
+    ):
         return None
-
-    # Sanity cap — don't pick a frame absurdly early relative to first_contact.
+    t = sequence_probs.shape[1]
+    hi_clip = min(t - 1, hi)
+    if hi_clip < lo:
+        return None
+    slice_ = sequence_probs[_SERVE_SEQ_INDEX, lo:hi_clip + 1]
+    if slice_.size == 0:
+        return None
+    rel = int(np.argmax(slice_))
+    p_seq = float(slice_[rel])
+    if p_seq < SERVE_SEQ_FLOOR:
+        return None
+    picked = lo + rel
     earliest = first_contact_frame - MAX_PRESERVE_FRAMES
     if picked < earliest:
         picked = earliest
@@ -547,22 +455,20 @@ def _make_synthetic_serve(
     rally_start_frame: int | None = None,
     server_track_id: int = -1,
     sequence_probs: np.ndarray | None = None,
-    ball_positions: list[BallPosition] | None = None,
 ) -> ClassifiedAction:
     """Create a synthetic serve action for a missed serve.
 
-    When `sequence_probs` and `ball_positions` are provided, places the
-    serve at a frame derived from two-signal evidence (MS-TCN++ serve-class
-    peak + ball trajectory direction-change burst) via
+    When `sequence_probs` is provided, places the serve at the MS-TCN++
+    serve-class peak in [rally_start, first_contact - 5] via
     `pick_synthetic_serve_frame`. Falls back to the legacy placement
     formula (rally_start when close, else first_contact_frame - 30) when
-    either signal is missing or both are weak.
+    no peak exceeds the floor.
 
     The synthetic's `confidence` reflects the placement source:
-      0.40 — fully fallback (no signal-based frame).
-      0.55 — fallback frame but server identified by position detection.
-      0.60 — frame chosen via two-signal evidence (no server identity).
-      0.70 — frame chosen via two-signal evidence + server identity.
+      0.40 — fallback formula, no server identity.
+      0.55 — fallback formula but server identified by position detection.
+      0.60 — frame chosen via MS-TCN++ peak (no server identity).
+      0.70 — frame chosen via MS-TCN++ peak + server identity.
 
     Args:
         serve_side: Court side of the serve ("near" or "far").
@@ -571,7 +477,6 @@ def _make_synthetic_serve(
         rally_start_frame: Frame when the rally segment starts.
         server_track_id: Track ID of the server. -1 if unknown.
         sequence_probs: Optional MS-TCN++ per-frame action probs (NUM_CLASSES, T).
-        ball_positions: Optional ball positions used for the trajectory signal.
 
     Returns:
         A synthetic ClassifiedAction for the serve.
@@ -584,10 +489,9 @@ def _make_synthetic_serve(
 
     serve_frame: int | None = None
     placement_confident = False
-    if sequence_probs is not None and ball_positions is not None:
+    if sequence_probs is not None:
         serve_frame = pick_synthetic_serve_frame(
             sequence_probs=sequence_probs,
-            ball_positions=ball_positions,
             rally_start_frame=rally_start_frame or 0,
             first_contact_frame=first_contact_frame,
         )
@@ -603,7 +507,6 @@ def _make_synthetic_serve(
         else:
             serve_frame = max(0, first_contact_frame - 30)
 
-    # Confidence reflects placement source AND server identity availability.
     if placement_confident:
         confidence = 0.70 if server_track_id >= 0 else 0.60
     else:
@@ -644,7 +547,6 @@ synth = _make_synthetic_serve(
     rally_start_frame=start_frame,
     server_track_id=server_pos_tid,
     sequence_probs=sequence_probs,
-    ball_positions=contact_sequence.ball_positions,
 )
 ```
 
@@ -668,11 +570,10 @@ synthetic = _make_synthetic_serve(
     rally_start_frame=rally_start_frame,
     server_track_id=server_track_id,
     sequence_probs=sequence_probs,
-    ball_positions=ball_positions,
 )
 ```
 
-`_repair_serve_chain` will need `sequence_probs` and `ball_positions` parameters. Add them to its signature with `= None` defaults so older callers don't break, then pass them at every internal `_repair_serve_chain` invocation.
+`_repair_serve_chain` will need a `sequence_probs` parameter. Add it to the signature with `= None` default so older callers don't break, then pass it at every internal `_repair_serve_chain` invocation.
 
 - [ ] **Step 3: Verify imports**
 
