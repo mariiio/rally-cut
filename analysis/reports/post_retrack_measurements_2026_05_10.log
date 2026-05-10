@@ -1,0 +1,216 @@
+[Sun May 10 21:07:17 IDT 2026] retrack_corrupted_rallies.py finished — running post-retrack measurements
+
+================================================================================
+MEASUREMENT 1: Post-retrack panel F1
+================================================================================
+video  rally       #GT  #Pred  matched   FN   FP
+------------------------------------------------------------
+ruru   be3134ba      8      5        4    4    1
+ruru   57a588b2      4      0        0    4    0
+ruru   cc2b967b      5      0        0    5    0
+ruru   3e61838c     11      0        0   11    0
+ruru   3655eb69      7      0        0    7    0
+ruru   9d5f5152     14      0        0   14    0
+tata   8b0b9e13     18     18       18    0    0
+tata   09553ef1      4      4        4    0    0
+tata   ad7cccbf      8      0        0    8    0
+tata   97c42190      5      5        5    0    0
+tata   e50f127e      4      5        4    0    1
+tata   30ffb876      1      0        0    1    0
+tata   8c802c26      9      9        9    0    0
+tata   724ead56      8      0        0    8    0
+tata   03144243      7      0        0    7    0
+tata   4bfafd6d      3      3        3    0    0
+tata   db841666      5      0        0    5    0
+vovo   38d9e796      5      5        2    3    3
+vovo   55c2c6e5      7      0        0    7    0
+vovo   e4a5349e     14      0        0   14    0
+vovo   c039ef17      1      0        0    1    0
+wuwu   37e14e1e      4      4        4    0    0
+wuwu   fb7f9c23      4      3        3    1    0
+wuwu   99a01ce4     11      9        8    3    1
+wuwu   5e8af221      4      4        4    0    0
+wawa   7094136a      5      0        0    5    0
+wawa   8c49e480      8      0        0    8    0
+wawa   fb6e37bf      5      0        0    5    0
+wawa   7f0f540a     10      0        0   10    0
+wawa   06c13117      5      0        0    5    0
+------------------------------------------------------------
+TOTAL: GT=204  Pred=74  matched=68  FN=136  FP=6  F1=0.489
+
+Reference baselines from earlier in session:
+  Pre-GT-fix:           F1=0.862  35 FN  19 FP  (GT included drift on ruru:3655eb69)
+  Post-GT-fix:          F1=0.898  28 FN  12 FP  (after fixing ruru entry)
+  Post-deploy + drift:  F1=??     ??     ??    (corrupted rallies were 0-action)
+  Post-retrack:         F1=0.489  136 FN  6 FP  (CURRENT)
+
+================================================================================
+MEASUREMENT 2: Fleet synth-vs-real serve census (post-retrack)
+================================================================================
+Fleet rallies with GT serve: 335
+  with pred serve: 290 (synthetic: 46, real: 244)
+  no pred serve:   45
+
+Hit rate (within +-15 frames of GT):
+  Synthetic: 37/46 (80%)
+  Real:      213/244 (87%)
+  Total:     250/290 hit (vs 335 GT-labeled)
+
+Reference baselines from earlier in session:
+  Pre-deploy stored:  44 synth + 194 real = 238 hit / 313 total / 22 no-pred
+  Post-deploy stored: 37 synth + 213 real = 250 hit / 290 total / 45 no-pred
+  Post-retrack:       46 synth + 244 real = 250 hit / 290 total / 45 no-pred
+
+================================================================================
+MEASUREMENT 3: Panel FN candidate-pool diagnostic
+(For each panel FN, does detect_contacts produce a candidate within +-15 of GT?)
+================================================================================
+video  rally       fn_frame candidate?  nearest   
+-------------------------------------------------------
+ruru   be3134ba         287 NO_CAND     -         
+ruru   be3134ba         646 NO_CAND     -         
+ruru   be3134ba         698 NO_CAND     -         
+ruru   be3134ba         740 NO_CAND     -         
+ruru   57a588b2         296 NO_CAND     -         
+ruru   57a588b2         367 NO_CAND     -         
+ruru   57a588b2         467 NO_CAND     -         
+ruru   57a588b2         494 NO_CAND     -         
+ruru   cc2b967b         224 NO_CAND     -         
+ruru   cc2b967b         295 NO_CAND     -         
+ruru   cc2b967b         394 NO_CAND     -         
+ruru   cc2b967b         488 NO_CAND     -         
+ruru   cc2b967b         557 NO_CAND     -         
+ruru   3e61838c         260 NO_CAND     -         
+ruru   3e61838c         367 NO_CAND     -         
+ruru   3e61838c         457 NO_CAND     -         
+ruru   3e61838c         501 NO_CAND     -         
+ruru   3e61838c         629 NO_CAND     -         
+ruru   3e61838c         726 NO_CAND     -         
+ruru   3e61838c         823 NO_CAND     -         
+ruru   3e61838c         894 NO_CAND     -         
+ruru   3e61838c         983 NO_CAND     -         
+ruru   3e61838c        1083 NO_CAND     -         
+ruru   3e61838c        1147 NO_CAND     -         
+ruru   3655eb69         143 NO_CAND     -         
+ruru   3655eb69         211 NO_CAND     -         
+ruru   3655eb69         312 NO_CAND     -         
+ruru   3655eb69         413 NO_CAND     -         
+ruru   3655eb69         454 NO_CAND     -         
+ruru   3655eb69         528 NO_CAND     -         
+ruru   3655eb69         621 NO_CAND     -         
+ruru   9d5f5152         240 NO_CAND     -         
+ruru   9d5f5152         323 NO_CAND     -         
+ruru   9d5f5152         416 NO_CAND     -         
+ruru   9d5f5152         511 NO_CAND     -         
+ruru   9d5f5152         554 NO_CAND     -         
+ruru   9d5f5152         658 NO_CAND     -         
+ruru   9d5f5152         772 NO_CAND     -         
+ruru   9d5f5152         812 NO_CAND     -         
+ruru   9d5f5152         878 NO_CAND     -         
+ruru   9d5f5152         983 NO_CAND     -         
+ruru   9d5f5152        1054 NO_CAND     -         
+ruru   9d5f5152        1145 NO_CAND     -         
+ruru   9d5f5152        1204 NO_CAND     -         
+ruru   9d5f5152        1290 NO_CAND     -         
+tata   ad7cccbf          85 NO_CAND     -         
+tata   ad7cccbf         120 NO_CAND     -         
+tata   ad7cccbf         171 NO_CAND     -         
+tata   ad7cccbf         219 NO_CAND     -         
+tata   ad7cccbf         244 NO_CAND     -         
+tata   ad7cccbf         297 NO_CAND     -         
+tata   ad7cccbf         348 NO_CAND     -         
+tata   ad7cccbf         364 NO_CAND     -         
+tata   30ffb876          54 NO_CAND     -         
+tata   724ead56          38 NO_CAND     -         
+tata   724ead56          76 NO_CAND     -         
+tata   724ead56         121 NO_CAND     -         
+tata   724ead56         176 NO_CAND     -         
+tata   724ead56         246 NO_CAND     -         
+tata   724ead56         290 NO_CAND     -         
+tata   724ead56         340 NO_CAND     -         
+tata   724ead56         351 NO_CAND     -         
+tata   03144243          47 NO_CAND     -         
+tata   03144243          95 NO_CAND     -         
+tata   03144243         142 NO_CAND     -         
+tata   03144243         176 NO_CAND     -         
+tata   03144243         210 NO_CAND     -         
+tata   03144243         247 NO_CAND     -         
+tata   03144243         299 NO_CAND     -         
+tata   db841666          86 NO_CAND     -         
+tata   db841666         122 NO_CAND     -         
+tata   db841666         172 NO_CAND     -         
+tata   db841666         219 NO_CAND     -         
+tata   db841666         223 NO_CAND     -         
+vovo   38d9e796         166 NO_CAND     -         
+vovo   38d9e796         379 NO_CAND     -         
+vovo   38d9e796         432 NO_CAND     -         
+vovo   55c2c6e5          23 NO_CAND     -         
+vovo   55c2c6e5         113 NO_CAND     -         
+vovo   55c2c6e5         211 NO_CAND     -         
+vovo   55c2c6e5         312 NO_CAND     -         
+vovo   55c2c6e5         353 NO_CAND     -         
+vovo   55c2c6e5         441 NO_CAND     -         
+vovo   55c2c6e5         522 NO_CAND     -         
+vovo   e4a5349e         104 NO_CAND     -         
+vovo   e4a5349e         184 NO_CAND     -         
+vovo   e4a5349e         313 NO_CAND     -         
+vovo   e4a5349e         426 NO_CAND     -         
+vovo   e4a5349e         518 NO_CAND     -         
+vovo   e4a5349e         556 NO_CAND     -         
+vovo   e4a5349e         679 NO_CAND     -         
+vovo   e4a5349e         771 NO_CAND     -         
+vovo   e4a5349e         834 NO_CAND     -         
+vovo   e4a5349e         937 NO_CAND     -         
+vovo   e4a5349e        1033 NO_CAND     -         
+vovo   e4a5349e        1090 NO_CAND     -         
+vovo   e4a5349e        1181 NO_CAND     -         
+vovo   e4a5349e        1280 NO_CAND     -         
+vovo   c039ef17         201 NO_CAND     -         
+wuwu   fb7f9c23         230 NO_CAND     -         
+wuwu   99a01ce4         813 NO_CAND     -         
+wuwu   99a01ce4         916 NO_CAND     -         
+wuwu   99a01ce4         986 NO_CAND     -         
+wawa   7094136a          49 NO_CAND     -         
+wawa   7094136a         121 NO_CAND     -         
+wawa   7094136a         209 NO_CAND     -         
+wawa   7094136a         308 NO_CAND     -         
+wawa   7094136a         367 NO_CAND     -         
+wawa   8c49e480         101 NO_CAND     -         
+wawa   8c49e480         186 NO_CAND     -         
+wawa   8c49e480         251 NO_CAND     -         
+wawa   8c49e480         338 NO_CAND     -         
+wawa   8c49e480         434 NO_CAND     -         
+wawa   8c49e480         540 NO_CAND     -         
+wawa   8c49e480         629 NO_CAND     -         
+wawa   8c49e480         684 NO_CAND     -         
+wawa   fb6e37bf         210 NO_CAND     -         
+wawa   fb6e37bf         277 NO_CAND     -         
+wawa   fb6e37bf         354 NO_CAND     -         
+wawa   fb6e37bf         441 NO_CAND     -         
+wawa   fb6e37bf         479 NO_CAND     -         
+wawa   7f0f540a         197 NO_CAND     -         
+wawa   7f0f540a         281 NO_CAND     -         
+wawa   7f0f540a         389 NO_CAND     -         
+wawa   7f0f540a         478 NO_CAND     -         
+wawa   7f0f540a         519 NO_CAND     -         
+wawa   7f0f540a         619 NO_CAND     -         
+wawa   7f0f540a         696 NO_CAND     -         
+wawa   7f0f540a         766 NO_CAND     -         
+wawa   7f0f540a         868 NO_CAND     -         
+wawa   7f0f540a         973 NO_CAND     -         
+wawa   06c13117         182 NO_CAND     -         
+wawa   06c13117         255 NO_CAND     -         
+wawa   06c13117         365 NO_CAND     -         
+wawa   06c13117         514 NO_CAND     -         
+wawa   06c13117         625 NO_CAND     -         
+-------------------------------------------------------
+Total panel FNs: 136
+  Candidate exists (was rejected/filtered): 0 (0%)
+  No candidate generated:                    136 (100%)
+
+Reference: earlier diagnostic (pre-retrack, possibly contaminated by
+corrupted rallies) reported 94% out_of_gap (0 candidates near FN frames).
+If post-retrack 'no_candidate' rate is much lower, that finding was
+inflated by the corruption — recoverable signal exists on healthy data.
+
+[Sun May 10 21:07:21 IDT 2026] Done.
