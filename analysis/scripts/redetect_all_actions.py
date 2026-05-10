@@ -27,6 +27,7 @@ from rallycut.tracking.action_classifier import classify_rally_actions
 from rallycut.tracking.ball_tracker import BallPosition as BallPos
 from rallycut.tracking.contact_detector import detect_contacts
 from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
+from rallycut.tracking.sequence_action_runtime import get_sequence_probs
 
 
 def main() -> None:
@@ -130,6 +131,16 @@ def main() -> None:
         match_teams = match_teams_by_rally.get(rally_id)
 
         try:
+            # Compute MS-TCN++ probs once. Required for v1.1 synthetic-serve
+            # placement AND for apply_sequence_override (the post-Viterbi
+            # action-type correction). Returns None if weights are missing —
+            # in that case both effects degrade gracefully.
+            sequence_probs = get_sequence_probs(
+                ball_positions, player_positions, court_split_y,
+                frame_count or 0, match_teams,
+                calibrator=calibrators.get(video_id),
+            )
+
             contacts = detect_contacts(
                 ball_positions=ball_positions,
                 player_positions=player_positions,
@@ -137,12 +148,14 @@ def main() -> None:
                 frame_count=frame_count or None,
                 court_calibrator=calibrators.get(video_id),
                 team_assignments=match_teams,
+                sequence_probs=sequence_probs,
             )
 
             rally_actions = classify_rally_actions(
                 contacts, rally_id,
                 use_classifier=True,
                 match_team_assignments=match_teams,
+                sequence_probs=sequence_probs,
             )
 
             # Serialize
