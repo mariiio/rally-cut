@@ -253,14 +253,6 @@ class ContactDetectionConfig:
     # monkey-patch them). Empirical basis: memory/fn_sequence_signal_2026_04.md.
     enable_sequence_recovery: bool = True
 
-    # Recovery-pass override: when set (e.g., 0.10), lowers the GBM classifier
-    # accept threshold for THIS call. Default None preserves production behavior
-    # exactly. Used by `contact_recovery.recover_rally` to surface candidates in
-    # the [0.10, 0.35) band that the standard threshold rejects but coherence-
-    # driven recovery wants to inspect. The recovery's own gates (gbm >= 0.10
-    # AND seq >= 0.80 AND team-match etc) apply on top.
-    classifier_threshold_override: float | None = None
-
 
 @dataclass
 class Contact:
@@ -2545,14 +2537,6 @@ def detect_contacts(
             )
             results = classifier.predict([features])
             is_validated, confidence = results[0]
-            # Recovery callers (cfg.classifier_threshold_override is not None) can
-            # loosen the standard threshold for THIS call. We OR in the override-based
-            # accept; the production threshold check inside `predict()` still runs.
-            if (
-                cfg.classifier_threshold_override is not None
-                and confidence >= cfg.classifier_threshold_override
-            ):
-                is_validated = True
             is_validated = _apply_rescue_branch(
                 is_validated,
                 confidence,

@@ -23,7 +23,6 @@ from rallycut.cli.commands.preflight import preflight as preflight_command
 from rallycut.cli.commands.preview_check import preview_check as preview_check_command
 from rallycut.cli.commands.profile import profile as profile_command
 from rallycut.cli.commands.reattribute_actions import reattribute_actions_cmd
-from rallycut.cli.commands.recover_missed_contacts import recover_missed_contacts_cmd
 from rallycut.cli.commands.reinterpolate_primary import reinterpolate_primary_cmd
 from rallycut.cli.commands.remap_track_ids import remap_track_ids_cmd
 from rallycut.cli.commands.repair_identities import repair_identities_cmd
@@ -59,7 +58,6 @@ app.command(name="audit-pid-invariants")(audit_pid_invariants_cmd)
 app.command(name="cleanup-team-assignments")(cleanup_team_assignments_cmd)
 app.command(name="cleanup-stale-attribution")(cleanup_stale_attribution_cmd)
 app.command(name="cleanup-team-labels-by-majority")(cleanup_team_labels_by_majority_cmd)
-app.command(name="recover-missed-contacts")(recover_missed_contacts_cmd)
 app.add_typer(evaluate_tracking_app, name="evaluate-tracking")
 app.add_typer(label_app, name="label")
 app.add_typer(evaluate_app, name="evaluate")
