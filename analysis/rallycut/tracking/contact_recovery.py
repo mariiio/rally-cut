@@ -496,6 +496,14 @@ def recover_rally(inputs: RallyInputs) -> RecoveryResult:
     Returns a `RecoveryResult` describing what (if anything) would be
     inserted into `inputs.actions_json["actions"]`. Pure: does NOT mutate
     the DB, does not mutate `inputs`.
+
+    Known limitation: the gap windows derived from C-1/C-2/C-3 are
+    bounded by EXISTING actions in the rally (or by the rally start for
+    C-3). If a missed contact lies outside any such window — for example,
+    when the first detected action is at the wrong frame and the true
+    missing contact is BEFORE it — the gap-rescue cannot reach it.
+    Per spec §"Out of scope", v1 does not address upstream wrong-frame
+    contacts; rally `fb7f9c23` is the canonical instance.
     """
     from rallycut.tracking.contact_detector import (
         ContactDetectionConfig,
