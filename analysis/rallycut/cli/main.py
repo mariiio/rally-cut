@@ -7,6 +7,9 @@ from rallycut.cli.commands.analyze import app as analyze_app
 from rallycut.cli.commands.audit_pid_invariants import audit_pid_invariants_cmd
 from rallycut.cli.commands.cleanup_stale_attribution import cleanup_stale_attribution_cmd
 from rallycut.cli.commands.cleanup_team_assignments import cleanup_team_assignments_cmd
+from rallycut.cli.commands.cleanup_team_labels_by_majority import (
+    cleanup_team_labels_by_majority_cmd,
+)
 from rallycut.cli.commands.compare_tracking import compare_tracking as compare_tracking_command
 from rallycut.cli.commands.compute_match_stats import compute_match_stats_cmd
 from rallycut.cli.commands.cut import cut as cut_command
@@ -52,6 +55,7 @@ app.command(name="repair-identities")(repair_identities_cmd)
 app.command(name="audit-pid-invariants")(audit_pid_invariants_cmd)
 app.command(name="cleanup-team-assignments")(cleanup_team_assignments_cmd)
 app.command(name="cleanup-stale-attribution")(cleanup_stale_attribution_cmd)
+app.command(name="cleanup-team-labels-by-majority")(cleanup_team_labels_by_majority_cmd)
 app.add_typer(evaluate_tracking_app, name="evaluate-tracking")
 app.add_typer(label_app, name="label")
 app.add_typer(evaluate_app, name="evaluate")
