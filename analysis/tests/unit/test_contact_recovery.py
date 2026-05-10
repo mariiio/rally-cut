@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import numpy as np
 import pytest
 
@@ -11,6 +13,8 @@ from rallycut.tracking.contact_recovery import (
     GATE_SEQ_TAU,
     Gap,
     RallyInputs,
+    action_type_for_candidate,
+    audit_violation_count_for_actions,
     derive_gaps_from_actions,
     filter_candidates_in_gap,
     load_rally_inputs,
@@ -18,7 +22,7 @@ from rallycut.tracking.contact_recovery import (
 )
 
 
-def _action(frame: int, action: str, player_track_id: int) -> dict:
+def _action(frame: int, action: str, player_track_id: int) -> dict[str, int | str]:
     return {
         "frame": frame,
         "action": action,
@@ -243,3 +247,52 @@ def test_pick_best_prefers_highest_gbm() -> None:
     ]
     best = pick_best_candidate(contacts)
     assert best is not None and best.frame == 295
+
+
+def test_action_type_uses_seq_argmax_when_not_c3() -> None:
+    """action_type_for_candidate uses seq argmax when not C-3."""
+    seq_probs = np.zeros((7, 400))
+    # ACTION_TYPES = ["serve", "receive", "set", "attack", "dig", "block"]
+    # Index in seq_probs (with bg at 0): receive == 2.
+    seq_probs[2, 290] = 0.9
+    gap = Gap(rule="C-2", lo=276, hi=306, expected_team="A", expected_action=None)
+    assert action_type_for_candidate(frame=290, gap=gap, sequence_probs=seq_probs) == "receive"
+
+
+def test_action_type_forces_serve_for_c3() -> None:
+    """action_type_for_candidate forces serve for C-3."""
+    seq_probs = np.zeros((7, 400))
+    seq_probs[3, 90] = 0.8  # set is the argmax
+    gap = Gap(rule="C-3", lo=0, hi=80, expected_team=None, expected_action="serve")
+    assert action_type_for_candidate(frame=90, gap=gap, sequence_probs=seq_probs) == "serve"
+
+
+def test_action_type_rejects_seq_argmax_serve_in_non_c3_gap() -> None:
+    """action_type_for_candidate rejects serve argmax outside C-3."""
+    seq_probs = np.zeros((7, 400))
+    seq_probs[1, 290] = 0.9  # serve argmax
+    gap = Gap(rule="C-2", lo=276, hi=306, expected_team="A", expected_action=None)
+    assert action_type_for_candidate(frame=290, gap=gap, sequence_probs=seq_probs) is None
+
+
+def test_audit_count_decreases_after_inserting_recovered_receive() -> None:
+    """audit_violation_count_for_actions reflects recovery impact."""
+    # Reproduce the fb7f9c23 shape: serve(B) -> set(B) -> attack(A).
+    actions = [
+        {"frame": 276, "action": "serve", "playerTrackId": 1},
+        {"frame": 306, "action": "set", "playerTrackId": 2},
+        {"frame": 398, "action": "attack", "playerTrackId": 4},
+    ]
+    team_assignments = {"1": "B", "2": "B", "4": "A"}
+    before = audit_violation_count_for_actions(
+        actions=actions, team_assignments=team_assignments, rally_start_frame=0,
+    )
+    # Inject the missing team-A receive.
+    after_actions = sorted(
+        actions + [{"frame": 290, "action": "receive", "playerTrackId": 4}],
+        key=lambda a: cast(int, a["frame"]),
+    )
+    after = audit_violation_count_for_actions(
+        actions=after_actions, team_assignments=team_assignments, rally_start_frame=0,
+    )
+    assert after < before, (before, after)

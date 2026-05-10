@@ -353,3 +353,112 @@ def pick_best_candidate(candidates: list[Any]) -> Any | None:
     if not candidates:
         return None
     return max(candidates, key=lambda c: (c.confidence, -c.frame))
+
+
+def action_type_for_candidate(
+    *,
+    frame: int,
+    gap: Gap,
+    sequence_probs: np.ndarray,
+) -> str | None:
+    """Pick the recovered action's type.
+
+    C-3 gaps force "serve". For C-1/C-2, take MS-TCN++ argmax over non-bg
+    classes at the frame. Reject if argmax is "serve" outside C-3 — we
+    don't manufacture extra serves; let `apply_sequence_override`'s
+    serve-protection guard handle that on the next track-players run.
+
+    Args:
+        frame: Frame number to evaluate.
+        gap: The Gap being recovered.
+        sequence_probs: MS-TCN++ output, shape (num_actions, num_frames).
+            seq_probs[0, :] = background; seq_probs[i+1, :] = ACTION_TYPES[i].
+
+    Returns:
+        Action type string, or None if rejected.
+    """
+    from rallycut.actions.trajectory_features import ACTION_TYPES
+
+    if gap.expected_action == "serve":
+        return "serve"
+    if sequence_probs.ndim != 2 or sequence_probs.shape[0] < 2:
+        return None
+    t = sequence_probs.shape[1]
+    if not (0 <= frame < t):
+        return None
+    # ACTION_TYPES is the non-bg class list; sequence_probs[0,:] is bg.
+    cls = int(np.argmax(sequence_probs[1:, frame]))
+    name = ACTION_TYPES[cls]
+    if gap.rule != "C-3" and name == "serve":
+        return None
+    return name
+
+
+def build_recovered_action_dict(
+    *,
+    contact: Any,
+    action_type: str,
+    team_assignments_str: dict[str, str],
+) -> dict[str, Any]:
+    """ClassifiedAction.to_dict() shape with `recovered: true`.
+
+    Args:
+        contact: Contact object with frame, ball_*, velocity, player_track_id, etc.
+        action_type: The action type string (e.g., "receive").
+        team_assignments_str: Map of track_id (as string) to team ("A" or "B").
+
+    Returns:
+        Dict with action metadata and recovered flag.
+    """
+    team = team_assignments_str.get(str(contact.player_track_id), "unknown")
+    return {
+        "action": action_type,
+        "frame": int(contact.frame),
+        "ballX": float(contact.ball_x),
+        "ballY": float(contact.ball_y),
+        "velocity": float(contact.velocity),
+        "playerTrackId": int(contact.player_track_id),
+        "courtSide": str(contact.court_side),
+        "confidence": float(contact.confidence),
+        "team": team,
+        "recovered": True,
+    }
+
+
+def audit_violation_count_for_actions(
+    *,
+    actions: list[dict[str, Any]],
+    team_assignments: dict[str, str],
+    rally_start_frame: int,
+) -> int:
+    """In-memory coherence-violation count for a candidate actions list.
+
+    Mirrors `coherence_invariants.run_all` for one rally without a DB hit.
+    Used by the audit-after-injection guard.
+
+    Args:
+        actions: List of action dicts with frame, action, playerTrackId, etc.
+        team_assignments: Map of track_id (as string) to team ("A" or "B").
+        rally_start_frame: Frame offset for the rally (usually 0).
+
+    Returns:
+        Total count of coherence violations across C-1, C-2, C-3.
+    """
+    from rallycut.tracking.coherence_invariants import (
+        check_c1_three_contact_rule,
+        check_c2_alternating_possessions,
+        check_c3_first_action_is_serve,
+    )
+
+    n = 0
+    n += len(check_c1_three_contact_rule(
+        rally_id="probe", actions=actions, team_assignments=team_assignments,
+    ))
+    n += len(check_c2_alternating_possessions(
+        rally_id="probe", actions=actions, team_assignments=team_assignments,
+    ))
+    n += len(check_c3_first_action_is_serve(
+        rally_id="probe", actions=actions,
+    ))
+    _ = rally_start_frame  # currently unused — reserved for future per-rally rules
+    return n
