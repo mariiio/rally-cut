@@ -548,29 +548,65 @@ def _find_nearest_player(
     those tracks — matches the filter applied in `_find_nearest_players`
     (plural) so the initial pick aligns with the candidate list.
 
+    v3.0: when the standard ±search_frames window returns no candidates
+    (or, with primary_track_ids, fewer than the primary count), expand
+    forward-only by _ADAPTIVE_FORWARD_FRAMES to catch late-tracked
+    players. Gated by env var ADAPTIVE_PLAYER_SEARCH_WINDOW (default ON).
+
     Returns:
         (track_id, distance, player_center_y). track_id=-1 if no player found.
         player_center_y is the bbox center Y (for court side determination).
     """
-    best_track_id = -1
-    best_dist = float("inf")
-    best_player_y = 0.5
-    primary_set = set(primary_track_ids) if primary_track_ids else None
+    # Pass 1: standard ±search_frames window.
+    pass1 = _collect_best_per_track(
+        player_positions=player_positions,
+        frame=frame,
+        search_frames=search_frames,
+        ball_x=ball_x, ball_y=ball_y,
+        primary_track_ids=primary_track_ids,
+        lower_bound_frame=frame - search_frames,
+        upper_bound_frame=frame + search_frames,
+        court_calibrator=None,
+    )
 
-    for p in player_positions:
-        if abs(p.frame_number - frame) > search_frames:
-            continue
-        if primary_set is not None and p.track_id not in primary_set:
-            continue
+    # v3.0 adaptive fallback. Underfull threshold: when primary_track_ids
+    # is provided, it's len(primary_track_ids); otherwise, fire only when
+    # Pass 1 is completely empty.
+    target = (
+        len(primary_track_ids) if primary_track_ids else (1 if not pass1 else 0)
+    )
+    adaptive_enabled = (
+        os.environ.get("ADAPTIVE_PLAYER_SEARCH_WINDOW", "1") != "0"
+    )
+    if adaptive_enabled and len(pass1) < target:
+        pass2 = _collect_best_per_track(
+            player_positions=player_positions,
+            frame=frame,
+            search_frames=_ADAPTIVE_FORWARD_FRAMES,
+            ball_x=ball_x, ball_y=ball_y,
+            primary_track_ids=primary_track_ids,
+            lower_bound_frame=frame,  # forward-only
+            upper_bound_frame=frame + _ADAPTIVE_FORWARD_FRAMES,
+            court_calibrator=None,
+        )
+        for tid, entry in pass2.items():
+            if tid not in pass1:
+                pass1[tid] = entry
 
-        dist = _player_to_ball_dist(p, ball_x, ball_y)
+    if not pass1:
+        return -1, float("inf"), 0.5
 
-        if dist < best_dist:
-            best_dist = dist
-            best_track_id = p.track_id
-            best_player_y = p.y  # bbox center Y for court side
+    # Find the single best (smallest img_dist — index 1 in the value tuple).
+    best_tid = -1
+    best_img_dist = float("inf")
+    best_center_y = 0.5
+    for tid, (_rank_dist, img_dist, center_y) in pass1.items():
+        if img_dist < best_img_dist:
+            best_tid = tid
+            best_img_dist = img_dist
+            best_center_y = center_y
 
-    return best_track_id, best_dist, best_player_y
+    return best_tid, best_img_dist, best_center_y
 
 
 def _depth_scale_at_y(

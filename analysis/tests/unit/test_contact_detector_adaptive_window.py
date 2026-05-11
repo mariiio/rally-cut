@@ -7,7 +7,11 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from rallycut.tracking.contact_detector import _collect_best_per_track, _find_nearest_players
+from rallycut.tracking.contact_detector import (
+    _collect_best_per_track,
+    _find_nearest_player,
+    _find_nearest_players,
+)
 from rallycut.tracking.player_tracker import PlayerPosition
 
 
@@ -205,3 +209,62 @@ class TestAdaptiveFallback:
         _tid, img_dist, _y = tid1_entry
         # Distance from (x=0.55, y=0.50-0.10*0.25) to (0.5, 0.5) is ~0.057, not 0.012.
         assert img_dist > 0.04, "Pass 1 entry should be retained, not overwritten by Pass 2"
+
+
+class TestFindNearestPlayerAdaptive:
+    """The singular _find_nearest_player gets the same fallback behavior."""
+
+    def test_singular_fallback_finds_late_tracked_player_when_underfull(self) -> None:
+        """When ±15 has no candidates (or fewer than max_candidates if filtered),
+        the singular form's fallback catches a late-tracked one."""
+        positions = [
+            # Only one primary visible in ±15 — underfull
+            _pos(frame=100, tid=1, x=0.70),
+            # tid=2 only visible later, but closer to ball
+            _pos(frame=150, tid=2, x=0.51),
+        ]
+        with patch.dict("os.environ", {"ADAPTIVE_PLAYER_SEARCH_WINDOW": "1"}):
+            tid, dist, _center_y = _find_nearest_player(
+                frame=100, ball_x=0.5, ball_y=0.5,
+                player_positions=positions,
+                search_frames=15,
+                primary_track_ids=[1, 2, 3, 4],
+            )
+        # Without fallback: tid=1 wins (it's the only candidate).
+        # With fallback: tid=2 wins because its forward-window position is closer.
+        assert tid == 2
+
+    def test_singular_env_off_returns_only_pass1(self) -> None:
+        """With env flag OFF, singular form returns only Pass 1 result."""
+        positions = [
+            _pos(frame=100, tid=1, x=0.70),
+            _pos(frame=150, tid=2, x=0.51),  # forward-only, would be ignored
+        ]
+        with patch.dict("os.environ", {"ADAPTIVE_PLAYER_SEARCH_WINDOW": "0"}):
+            tid, _dist, _center_y = _find_nearest_player(
+                frame=100, ball_x=0.5, ball_y=0.5,
+                player_positions=positions,
+                search_frames=15,
+                primary_track_ids=[1, 2, 3, 4],
+            )
+        # Pre-v3 behavior: only tid=1 (the sole candidate in ±15).
+        assert tid == 1
+
+    def test_singular_no_primary_track_filter_uses_max_candidates(self) -> None:
+        """When primary_track_ids is None, the fallback uses max_candidates as
+        the underfull threshold (consistent with _find_nearest_players)."""
+        # Singular form doesn't take max_candidates explicitly — it just picks
+        # the single nearest. The adaptive fallback should still fire if Pass 1
+        # is empty.
+        positions = [
+            _pos(frame=150, tid=1, x=0.51),  # forward-only
+        ]
+        with patch.dict("os.environ", {"ADAPTIVE_PLAYER_SEARCH_WINDOW": "1"}):
+            tid, _dist, _y = _find_nearest_player(
+                frame=100, ball_x=0.5, ball_y=0.5,
+                player_positions=positions,
+                search_frames=15,
+                primary_track_ids=None,
+            )
+        # Pass 1 empty → fallback fires → tid=1 found.
+        assert tid == 1
