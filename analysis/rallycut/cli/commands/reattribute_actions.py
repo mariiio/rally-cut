@@ -386,11 +386,13 @@ def reattribute_actions_cmd(
         help="Video ID to re-attribute actions for",
     ),
     min_confidence: float = typer.Option(
-        0.70,
+        0.50,
         "--min-confidence",
         help="Minimum match confidence to use team assignments. "
-        "Default 0.70 matches the evaluation harness; raise to 0.80+ "
-        "to only re-attribute on high-confidence rallies.",
+        "Lowered from 0.70 → 0.50 on 2026-05-11 after validating that "
+        "the 0.70 floor blocked real attribution corrections on the 3 GT "
+        "videos (+2 correct gained, no regression). Raise to 0.70+ to "
+        "only re-attribute on high-confidence rallies.",
     ),
     dry_run: bool = typer.Option(
         False,

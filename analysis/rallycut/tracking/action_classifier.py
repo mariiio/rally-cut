@@ -3007,7 +3007,7 @@ def reattribute_players(
     n_reattributed = 0
 
     for i, action in enumerate(actions):
-        if action.confidence < 0.6:
+        if action.confidence < 0.3:
             continue
         if action.player_track_id < 0:
             continue
@@ -3154,7 +3154,7 @@ def reattribute_players(
     if os.environ.get("WITHIN_TEAM_PROXIMITY_SWAP", "1") != "0":
         n_within_team = 0
         for action in actions:
-            if action.confidence < 0.6 or action.player_track_id < 0:
+            if action.confidence < 0.3 or action.player_track_id < 0:
                 continue
             contact = contact_by_frame.get(action.frame)
             if contact is None or not contact.player_candidates:
