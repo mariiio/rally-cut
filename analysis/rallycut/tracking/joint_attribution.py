@@ -271,3 +271,53 @@ def _beam_search(
     # Return the highest-scoring full assignment.
     beam.sort(key=lambda x: x[0], reverse=True)
     return beam[0][1]
+
+
+def joint_attribute(
+    actions: list[ClassifiedAction],
+    contacts: list[Contact],
+    team_assignments: dict[int, int],
+    serving_team: int | None,
+    beam_width: int = 50,
+) -> list[ClassifiedAction]:
+    """Joint rule-aware action attribution over a single rally.
+
+    Reuses existing proximity ranking (Contact.player_candidates) as the
+    soft signal. Enforces R1-R5 as hard constraints via beam search.
+    Mutates each ClassifiedAction in place to rewrite ``player_track_id``
+    per the beam-search-best assignment. Returns the same list (for
+    chainable use).
+
+    If no rule-valid assignment exists, returns ``actions`` UNCHANGED and
+    emits a single WARN log line. Never silently corrupts attribution.
+
+    Parameters
+    ----------
+    actions, contacts
+        Parallel lists. ``contacts[i]`` corresponds to ``actions[i]``.
+    team_assignments
+        Map from player track id to team (0=near=A, 1=far=B).
+    serving_team
+        The team that opened the rally (0 or 1). If None, the first
+        SERVE's chosen pid seeds it.
+    beam_width
+        Number of partial assignments retained per step. Default 50.
+    """
+    if not actions:
+        return actions
+
+    assignment = _beam_search(
+        actions, contacts, team_assignments,
+        serving_team=serving_team, beam_width=beam_width,
+    )
+    if assignment is None:
+        logger.warning(
+            "joint_attribute fallback: no rule-valid assignment for "
+            "rally with %d actions; preserving input attributions",
+            len(actions),
+        )
+        return actions
+
+    for i, action in enumerate(actions):
+        action.player_track_id = assignment[i]
+    return actions

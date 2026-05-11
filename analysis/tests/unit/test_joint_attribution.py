@@ -17,6 +17,7 @@ from rallycut.tracking.joint_attribution import (
     _derive_state_after,
     _is_valid_candidate,
     _score_candidate,
+    joint_attribute,
 )
 
 
@@ -393,3 +394,88 @@ class TestBeamSearch:
             serving_team=1, beam_width=50,
         )
         assert assignment == [3, 1, 2, 1, 3, 4, 3, 4]
+
+
+class TestJointAttribute:
+    """End-to-end public entry: rewrites action.player_track_id from the beam result.
+    Falls back to the input unchanged if no valid assignment exists."""
+
+    def test_overrides_cross_team_receive_on_canonical_bug(self) -> None:
+        """The user-quoted bug: receive currently attributed to team B; v2
+        rewrites it to the team-A candidate that satisfies R2."""
+        actions = [
+            ClassifiedAction(
+                action_type=ActionType.SERVE,
+                frame=50, ball_x=0.5, ball_y=0.5, velocity=0.02,
+                player_track_id=3, court_side="far", confidence=0.95,
+            ),
+            ClassifiedAction(
+                action_type=ActionType.RECEIVE,
+                frame=90, ball_x=0.5, ball_y=0.5, velocity=0.02,
+                player_track_id=4, court_side="near", confidence=0.9,
+            ),
+        ]
+        contacts = [
+            _contact(frame=50, candidates=[(3, 0.04)]),
+            _contact(frame=90, candidates=[(4, 0.05), (1, 0.07)]),
+        ]
+        team_assignments = {1: 0, 2: 0, 3: 1, 4: 1}
+
+        result = joint_attribute(actions, contacts, team_assignments, serving_team=1)
+        assert result[0].player_track_id == 3
+        assert result[1].player_track_id == 1  # was 4, now 1
+
+    def test_fallback_preserves_input_when_no_valid_assignment(self) -> None:
+        """When the beam empties, return the input unchanged."""
+        actions = [
+            ClassifiedAction(
+                action_type=ActionType.SERVE,
+                frame=50, ball_x=0.5, ball_y=0.5, velocity=0.02,
+                player_track_id=3, court_side="far", confidence=0.95,
+            ),
+            ClassifiedAction(
+                action_type=ActionType.RECEIVE,
+                frame=90, ball_x=0.5, ball_y=0.5, velocity=0.02,
+                player_track_id=4, court_side="near", confidence=0.9,
+            ),
+        ]
+        contacts = [
+            _contact(frame=50, candidates=[(3, 0.04)]),
+            # Both candidates on serving team — no rule-valid receive exists.
+            _contact(frame=90, candidates=[(3, 0.05), (4, 0.07)]),
+        ]
+        team_assignments = {1: 0, 2: 0, 3: 1, 4: 1}
+
+        result = joint_attribute(actions, contacts, team_assignments, serving_team=1)
+        # Input preserved
+        assert result[0].player_track_id == 3
+        assert result[1].player_track_id == 4
+
+    def test_empty_actions_returns_empty(self) -> None:
+        """Empty input returns empty list (no crash)."""
+        result = joint_attribute([], [], {}, serving_team=None)
+        assert result == []
+
+    def test_serving_team_none_seeds_from_first_serve(self) -> None:
+        """If serving_team is None, the first SERVE seeds it; valid assignment found."""
+        actions = [
+            ClassifiedAction(
+                action_type=ActionType.SERVE,
+                frame=50, ball_x=0.5, ball_y=0.5, velocity=0.02,
+                player_track_id=3, court_side="far", confidence=0.95,
+            ),
+            ClassifiedAction(
+                action_type=ActionType.RECEIVE,
+                frame=90, ball_x=0.5, ball_y=0.5, velocity=0.02,
+                player_track_id=4, court_side="near", confidence=0.9,
+            ),
+        ]
+        contacts = [
+            _contact(frame=50, candidates=[(3, 0.04)]),
+            _contact(frame=90, candidates=[(4, 0.05), (1, 0.07)]),
+        ]
+        team_assignments = {1: 0, 2: 0, 3: 1, 4: 1}
+
+        result = joint_attribute(actions, contacts, team_assignments, serving_team=None)
+        assert result[0].player_track_id == 3
+        assert result[1].player_track_id == 1  # team A; R2 satisfied even without pre-set serving_team
