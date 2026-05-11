@@ -5,11 +5,15 @@ Spec: docs/superpowers/specs/2026-05-11-action-attribution-team-chain-design.md
 
 from __future__ import annotations
 
+import math
+from unittest.mock import patch
+
 from rallycut.tracking.action_classifier import (
     ActionType,
     ClassifiedAction,
     _chain_integrity,
 )
+from rallycut.tracking.contact_detector import Contact
 
 
 def _action(
@@ -103,3 +107,123 @@ class TestChainIntegrity:
     def test_empty_actions(self) -> None:
         """Empty input returns empty output."""
         assert _chain_integrity([]) == []
+
+
+def _contact_with_candidates(
+    frame: int,
+    nearest_dist: float,
+    candidates: list[tuple[int, float]],
+    court_side: str = "near",
+) -> Contact:
+    """Build a Contact with ranked player_candidates and player_distance set."""
+    return Contact(
+        frame=frame,
+        ball_x=0.5,
+        ball_y=0.5,
+        velocity=0.02,
+        direction_change_deg=60.0,
+        player_track_id=candidates[0][0] if candidates else -1,
+        player_distance=nearest_dist,
+        player_candidates=candidates,
+        court_side=court_side,
+        is_validated=True,
+    )
+
+
+class TestTeamChainOverrideAllowed:
+    """Truth table for the 4-gate predicate.
+
+    Convention used in these tests: team_assignments[tid] = 0 means near
+    (team A), = 1 means far (team B). The current (wrong) attribution is
+    track 4 on team 1; the correct attribution should be track 1 on team 0.
+    expected_team = 0 (near). The Contact reports court_side="near".
+    """
+
+    def _setup(
+        self,
+        *,
+        confidence: float = 0.9,
+        chain_ok: bool = True,
+        candidate_dist: float = 0.06,
+        current_dist: float = 0.05,
+        court_side: str = "near",
+        env_off: bool = False,
+    ):
+        from rallycut.tracking.action_classifier import (
+            _team_chain_override_allowed,
+        )
+        action = _action(
+            ActionType.RECEIVE, 100, player_track_id=4,
+            confidence=confidence,
+        )
+        contact = _contact_with_candidates(
+            frame=100,
+            nearest_dist=current_dist,
+            candidates=[(4, current_dist), (1, candidate_dist)],
+            court_side=court_side,
+        )
+        team_assignments = {1: 0, 2: 0, 3: 1, 4: 1}
+        expected_team = 0  # The CORRECT team for the receive
+        return (
+            _team_chain_override_allowed,
+            action, contact, expected_team, chain_ok, team_assignments,
+            env_off,
+        )
+
+    def test_all_gates_pass_allows_override(self) -> None:
+        fn, action, contact, expected, chain_ok, ta, _ = self._setup()
+        with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
+            assert fn(action, contact, expected, chain_ok, ta) is True
+
+    def test_env_flag_off_denies_override(self) -> None:
+        fn, action, contact, expected, chain_ok, ta, _ = self._setup()
+        with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "0"}):
+            assert fn(action, contact, expected, chain_ok, ta) is False
+
+    def test_low_action_confidence_denies_override(self) -> None:
+        fn, action, contact, expected, chain_ok, ta, _ = self._setup(
+            confidence=0.5,
+        )
+        with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
+            assert fn(action, contact, expected, chain_ok, ta) is False
+
+    def test_broken_chain_denies_override(self) -> None:
+        fn, action, contact, expected, _, ta, _ = self._setup()
+        with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
+            assert fn(action, contact, expected, False, ta) is False
+
+    def test_no_candidate_within_distance_cap_denies_override(self) -> None:
+        # candidate is 4x further than current → > 1.5x cap
+        fn, action, contact, expected, chain_ok, ta, _ = self._setup(
+            current_dist=0.05, candidate_dist=0.25,
+        )
+        with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
+            assert fn(action, contact, expected, chain_ok, ta) is False
+
+    def test_court_side_disagrees_denies_override(self) -> None:
+        # expected_team=0 → expected_side="near"; contact reports "far"
+        fn, action, contact, expected, chain_ok, ta, _ = self._setup(
+            court_side="far",
+        )
+        with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
+            assert fn(action, contact, expected, chain_ok, ta) is False
+
+    def test_court_side_unknown_is_soft_pass(self) -> None:
+        # Allows override when court_side cannot corroborate (no calibration)
+        fn, action, contact, expected, chain_ok, ta, _ = self._setup(
+            court_side="unknown",
+        )
+        with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
+            assert fn(action, contact, expected, chain_ok, ta) is True
+
+    def test_current_player_distance_infinite_denies_override(self) -> None:
+        # No current distance → cannot enforce distance cap → deny
+        fn, action, _contact, expected, chain_ok, ta, _ = self._setup()
+        contact_inf = _contact_with_candidates(
+            frame=100,
+            nearest_dist=math.inf,
+            candidates=[(4, math.inf), (1, 0.06)],
+            court_side="near",
+        )
+        with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
+            assert fn(action, contact_inf, expected, chain_ok, ta) is False

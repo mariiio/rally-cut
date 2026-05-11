@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 from collections import defaultdict
 from dataclasses import dataclass, field
 from enum import Enum
@@ -2885,6 +2886,60 @@ def _chain_integrity(actions: list[ClassifiedAction]) -> list[bool]:
             continue
         result[i] = not broken
     return result
+
+
+def _team_chain_override_allowed(
+    action: ClassifiedAction,
+    contact: Contact,
+    expected_team: int,
+    chain_integrity_i: bool,
+    team_assignments: dict[int, int],
+    max_distance_ratio: float = 1.5,
+) -> bool:
+    """The 4-gate predicate that relaxes the nearest-player guard.
+
+    Returns True iff the team-chain-derived `expected_team` is trustworthy
+    enough to override the current (wrong-team) nearest-player attribution
+    at this contact. Spec:
+    docs/superpowers/specs/2026-05-11-action-attribution-team-chain-design.md
+
+    Gates:
+      G0 (env flag): RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN != "0" (default ON).
+      G1 (confidence): action.confidence >= 0.7.
+      G2 (chain integrity): chain_integrity_i is True.
+      G3 (candidate-on-expected-team within distance cap): some
+        Contact.player_candidate has team == expected_team and distance
+        <= max_distance_ratio * contact.player_distance.
+      G4 (ball-trajectory corroborator): Contact.court_side either agrees
+        with expected_team (near<->0, far<->1) OR is "unknown" (soft pass —
+        no corroboration available, defer to chain alone).
+    """
+    # G0
+    if os.environ.get("RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN", "1") == "0":
+        return False
+    # G1
+    if action.confidence < 0.7:
+        return False
+    # G2
+    if not chain_integrity_i:
+        return False
+    # G3
+    current_dist = contact.player_distance
+    if not math.isfinite(current_dist):
+        return False
+    dist_cap = max_distance_ratio * current_dist
+    has_correct_team_candidate = any(
+        team_assignments.get(tid) == expected_team and dist <= dist_cap
+        for tid, dist in contact.player_candidates
+    )
+    if not has_correct_team_candidate:
+        return False
+    # G4
+    expected_side = "near" if expected_team == 0 else "far"
+    if contact.court_side in ("near", "far") and contact.court_side != expected_side:
+        return False
+    # court_side == "unknown" → soft pass (chain trust alone is sufficient)
+    return True
 
 
 def reattribute_players(
