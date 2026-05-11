@@ -1,0 +1,86 @@
+================================================================================
+1. DIG FN analysis (51 missed digs)
+================================================================================
+Where the pipeline put something else (within ±15 of GT dig frame):
+  pipeline labeled as NO_PIPELINE_NEAR         52
+  pipeline labeled as set                      14
+  pipeline labeled as attack                    5
+  pipeline labeled as block                     2
+
+First 10 examples:
+  ruru     be3134ba gt_f= 388 pred_f= 386 as=set
+  caco     cfc464a7 gt_f= 240 pred_f= 236 as=set
+  lolo     8ce36875 gt_f= 118 pred_f= 119 as=set
+  veve     7b5a6973 gt_f= 190 pred_f= 182 as=block
+  lele     c9015cb0 gt_f= 226 pred_f= 223 as=attack
+  pipi     8500f776 gt_f= 158 pred_f= 155 as=set
+  pipi     8500f776 gt_f= 369 pred_f= 368 as=set
+  lala     793625cd gt_f= 299 pred_f= 300 as=set
+  yeye     4c0f4c83 gt_f= 172 pred_f= 170 as=set
+  pepe     e2db8571 gt_f= 357 pred_f= 355 as=block
+
+================================================================================
+2. DIG FP analysis (40 false digs)
+================================================================================
+What the GT action ACTUALLY was at false-dig pred frames:
+  GT was            GT_GAP                   34
+  GT was            attack                   27
+  GT was            set                      11
+  GT was            dig                       6
+  GT was            receive                   2
+  GT was            block                     1
+
+First 10 examples:
+  tutu     21266995 pred_f= 342 gt_was=GT_GAP nearest_gt_f=315
+  tutu     9064ba7b pred_f= 373 gt_was=GT_GAP nearest_gt_f=316
+  gugu     e84deef3 pred_f= 336 gt_was=GT_GAP nearest_gt_f=314
+  yoyo     0ab56722 pred_f= 397 gt_was=GT_GAP nearest_gt_f=347
+  matttch  d724bbf0 pred_f= 198 gt_was=GT_GAP nearest_gt_f=181
+  caca     f0fdfcdb pred_f= 538 gt_was=GT_GAP nearest_gt_f=510
+  gigi     72c8229b pred_f= 265 gt_was=set nearest_gt_f=270
+  gigi     72c8229b pred_f= 638 gt_was=dig nearest_gt_f=640
+  gigi     72c8229b pred_f= 695 gt_was=set nearest_gt_f=698
+  ruru     9d5f5152 pred_f=1333 gt_was=GT_GAP nearest_gt_f=1290
+
+================================================================================
+3. SERVE near-miss analysis (331 total preds, 303 hits, 25 near-misses, 3 no-GT-serve)
+================================================================================
+Delta range: [-157, 143]
+Median delta: 21
+  pred too EARLY (Δ < −15): 5
+  pred too LATE  (Δ >  15): 20
+  of which synthetic:       12
+
+First 10 near-misses (sorted by |delta|):
+  vivi     1f09287f pred_f=  62 gt_f=  46 Δ= +16 synth=True
+  titi     21029e9f pred_f=  47 gt_f=  64 Δ= -17 synth=False
+  mechi    618002a8 pred_f=  67 gt_f=  49 Δ= +18 synth=False
+  wewe     0d835edf pred_f= 201 gt_f= 182 Δ= +19 synth=True
+  cece     55e78d3a pred_f=  64 gt_f=  45 Δ= +19 synth=True
+  cuco     ba7c42c5 pred_f=  37 gt_f=  18 Δ= +19 synth=False
+  wiwi     e73267b4 pred_f= 183 gt_f= 163 Δ= +20 synth=True
+  gugu     2e8b3ce2 pred_f= 112 gt_f=  91 Δ= +21 synth=False
+  vovo     55c2c6e5 pred_f=  44 gt_f=  23 Δ= +21 synth=True
+  yoyo     21a9b203 pred_f= 152 gt_f= 128 Δ= +24 synth=False
+
+================================================================================
+4. RECEIVE FP analysis (26 false receives)
+================================================================================
+What the GT action ACTUALLY was at false-receive pred frames:
+  GT was            GT_GAP                   14
+  GT was            receive                   7
+  GT was            set                       7
+  GT was            serve                     6
+  GT was            attack                    2
+
+First 10 examples:
+  tutu     b5724a69 pred_f= 169 gt_was=GT_GAP
+  yoyo     21a9b203 pred_f= 184 gt_was=GT_GAP
+  yaya     67abc72e pred_f=  77 gt_was=serve
+  lili     f6ac99c0 pred_f= 107 gt_was=GT_GAP
+  lolo     173a4a61 pred_f= 166 gt_was=receive
+  matchope bd77efd1 pred_f=  78 gt_was=receive
+  matchope eff4febd pred_f= 135 gt_was=attack
+  mame     5cc5127f pred_f= 165 gt_was=receive
+  tete     b4d9c787 pred_f=  91 gt_was=GT_GAP
+  tete     c38da325 pred_f= 110 gt_was=serve

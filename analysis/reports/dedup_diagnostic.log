@@ -1,0 +1,74 @@
+TP pipeline actions: 1757
+FP pipeline actions: 106
+
+group   min    p5   p25   p50   p75   max
+TP        7    17    29    38    48   316
+FP       11    12    21    34    54   222
+
+=== Threshold sweep: min-distance gate (would drop pred contacts whose nearest other is < threshold) ===
+ threshold   TP drops   FP drops  precision_gain     recall_loss
+         5          0          0          +0.00pp              0
+        10         10          0          -0.03pp             10
+        15         67         14          +0.53pp             67
+        20        147         23          +0.79pp            147
+        25        277         30          +0.81pp            277
+        30        478         40          +0.78pp            478
+        35        722         55          +0.99pp            722
+        40        934         64          +0.83pp            934
+        50       1345         79          -0.46pp           1345
+
+=== Sample FPs with min_gap < 40 (by action type) ===
+
+  dig FPs with small min_gap:
+    tutu     21266995 f= 342 gap= 27
+    gugu     e84deef3 f= 336 gap= 23
+    matttch  d724bbf0 f= 198 gap= 17
+    caca     f0fdfcdb f= 538 gap= 28
+    natch    e5e4c0b7 f= 245 gap= 31
+
+  serve FPs with small min_gap:
+    yoyo     21a9b203 f= 152 gap= 32
+    yoyo     11942746 f= 132 gap= 35
+    lolo     0def0bf2 f=  79 gap= 32
+    wewe     bed98d84 f= 279 gap= 36
+
+  receive FPs with small min_gap:
+    yoyo     21a9b203 f= 184 gap= 32
+    yaya     67abc72e f=  77 gap= 12
+    lolo     173a4a61 f= 166 gap= 13
+    matchope bd77efd1 f=  78 gap= 12
+    matchope eff4febd f= 135 gap= 13
+
+  attack FPs with small min_gap:
+    yoyo     21a9b203 f= 506 gap= 22
+    wowo     2c9092e3 f= 423 gap= 18
+
+=== Sample TPs with min_gap < 40 (would we LOSE these?) ===
+
+  serve TPs with small min_gap:
+    tutu     21266995 f=  79 gap= 31
+    tutu     7a9aadfd f=  99 gap= 28
+    tutu     9ba12ccc f= 143 gap= 31
+    tutu     281eafcd f= 109 gap= 31
+    tutu     0585f707 f= 153 gap= 33
+
+  receive TPs with small min_gap:
+    tutu     21266995 f= 110 gap= 31
+    tutu     7a9aadfd f= 127 gap= 28
+    tutu     9ba12ccc f= 174 gap= 31
+    tutu     281eafcd f= 140 gap= 31
+    tutu     0585f707 f= 186 gap= 33
+
+  set TPs with small min_gap:
+    tutu     21266995 f= 143 gap= 33
+
+  attack TPs with small min_gap:
+    tutu     21266995 f= 197 gap= 25
+    tutu     21266995 f= 315 gap= 27
+    tutu     281eafcd f= 241 gap= 13
+    tutu     0585f707 f= 276 gap= 29
+
+  dig TPs with small min_gap:
+    tutu     21266995 f= 222 gap= 25
+    tutu     281eafcd f= 254 gap= 13
+    tutu     0585f707 f= 305 gap= 29
