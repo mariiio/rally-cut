@@ -1,0 +1,13 @@
+fixture    direct   permuted  id_stab
+----------------------------------------
+tata        50.9%     100.0%     1.00
+toto        51.3%      97.4%     1.50
+lala        53.3%      96.7%     1.50
+lulu        88.2%      88.2%     2.00
+wawa        86.7%      86.7%     1.50
+cece        62.5%     100.0%     1.00
+cuco         0.0%      96.4%     1.25
+rere     ERROR: no player_matching_gt_json — run GT labeling first
+yeye     ERROR: no player_matching_gt_json — run GT labeling first
+----------------------------------------
+AVG         56.1%      95.1%     1.39
