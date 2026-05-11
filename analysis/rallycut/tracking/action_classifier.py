@@ -2855,6 +2855,38 @@ def _compute_expected_teams(
     return expected
 
 
+def _chain_integrity(actions: list[ClassifiedAction]) -> list[bool]:
+    """Return a parallel list[bool] marking each action's chain integrity.
+
+    The chain is seeded by the first action that is a SERVE with
+    ``player_track_id >= 0`` (synthetic or otherwise). All actions before the
+    seed are marked False. The seed itself is True. After the seed, an action
+    is True iff no UNKNOWN action and no non-seed synthetic action appears
+    between the seed and that action (inclusive of any breaks at the action
+    itself).
+
+    Used by ``_team_chain_override_allowed`` (gate G2) to decide whether the
+    serve-derived ``expected_team`` chain is trustworthy enough to override
+    the nearest-player guard inside ``reattribute_players``.
+    """
+    n = len(actions)
+    result = [False] * n
+    seen_seed = False
+    broken = False
+    for i, a in enumerate(actions):
+        if not seen_seed:
+            if a.action_type == ActionType.SERVE and a.player_track_id >= 0:
+                seen_seed = True
+                result[i] = True
+            continue
+        if a.action_type == ActionType.UNKNOWN or a.is_synthetic:
+            broken = True
+            result[i] = False
+            continue
+        result[i] = not broken
+    return result
+
+
 def reattribute_players(
     actions: list[ClassifiedAction],
     contacts: list[Contact],
