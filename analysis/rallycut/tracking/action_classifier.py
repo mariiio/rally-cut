@@ -2909,10 +2909,19 @@ def _team_chain_override_allowed(
       G2 (chain integrity): chain_integrity_i is True.
       G3 (candidate-on-expected-team within distance cap): some
         Contact.player_candidate has team == expected_team and distance
-        <= max_distance_ratio * contact.player_distance.
-      G4 (ball-trajectory corroborator): Contact.court_side either agrees
-        with expected_team (near<->0, far<->1) OR is "unknown" (soft pass —
-        no corroboration available, defer to chain alone).
+        <= max_distance_ratio * contact.player_distance. The call site
+        in reattribute_players passes 2.0 here (relaxed from 1.5) because
+        the diagnostic on the 3 fresh-GT videos showed several real
+        cross-team errors had the correct-team candidate at 1.5x-2.0x
+        distance.
+
+    NOTE: A 4th gate ("Contact.court_side agrees with expected_team") was
+    designed but removed pre-deploy. Contact.court_side is computed by
+    _resolve_court_side which uses the current player_track_id's team as
+    its highest-priority signal — making the gate circular against the
+    very errors this predicate exists to fix. Reinstating it would require
+    an independent ball-position-only court_side computation, deferred to
+    v2 if needed.
     """
     # G0
     if os.environ.get("RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN", "1") == "0":
@@ -2934,11 +2943,6 @@ def _team_chain_override_allowed(
     )
     if not has_correct_team_candidate:
         return False
-    # G4
-    expected_side = "near" if expected_team == 0 else "far"
-    if contact.court_side in ("near", "far") and contact.court_side != expected_side:
-        return False
-    # court_side == "unknown" → soft pass (chain trust alone is sufficient)
     return True
 
 
@@ -3063,7 +3067,14 @@ def reattribute_players(
                 expected_team=expected_team,
                 chain_integrity_i=chain_ok_i,
                 team_assignments=team_assignments,
-                max_distance_ratio=max_distance_ratio,
+                # 2.0x cap here vs reattribute_players' overall 1.5x default —
+                # the team-chain override needs the looser cap to capture
+                # legitimate cross-team errors where the correct-team
+                # candidate sits at 1.5x-2.0x of the (wrong) nearest. The
+                # broader reattribute_players cap stays 1.5x for the
+                # non-nearest-current path (already-wrong-team without
+                # being nearest), which has lower regression risk.
+                max_distance_ratio=2.0,
             ):
                 continue
             logger.info(

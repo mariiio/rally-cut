@@ -131,12 +131,12 @@ def _contact_with_candidates(
 
 
 class TestTeamChainOverrideAllowed:
-    """Truth table for the 4-gate predicate.
+    """Truth table for the 4-gate predicate (G0/G1/G2/G3).
 
     Convention used in these tests: team_assignments[tid] = 0 means near
     (team A), = 1 means far (team B). The current (wrong) attribution is
     track 4 on team 1; the correct attribution should be track 1 on team 0.
-    expected_team = 0 (near). The Contact reports court_side="near".
+    expected_team = 0 (near). (Contact.court_side is unused after the G4 drop.)
     """
 
     def _setup(
@@ -197,22 +197,6 @@ class TestTeamChainOverrideAllowed:
         )
         with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
             assert fn(action, contact, expected, chain_ok, ta) is False
-
-    def test_court_side_disagrees_denies_override(self) -> None:
-        # expected_team=0 → expected_side="near"; contact reports "far"
-        fn, action, contact, expected, chain_ok, ta = self._setup(
-            court_side="far",
-        )
-        with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
-            assert fn(action, contact, expected, chain_ok, ta) is False
-
-    def test_court_side_unknown_is_soft_pass(self) -> None:
-        # Allows override when court_side cannot corroborate (no calibration)
-        fn, action, contact, expected, chain_ok, ta = self._setup(
-            court_side="unknown",
-        )
-        with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
-            assert fn(action, contact, expected, chain_ok, ta) is True
 
     def test_current_player_distance_infinite_denies_override(self) -> None:
         # No current distance → cannot enforce distance cap → deny
