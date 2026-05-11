@@ -5,17 +5,11 @@ Spec: docs/superpowers/specs/2026-05-11-action-attribution-team-chain-design.md
 
 from __future__ import annotations
 
-import math
-from unittest.mock import patch
-
-import pytest
-
 from rallycut.tracking.action_classifier import (
     ActionType,
     ClassifiedAction,
     _chain_integrity,
 )
-from rallycut.tracking.contact_detector import Contact
 
 
 def _action(

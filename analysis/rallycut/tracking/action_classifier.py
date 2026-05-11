@@ -2862,8 +2862,8 @@ def _chain_integrity(actions: list[ClassifiedAction]) -> list[bool]:
     ``player_track_id >= 0`` (synthetic or otherwise). All actions before the
     seed are marked False. The seed itself is True. After the seed, an action
     is True iff no UNKNOWN action and no non-seed synthetic action appears
-    between the seed and that action (inclusive of any breaks at the action
-    itself).
+    between the seed and that action. An action that is itself a chain-breaker
+    (UNKNOWN or non-seed synthetic) is also marked False.
 
     Used by ``_team_chain_override_allowed`` (gate G2) to decide whether the
     serve-derived ``expected_team`` chain is trustworthy enough to override
