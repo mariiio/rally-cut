@@ -147,7 +147,6 @@ class TestTeamChainOverrideAllowed:
         candidate_dist: float = 0.06,
         current_dist: float = 0.05,
         court_side: str = "near",
-        env_off: bool = False,
     ):
         from rallycut.tracking.action_classifier import (
             _team_chain_override_allowed,
@@ -167,34 +166,33 @@ class TestTeamChainOverrideAllowed:
         return (
             _team_chain_override_allowed,
             action, contact, expected_team, chain_ok, team_assignments,
-            env_off,
         )
 
     def test_all_gates_pass_allows_override(self) -> None:
-        fn, action, contact, expected, chain_ok, ta, _ = self._setup()
+        fn, action, contact, expected, chain_ok, ta = self._setup()
         with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
             assert fn(action, contact, expected, chain_ok, ta) is True
 
     def test_env_flag_off_denies_override(self) -> None:
-        fn, action, contact, expected, chain_ok, ta, _ = self._setup()
+        fn, action, contact, expected, chain_ok, ta = self._setup()
         with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "0"}):
             assert fn(action, contact, expected, chain_ok, ta) is False
 
     def test_low_action_confidence_denies_override(self) -> None:
-        fn, action, contact, expected, chain_ok, ta, _ = self._setup(
+        fn, action, contact, expected, chain_ok, ta = self._setup(
             confidence=0.5,
         )
         with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
             assert fn(action, contact, expected, chain_ok, ta) is False
 
     def test_broken_chain_denies_override(self) -> None:
-        fn, action, contact, expected, _, ta, _ = self._setup()
+        fn, action, contact, expected, _, ta = self._setup()
         with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
             assert fn(action, contact, expected, False, ta) is False
 
     def test_no_candidate_within_distance_cap_denies_override(self) -> None:
         # candidate is 4x further than current → > 1.5x cap
-        fn, action, contact, expected, chain_ok, ta, _ = self._setup(
+        fn, action, contact, expected, chain_ok, ta = self._setup(
             current_dist=0.05, candidate_dist=0.25,
         )
         with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
@@ -202,7 +200,7 @@ class TestTeamChainOverrideAllowed:
 
     def test_court_side_disagrees_denies_override(self) -> None:
         # expected_team=0 → expected_side="near"; contact reports "far"
-        fn, action, contact, expected, chain_ok, ta, _ = self._setup(
+        fn, action, contact, expected, chain_ok, ta = self._setup(
             court_side="far",
         )
         with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
@@ -210,7 +208,7 @@ class TestTeamChainOverrideAllowed:
 
     def test_court_side_unknown_is_soft_pass(self) -> None:
         # Allows override when court_side cannot corroborate (no calibration)
-        fn, action, contact, expected, chain_ok, ta, _ = self._setup(
+        fn, action, contact, expected, chain_ok, ta = self._setup(
             court_side="unknown",
         )
         with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
@@ -218,7 +216,7 @@ class TestTeamChainOverrideAllowed:
 
     def test_current_player_distance_infinite_denies_override(self) -> None:
         # No current distance → cannot enforce distance cap → deny
-        fn, action, _contact, expected, chain_ok, ta, _ = self._setup()
+        fn, action, _contact, expected, chain_ok, ta = self._setup()
         contact_inf = _contact_with_candidates(
             frame=100,
             nearest_dist=math.inf,
@@ -227,3 +225,146 @@ class TestTeamChainOverrideAllowed:
         )
         with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
             assert fn(action, contact_inf, expected, chain_ok, ta) is False
+
+    def test_current_player_distance_nan_denies_override(self) -> None:
+        """NaN player_distance fails the math.isfinite check in G3."""
+        fn, action, _, expected, chain_ok, ta = self._setup()
+        contact_nan = _contact_with_candidates(
+            frame=100, nearest_dist=math.nan,
+            candidates=[(4, math.nan), (1, 0.06)],
+            court_side="near",
+        )
+        with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
+            assert fn(action, contact_nan, expected, chain_ok, ta) is False
+
+
+class TestReattributePlayersIntegration:
+    """End-to-end test that reattribute_players Pass 2 fires when the new
+    predicate passes — even when the wrong-team current attribution is the
+    spatially nearest candidate (the canonical bug pattern)."""
+
+    def test_cross_team_receive_overridden_when_chain_trustworthy(self) -> None:
+        """The user-quoted bug: P2 receives P1's serve (same team) — should
+        be overridden to a candidate on the receiving team when all gates
+        pass.
+
+        Setup (PIDs already in canonical 1-4 space):
+          team 0 (near, A) = {1, 2}, team 1 (far, B) = {3, 4}
+          actions:
+            - serve by track 3 (team B, far)
+            - receive currently attributed to track 4 (team B, NEAREST in
+              candidates) — wrong, expected_team is 0 (team A)
+            - receive's contact has candidates: [(4, 0.05), (1, 0.07)]
+              => track 1 (team A) is within 1.5x distance of track 4.
+            - Contact.court_side = "near" — corroborates expected_team=0
+        """
+        from rallycut.tracking.action_classifier import reattribute_players
+
+        actions = [
+            _action(
+                ActionType.SERVE, 50, player_track_id=3, confidence=0.95,
+                court_side="far",
+            ),
+            _action(
+                ActionType.RECEIVE, 90, player_track_id=4, confidence=0.9,
+                court_side="near",
+            ),
+        ]
+        contacts = [
+            _contact_with_candidates(
+                frame=50, nearest_dist=0.04,
+                candidates=[(3, 0.04)],
+                court_side="far",
+            ),
+            _contact_with_candidates(
+                frame=90, nearest_dist=0.05,
+                candidates=[(4, 0.05), (1, 0.07)],
+                court_side="near",
+            ),
+        ]
+        team_assignments = {1: 0, 2: 0, 3: 1, 4: 1}
+
+        with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
+            reattribute_players(actions, contacts, team_assignments)
+
+        # The receive should now be attributed to track 1 (team A), not 4.
+        assert actions[1].action_type == ActionType.RECEIVE
+        assert actions[1].player_track_id == 1
+
+    def test_env_flag_off_preserves_old_behavior(self) -> None:
+        """With env flag off, the old unconditional nearest-guard blocks
+        the override and the wrong-team attribution is preserved."""
+        from rallycut.tracking.action_classifier import reattribute_players
+
+        actions = [
+            _action(
+                ActionType.SERVE, 50, player_track_id=3, confidence=0.95,
+                court_side="far",
+            ),
+            _action(
+                ActionType.RECEIVE, 90, player_track_id=4, confidence=0.9,
+                court_side="near",
+            ),
+        ]
+        contacts = [
+            _contact_with_candidates(
+                frame=50, nearest_dist=0.04,
+                candidates=[(3, 0.04)],
+                court_side="far",
+            ),
+            _contact_with_candidates(
+                frame=90, nearest_dist=0.05,
+                candidates=[(4, 0.05), (1, 0.07)],
+                court_side="near",
+            ),
+        ]
+        team_assignments = {1: 0, 2: 0, 3: 1, 4: 1}
+
+        with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "0"}):
+            reattribute_players(actions, contacts, team_assignments)
+
+        # Old behavior: wrong-team nearest attribution is preserved.
+        assert actions[1].player_track_id == 4
+
+    def test_broken_chain_blocks_override(self) -> None:
+        """An UNKNOWN action between the serve and the receive breaks the
+        chain — the override is blocked even with env flag on."""
+        from rallycut.tracking.action_classifier import reattribute_players
+
+        actions = [
+            _action(
+                ActionType.SERVE, 50, player_track_id=3, confidence=0.95,
+                court_side="far",
+            ),
+            _action(
+                ActionType.UNKNOWN, 70, player_track_id=2, confidence=0.4,
+            ),
+            _action(
+                ActionType.RECEIVE, 90, player_track_id=4, confidence=0.9,
+                court_side="near",
+            ),
+        ]
+        contacts = [
+            _contact_with_candidates(
+                frame=50, nearest_dist=0.04,
+                candidates=[(3, 0.04)],
+                court_side="far",
+            ),
+            _contact_with_candidates(
+                frame=70, nearest_dist=0.05,
+                candidates=[(2, 0.05)],
+                court_side="near",
+            ),
+            _contact_with_candidates(
+                frame=90, nearest_dist=0.05,
+                candidates=[(4, 0.05), (1, 0.07)],
+                court_side="near",
+            ),
+        ]
+        team_assignments = {1: 0, 2: 0, 3: 1, 4: 1}
+
+        with patch.dict("os.environ", {"RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN": "1"}):
+            reattribute_players(actions, contacts, team_assignments)
+
+        # Chain broken by UNKNOWN at frame 70 → no override fires.
+        assert actions[2].player_track_id == 4

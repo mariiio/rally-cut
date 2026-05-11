@@ -2997,6 +2997,7 @@ def reattribute_players(
     # from court_side (which depends on the player being evaluated), we use
     # the server's known team + volleyball transition rules.
     expected_teams = _compute_expected_teams(actions, team_assignments)
+    chain_integrity = _chain_integrity(actions)
 
     # Fallback when serve chain unavailable: map court_side to team
     n_reattributed = 0
@@ -3043,16 +3044,34 @@ def reattribute_players(
         if contact is None or not contact.player_candidates:
             continue
 
-        # Guard: don't override the nearest candidate. Proximity is hard
-        # physical evidence; the expected_team chain drifts when contacts
-        # are missed or action types are wrong. Only override non-nearest
-        # attributions (unmapped tracks or clear team mismatches).
-        if (
-            not is_unmapped
-            and contact.player_candidates
+        # Guard: don't override the nearest candidate UNLESS the team-chain
+        # trust gates pass. The 4-gate predicate is the strict relaxation of
+        # the prior unconditional guard — env flag
+        # RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN=0 restores the old behavior.
+        # Spec: docs/superpowers/specs/2026-05-11-action-attribution-team-chain-design.md
+        current_is_nearest = (
+            bool(contact.player_candidates)
             and contact.player_candidates[0][0] == action.player_track_id
-        ):
-            continue
+        )
+        if not is_unmapped and current_is_nearest:
+            chain_ok_i = (
+                chain_integrity[i] if i < len(chain_integrity) else False
+            )
+            if not _team_chain_override_allowed(
+                action=action,
+                contact=contact,
+                expected_team=expected_team,
+                chain_integrity_i=chain_ok_i,
+                team_assignments=team_assignments,
+                max_distance_ratio=max_distance_ratio,
+            ):
+                continue
+            logger.info(
+                "team_chain_override frame=%d action=%s old_pid=%d "
+                "expected_team=%d (relaxed nearest-guard via chain trust)",
+                action.frame, action.action_type.value,
+                action.player_track_id, expected_team,
+            )
 
         current_dist = contact.player_distance
         if not math.isfinite(current_dist):
