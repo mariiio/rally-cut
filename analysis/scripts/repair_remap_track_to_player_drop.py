@@ -42,12 +42,16 @@ from typing import Any, cast
 from rallycut.evaluation.db import get_connection
 
 
-def _load_video(video_id: str) -> tuple[dict[str, Any], dict[str, list[int]]]:
-    """Return ``(match_analysis_json, pre_remap_raw_ids_by_rally)``.
+def _load_video(
+    video_id: str,
+) -> tuple[dict[str, Any], dict[str, list[int]]]:
+    """Return ``(match_analysis_json, pre_remap_primary_ids_by_rally)``.
 
-    ``pre_remap_raw_ids_by_rally`` is the set of raw tracker IDs that lived in
-    ``pre_remap_state_json.positions`` for each rally — the ground-truth set
-    of IDs the mapping must cover.
+    ``pre_remap_primary_ids_by_rally`` is the snapshot's ``primaryTrackIds``
+    per rally — the set of raw tracker IDs that match-players assigned to
+    canonical players (and that the anchor must cover for the repair to
+    work). Non-primary tracks in the snapshot's positions are noise that the
+    remap pipeline handles via collision-shift / drop independently.
     """
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -72,41 +76,39 @@ def _load_video(video_id: str) -> tuple[dict[str, Any], dict[str, list[int]]]:
                 """,
                 [video_id],
             )
-            pre_remap_raw_ids: dict[str, list[int]] = {}
+            pre_remap_primary_ids: dict[str, list[int]] = {}
             for rid, pre_remap in cur.fetchall():
                 if not pre_remap:
                     continue
                 pre_remap_dict = cast(dict[str, Any], pre_remap)
-                positions = pre_remap_dict.get("positions") or []
-                tids = sorted({int(p["trackId"]) for p in positions
-                               if p.get("trackId") is not None})
-                pre_remap_raw_ids[str(rid)] = tids
-    return match_analysis, pre_remap_raw_ids
+                primary = pre_remap_dict.get("primaryTrackIds") or []
+                tids = sorted({int(t) for t in primary if int(t) > 0})
+                pre_remap_primary_ids[str(rid)] = tids
+    return match_analysis, pre_remap_primary_ids
 
 
 def _needs_repair(
     rally_entry: dict[str, Any],
-    snapshot_raw_ids: list[int],
+    snapshot_primary_ids: list[int],
 ) -> tuple[bool, str]:
     """Decide whether this rally's appliedFullMapping needs to be rewritten.
 
-    The mapping is broken iff any real (non-synthetic) raw track ID from
-    the snapshot is NOT a key in ``appliedFullMapping``. Synthetic sub-track
-    IDs (negative numbers) are resolved through ``subTracks``, not via
-    ``trackToPlayer`` / ``appliedFullMapping``.
+    The mapping is broken iff any snapshot ``primaryTrackIds`` entry is NOT
+    a key in ``appliedFullMapping`` — those primaries would be dropped from
+    positions and primary_track_ids on the next remap.
     """
     afm = rally_entry.get("appliedFullMapping") or {}
     afm_keys = {int(k) for k in afm.keys() if int(k) > 0}
-    snapshot_real = {tid for tid in snapshot_raw_ids if tid > 0}
+    snapshot_real = {tid for tid in snapshot_primary_ids if tid > 0}
     missing = snapshot_real - afm_keys
     if not missing:
-        return False, "afm covers all snapshot raw ids"
-    return True, f"afm missing {sorted(missing)} from snapshot {sorted(snapshot_real)}"
+        return False, "afm covers all snapshot primary ids"
+    return True, f"afm missing {sorted(missing)} from snapshot primaries {sorted(snapshot_real)}"
 
 
 def _build_repair_mapping(
     rally_entry: dict[str, Any],
-    snapshot_raw_ids: list[int],
+    snapshot_primary_ids: list[int],
 ) -> dict[str, int] | None:
     """Build the appliedFullMapping repair from assignmentAnchor.assignment.
 
@@ -117,62 +119,96 @@ def _build_repair_mapping(
     if not assignment:
         return None
     anchor_mapping = {int(k): int(v) for k, v in assignment.items() if int(k) > 0}
-    snapshot_real = {tid for tid in snapshot_raw_ids if tid > 0}
+    snapshot_real = {tid for tid in snapshot_primary_ids if tid > 0}
     if not snapshot_real.issubset(anchor_mapping.keys()):
-        # Anchor was computed for a different track set than the snapshot —
-        # not safe to use blindly. Negative (synthetic) IDs in the snapshot
-        # are flow through subTracks separately and are not expected to
-        # appear as keys here.
+        # Anchor was computed for a different primary set than the snapshot
+        # — not safe to use blindly. (Synthetic / negative IDs are resolved
+        # through subTracks separately and aren't expected here.)
         return None
-    # Restrict to keys that exist in the snapshot (anchor may carry extras
-    # from synthetic sub-tracks).
+    # Restrict to the snapshot's primary track IDs. Anchor may carry extras
+    # from a prior solve on a different track topology that we shouldn't
+    # blindly re-apply.
     return {
         str(k): v for k, v in anchor_mapping.items()
         if k in snapshot_real
     }
 
 
-def main() -> int:
-    p = argparse.ArgumentParser()
-    p.add_argument("video_id")
-    p.add_argument("--dry-run", action="store_true",
-                   help="Print planned repairs without writing to DB.")
-    args = p.parse_args()
+def _find_affected_videos() -> list[str]:
+    """Return video IDs where at least one rally's current
+    ``primary_track_ids`` is shorter than the ``primaryTrackIds`` captured
+    in ``pre_remap_state_json`` — the signature of the remap track-drop
+    bug. Comparing ``primaryTrackIds`` (not snapshot positions trackIds)
+    avoids false positives from non-primary noise tracks that the remap
+    legitimately drops.
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH rally_pre AS (
+                    SELECT pt.rally_id, r.video_id,
+                        pt.pre_remap_state_json->'primaryTrackIds' AS pre_pri,
+                        pt.primary_track_ids AS cur_pri
+                    FROM player_tracks pt
+                    JOIN rallies r ON r.id = pt.rally_id
+                    WHERE pt.pre_remap_state_json IS NOT NULL
+                )
+                SELECT DISTINCT video_id FROM rally_pre
+                WHERE pre_pri IS NOT NULL
+                  AND jsonb_array_length(pre_pri) > jsonb_array_length(cur_pri)
+                ORDER BY video_id;
+                """
+            )
+            return [str(row[0]) for row in cur.fetchall()]
 
-    match_analysis, pre_remap_raw_ids = _load_video(args.video_id)
+
+def _repair_video(video_id: str, dry_run: bool, quiet: bool = False) -> tuple[int, int, int]:
+    """Repair one video. Returns (rallies_repaired, rallies_ok, rallies_skipped)."""
+    match_analysis, pre_remap_raw_ids = _load_video(video_id)
 
     rallies = match_analysis.get("rallies") or []
-    repairs: list[tuple[int, str, dict[str, int]]] = []  # (idx, rid, mapping)
+    repairs: list[tuple[int, str, dict[str, int]]] = []
+    ok_count = 0
+    skip_count = 0
     for idx, rally_entry in enumerate(rallies):
         rid = rally_entry.get("rallyId") or rally_entry.get("rally_id")
         if not rid:
             continue
-        snapshot_raw_ids = pre_remap_raw_ids.get(rid)
-        if snapshot_raw_ids is None:
-            print(f"  [{idx}] {rid[:8]}: SKIP — no pre_remap_state_json snapshot")
+        snapshot_primary_ids = pre_remap_raw_ids.get(rid)
+        if snapshot_primary_ids is None:
+            if not quiet:
+                print(f"  [{idx}] {rid[:8]}: SKIP — no pre_remap_state_json snapshot")
+            skip_count += 1
             continue
-        needs, reason = _needs_repair(rally_entry, snapshot_raw_ids)
+        needs, reason = _needs_repair(rally_entry, snapshot_primary_ids)
         if not needs:
-            print(f"  [{idx}] {rid[:8]}: OK ({reason})")
+            if not quiet:
+                print(f"  [{idx}] {rid[:8]}: OK ({reason})")
+            ok_count += 1
             continue
-        repair_mapping = _build_repair_mapping(rally_entry, snapshot_raw_ids)
+        repair_mapping = _build_repair_mapping(rally_entry, snapshot_primary_ids)
         if repair_mapping is None:
-            print(f"  [{idx}] {rid[:8]}: SKIP — assignmentAnchor missing or "
-                  f"doesn't cover snapshot {sorted(snapshot_raw_ids)}")
+            if not quiet:
+                print(f"  [{idx}] {rid[:8]}: SKIP — assignmentAnchor missing "
+                      f"or doesn't cover snapshot {sorted(snapshot_primary_ids)}")
+            skip_count += 1
             continue
         repairs.append((idx, rid, repair_mapping))
-        print(f"  [{idx}] {rid[:8]}: REPAIR — {reason}")
-        print(f"           new appliedFullMapping = {repair_mapping}")
+        if not quiet:
+            print(f"  [{idx}] {rid[:8]}: REPAIR — {reason}")
+            print(f"           new appliedFullMapping = {repair_mapping}")
 
     if not repairs:
-        print("\nNothing to repair.")
-        return 0
+        if not quiet:
+            print(f"  {video_id[:8]}: nothing to repair.")
+        return 0, ok_count, skip_count
 
-    print(f"\nPlanned: {len(repairs)} rallies will get appliedFullMapping "
-          f"rewritten + remapApplied=true.")
-    if args.dry_run:
-        print("(dry-run; no DB writes)")
-        return 0
+    if dry_run:
+        if not quiet:
+            print(f"  {video_id[:8]}: would repair {len(repairs)} rallies "
+                  f"(dry-run).")
+        return len(repairs), ok_count, skip_count
 
     # Apply repairs to match_analysis_json in-memory then write back.
     for idx, _, repair_mapping in repairs:
@@ -183,25 +219,58 @@ def main() -> int:
         with conn.cursor() as cur:
             cur.execute(
                 "UPDATE videos SET match_analysis_json = %s WHERE id = %s",
-                [json.dumps(match_analysis), args.video_id],
+                [json.dumps(match_analysis), video_id],
             )
         conn.commit()
-    print(f"\nWrote {len(repairs)} appliedFullMapping repairs to "
-          f"videos.match_analysis_json.")
 
-    print("\nNow invoking remap-track-ids to apply the corrected mappings...")
-    # Lazy import to keep CLI startup lean — pulls heavy deps.
+    # Invoke remap-track-ids to apply the corrected mappings. Restore-from-
+    # snapshot + new source-priority logic produces the correct canonical
+    # positions on a single pass.
     from rallycut.cli.commands.remap_track_ids import remap_track_ids_cmd
-    # Direct call (skip Typer's argument parsing); remap_track_ids_cmd will
-    # restore positions from pre_remap_state_json and apply the repaired
-    # appliedFullMapping via the new source-priority logic.
     remap_track_ids_cmd(
-        video_id=args.video_id,
+        video_id=video_id,
         dry_run=False,
-        quiet=False,
+        quiet=True,  # quiet to keep fleet runs readable
         rally_ids=None,
         reset_snapshot=False,
     )
+    return len(repairs), ok_count, skip_count
+
+
+def main() -> int:
+    p = argparse.ArgumentParser()
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("video_id", nargs="?",
+                   help="Repair a single video by ID.")
+    g.add_argument("--all-affected", action="store_true",
+                   help="Find all affected videos by DB query and repair "
+                        "each in sequence.")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Print planned repairs without writing to DB.")
+    args = p.parse_args()
+
+    if args.all_affected:
+        video_ids = _find_affected_videos()
+        print(f"Found {len(video_ids)} affected videos.")
+        if not video_ids:
+            return 0
+        total_repaired = 0
+        for i, vid in enumerate(video_ids, 1):
+            print(f"\n[{i}/{len(video_ids)}] {vid}")
+            try:
+                repaired, _, _ = _repair_video(vid, args.dry_run, quiet=False)
+                total_repaired += repaired
+            except Exception as e:
+                print(f"  ERROR repairing {vid}: {e}")
+                continue
+        print(f"\n=== Fleet repair complete: {total_repaired} rallies "
+              f"repaired across {len(video_ids)} videos. ===")
+        return 0
+
+    if not args.video_id:
+        p.error("Either video_id or --all-affected is required.")
+    repaired, ok, skipped = _repair_video(args.video_id, args.dry_run)
+    print(f"\n{repaired} repaired, {ok} OK, {skipped} skipped.")
     return 0
 
 
