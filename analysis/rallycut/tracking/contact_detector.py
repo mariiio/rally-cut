@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import math
+import os
 import statistics
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
@@ -45,6 +46,14 @@ _CONFIDENCE_THRESHOLD = 0.3
 # near-GT at 77.5% precision.
 _RESCUE_GBM_CEILING = 0.10
 _RESCUE_SEQ_FLOOR = 0.95
+
+# v3.0 (2026-05-11): adaptive forward-only fallback window for
+# _find_nearest_player(s). When the standard ±search_frames window returns
+# fewer than max_candidates tracks, expand FORWARD by this many frames to
+# catch late-tracked players (e.g., a server who's only detected AFTER
+# entering the play frame). Validated against 4 panel cases on 2026-05-11.
+# Gated by env var ADAPTIVE_PLAYER_SEARCH_WINDOW (default ON, set "0" to disable).
+_ADAPTIVE_FORWARD_FRAMES = 60
 
 # Cached temporal attributor (loaded once from disk on first use)
 _temporal_attributor_cache: dict[str, TemporalAttributionInference | None] = {}
@@ -680,7 +689,7 @@ def _find_nearest_players(
         List of (track_id, distance, player_center_y), sorted by
         depth-corrected distance. Up to max_candidates entries.
     """
-    # Pass 1: standard ±search_frames window (unchanged behavior).
+    # Pass 1: standard ±search_frames window (existing behavior).
     best_per_track = _collect_best_per_track(
         player_positions=player_positions,
         frame=frame,
@@ -691,6 +700,30 @@ def _find_nearest_players(
         upper_bound_frame=frame + search_frames,
         court_calibrator=court_calibrator,
     )
+
+    # v3.0 adaptive fallback: if Pass 1 is underfull (fewer than max_candidates
+    # primary tracks visible), expand forward-only to catch late-tracked
+    # players. Validated cause of 7/8 absent-GT serves on the 3 GT panel.
+    # Spec: docs/superpowers/specs/2026-05-11-adaptive-candidate-window-design.md
+    adaptive_enabled = (
+        os.environ.get("ADAPTIVE_PLAYER_SEARCH_WINDOW", "1") != "0"
+    )
+    if adaptive_enabled and len(best_per_track) < max_candidates:
+        pass2_best = _collect_best_per_track(
+            player_positions=player_positions,
+            frame=frame,
+            search_frames=_ADAPTIVE_FORWARD_FRAMES,
+            ball_x=ball_x, ball_y=ball_y,
+            primary_track_ids=primary_track_ids,
+            lower_bound_frame=frame,  # forward-only — never look earlier
+            upper_bound_frame=frame + _ADAPTIVE_FORWARD_FRAMES,
+            court_calibrator=court_calibrator,
+        )
+        # Merge: Pass 1 entries take precedence (already closer to the contact
+        # frame). Pass 2 only contributes track_ids missing from Pass 1.
+        for tid, entry in pass2_best.items():
+            if tid not in best_per_track:
+                best_per_track[tid] = entry
 
     ranked = sorted(best_per_track.items(), key=lambda x: x[1][0])
     return [
