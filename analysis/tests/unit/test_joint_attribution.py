@@ -5,11 +5,17 @@ Spec: docs/superpowers/specs/2026-05-11-joint-attribution-v2-design.md
 
 from __future__ import annotations
 
+import math
+
+import pytest
+
 from rallycut.tracking.action_classifier import ActionType, ClassifiedAction
+from rallycut.tracking.contact_detector import Contact
 from rallycut.tracking.joint_attribution import (
     RallyState,
     _derive_state_after,
     _is_valid_candidate,
+    _score_candidate,
 )
 
 
@@ -214,3 +220,54 @@ class TestIsValidCandidate:
         )
         assert _is_valid_candidate(ActionType.UNKNOWN, candidate_team=0, prior=prior) is True
         assert _is_valid_candidate(ActionType.UNKNOWN, candidate_team=1, prior=prior) is True
+
+
+def _contact(
+    frame: int = 0,
+    candidates: list[tuple[int, float]] | None = None,
+    court_side: str = "near",
+) -> Contact:
+    return Contact(
+        frame=frame,
+        ball_x=0.5,
+        ball_y=0.5,
+        velocity=0.02,
+        direction_change_deg=60.0,
+        player_track_id=(candidates[0][0] if candidates else -1),
+        player_distance=(candidates[0][1] if candidates else float("inf")),
+        player_candidates=candidates or [],
+        court_side=court_side,
+        is_validated=True,
+    )
+
+
+class TestScoreCandidate:
+    """Truth table for the soft proximity scorer."""
+
+    def test_returns_neg_log_distance_when_pid_in_candidates(self) -> None:
+        """Score = -log(dist + ε) for a pid present in player_candidates."""
+        contact = _contact(candidates=[(1, 0.05), (2, 0.10)])
+        score_1 = _score_candidate(contact, candidate_pid=1)
+        score_2 = _score_candidate(contact, candidate_pid=2)
+        # Nearer pid scores higher (smaller distance → larger -log)
+        assert score_1 > score_2
+        # Sanity-check exact values
+        assert score_1 == pytest.approx(-math.log(0.05 + 1e-3))
+        assert score_2 == pytest.approx(-math.log(0.10 + 1e-3))
+
+    def test_returns_neg_inf_when_pid_not_in_candidates(self) -> None:
+        """A pid not in player_candidates → -inf score (effectively rejected)."""
+        contact = _contact(candidates=[(1, 0.05), (2, 0.10)])
+        assert _score_candidate(contact, candidate_pid=3) == float("-inf")
+
+    def test_handles_zero_distance(self) -> None:
+        """Zero distance is well-defined via the epsilon guard."""
+        contact = _contact(candidates=[(1, 0.0)])
+        score = _score_candidate(contact, candidate_pid=1)
+        assert math.isfinite(score)
+        assert score == pytest.approx(-math.log(1e-3))
+
+    def test_empty_candidates_returns_neg_inf(self) -> None:
+        """A contact with no candidates rejects everything."""
+        contact = _contact(candidates=[])
+        assert _score_candidate(contact, candidate_pid=1) == float("-inf")

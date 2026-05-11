@@ -11,9 +11,11 @@ ranking from Contact.player_candidates.
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass
 
 from rallycut.tracking.action_classifier import ActionType, ClassifiedAction
+from rallycut.tracking.contact_detector import Contact
 
 logger = logging.getLogger(__name__)
 
@@ -161,3 +163,22 @@ def _is_valid_candidate(
     # (For BLOCK after an ATTACK: prior.expected_team is the receiving team,
     # which is exactly the team that does the block.)
     return candidate_team == prior.expected_team
+
+
+def _score_candidate(
+    contact: Contact,
+    candidate_pid: int,
+) -> float:
+    """Soft proximity score for assigning ``candidate_pid`` to this contact.
+
+    Returns ``-log(rank_distance + ε)`` for a pid present in
+    ``contact.player_candidates`` (the depth-corrected proximity ranking
+    populated by ``detect_contacts``). Returns ``-inf`` for pids not in
+    the candidates list — effectively rejecting them from the beam.
+
+    Higher scores are better (smaller distance → larger -log).
+    """
+    for tid, dist in contact.player_candidates:
+        if tid == candidate_pid:
+            return -math.log(dist + _SCORE_EPSILON)
+    return float("-inf")
