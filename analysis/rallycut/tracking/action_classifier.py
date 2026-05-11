@@ -3144,6 +3144,45 @@ def reattribute_players(
         logger.info("Re-attributed %d/%d actions using team signal",
                      n_reattributed, len(actions))
 
+    # Pass 2c (v3.1, 2026-05-11): within-team proximity swap.
+    # Targets wrong-of-two-teammates errors where Pass 2 correctly says
+    # "player is on the right team, skip" but a CLOSER same-team candidate
+    # exists in the contact's player_candidates list (typically because
+    # v3.0's adaptive candidate-window widening added them). Default-ON;
+    # env flag WITHIN_TEAM_PROXIMITY_SWAP=0 disables.
+    # Spec: docs/superpowers/specs/2026-05-11-within-team-proximity-swap-design.md
+    if os.environ.get("WITHIN_TEAM_PROXIMITY_SWAP", "1") != "0":
+        n_within_team = 0
+        for action in actions:
+            if action.confidence < 0.6 or action.player_track_id < 0:
+                continue
+            contact = contact_by_frame.get(action.frame)
+            if contact is None or not contact.player_candidates:
+                continue
+            rank1_tid = contact.player_candidates[0][0]
+            if rank1_tid == action.player_track_id:
+                continue  # already attributing to rank-1
+            current_team = team_assignments.get(action.player_track_id)
+            rank1_team = team_assignments.get(rank1_tid)
+            if current_team is None or rank1_team is None:
+                continue
+            if current_team != rank1_team:
+                continue  # cross-team is Pass 2's domain
+            # Same-team, but rank-1 differs from current → swap to rank-1.
+            logger.info(
+                "within_team_swap frame=%d action=%s old_pid=%d new_pid=%d "
+                "team=%d",
+                action.frame, action.action_type.value,
+                action.player_track_id, rank1_tid, current_team,
+            )
+            action.player_track_id = rank1_tid
+            n_within_team += 1
+        if n_within_team > 0:
+            logger.info(
+                "Within-team proximity swap: re-attributed %d/%d actions",
+                n_within_team, len(actions),
+            )
+
     # Pass 3: ReID re-attribution (requires reid_predictions)
     if reid_predictions:
         _reattribute_reid(actions, contact_by_frame, reid_predictions, reid_min_margin)
