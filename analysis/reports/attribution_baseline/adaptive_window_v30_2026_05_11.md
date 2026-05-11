@@ -244,3 +244,122 @@ Proceeding to fleet deploy (Task 7) is a HOLD pending user decision — see conc
    and Viterbi serving_team on all rallies (0 action re-attributions expected, same
    root causes). Recommend HOLD on Task 7 until v3.1 within-team disambiguation
    is available — the cost is low but the benefit is nil until then.
+
+---
+
+## v3.1 post-deploy measurement (2026-05-11)
+
+Plan: docs/superpowers/plans/2026-05-11-within-team-proximity-swap.md
+Spec: docs/superpowers/specs/2026-05-11-within-team-proximity-swap-design.md
+Commit: `df2aa381` (feat(reattribute): v3.1 within-team proximity swap (Pass 2c))
+
+### Step 1: reattribute-actions on 3 GT videos
+
+All 3 runs completed. 0 within_team_swap log lines fired on any video.
+
+```
+cece (950fbe5d): 5 rallies, 3 eligible (conf >= 0.70)
+  0/28 actions re-attributed. "no changes (teams stamped)" for all rallies.
+
+gigi (b097dd2a): 7 rallies, 0 eligible (conf >= 0.70)
+  0/49 actions re-attributed. All gigi rallies below confidence threshold.
+
+wawa (5c756c41): 10 rallies, 6 eligible (conf >= 0.70)
+  0/42 actions re-attributed. "no changes (teams stamped)" for all rallies.
+```
+
+**G-E investigation:** Pass 2c is correctly implemented and all 4 unit tests pass.
+Two distinct blockers prevent the expected fires:
+
+1. **wawa/06c13117 (frame 184, serve):** `contacts_json` has `playerTrackId=4`, rank-1
+   is track 3 (distance 0.084 vs 0.105 for track 4). Both tracks 3 and 4 are on team 1
+   (far). Team check passes — Pass 2c should fire — but the action's `confidence=0.4397`
+   falls below the 0.6 gate: `if action.confidence < 0.6: continue`. Pass 2c is skipped.
+
+2. **gigi/5b6f0474 (frame 48, synthetic serve):** All 7 gigi rallies have
+   `assignmentConfidence < 0.70` (max 0.50). `reattrib_ta = reattrib_teams.get(rally_id)`
+   is None → the entire `reattribute_players()` call is skipped for gigi. Pass 2c never
+   reaches the candidate comparison. Additionally, the synthetic serve is at frame 48 but
+   the contact is at frame 46, so even if confidence gate were cleared, `contact_by_frame`
+   would not find it.
+
+These are the same structural blockers as v3.0 Task 6.
+
+### Step 2: Baseline harness post-v3.1 deploy
+
+```
+COMBINED (n=136 GT actions)
+  correct:            82 ( 60.3%)
+  wrong (any):        26 ( 19.1%)
+    cross_team:       17
+    same_team:         9
+    unknown_team:      0
+  missing:            28 ( 20.6%)
+Per-fixture: cece=22, gigi=35, wawa=25
+```
+
+Numbers **UNCHANGED** from pre-v3.1 — expected given G-E investigation above.
+
+### Step 3: v3.1 pre-ship gate verdicts
+
+| Gate | Status | Value |
+|------|--------|-------|
+| G-A  | FAIL   | correct_rate: pre=60.3%, post=60.3%, delta=0pp (threshold ≥+1pp) |
+| G-B  | PASS   | cece=22 (≥22), gigi=35 (≥35), wawa=25 (≥25) — no per-fixture regression |
+| G-C  | PASS   | wrong_unknown_team: 0→0 (non-increasing) |
+| G-D  | PASS   | 1336 passed, 0 failures (confirmed in Task 1) |
+| G-E  | FAIL   | 0 within_team_swap log lines fired (expected 2: gigi/5b6f0474 + wawa/06c13117) |
+
+**STOP: G-A and G-E both FAIL — DONE_WITH_CONCERNS.**
+
+G-A fails because Pass 2c never fires on the production cases: confidence gates
+block the two expected within-team swaps (action confidence < 0.6 for wawa, rally
+confidence < 0.70 for gigi). The implementation is correct per unit tests; the
+blockers are in the data and pre-existing confidence gates, not in Pass 2c logic.
+
+### Step 4: Coherence invariants (post-v3.1 deploy)
+
+```
+cece (950fbe5d): C-1=0, C-2=2, C-3=0 — matches post-v3.0 baseline (NON-REGRESSING)
+gigi (b097dd2a): C-1=1, C-2=3, C-3=0 — matches post-v3.0 baseline (NON-REGRESSING)
+wawa (5c756c41): C-1=0, C-2=7, C-3=0 — matches post-v3.0 baseline (NON-REGRESSING)
+```
+
+All coherence counts identical to post-v3.0. No regression introduced by v3.1 Pass 2c.
+
+### Root-cause analysis and forward path
+
+Pass 2c is structurally correct but cannot reach the two intended cases because:
+
+1. **Action confidence gate (wawa/06c13117):** The serve at frame 184 has contact
+   confidence 0.4397 < 0.6. This is a legitimate gate — low-confidence contacts are
+   noisy and swapping them freely risks regressions elsewhere. The fix would require
+   either: (a) lowering the confidence threshold for within-team swaps (v3.2 candidate),
+   or (b) boosting contact confidence for serve-frame contacts specifically.
+
+2. **Rally confidence gate (gigi):** All gigi rallies have `assignmentConfidence < 0.70`.
+   The matcher produces weak assignments for this video; reattribute-actions requires
+   >= 0.70 to avoid propagating bad team signals. The fix requires: (a) better matcher
+   confidence for gigi, or (b) a lower confidence floor for Pass 2c only (since
+   within-team swaps are lower-risk than cross-team swaps).
+
+3. **Frame mismatch (gigi/5b6f0474 synthetic serve):** Frame 48 (action) vs frame 46
+   (contact). Even with gates cleared, `contact_by_frame.get(48)` returns None. Synthetic
+   serve insertion needs to align its frame to the nearest contact frame.
+
+**Recommendation:** v3.2 should address items 1 and 3 above, or separately revisit
+gigi matcher confidence. The code is deployed and ready; the data-side blockers are
+well-understood and scoped.
+
+### Concerns
+
+1. Pass 2c is merged and enabled by default. It adds 0 changes on the fleet today
+   (both expected fires are blocked by pre-existing gates). Risk of accidental firing
+   on other rallies: low — the same-team + rank-1-differs + both-mapped preconditions
+   are strict. No regressions observed (G-B PASS, coherence non-regressing).
+
+2. Unit tests (4/4) validate the happy path, not-current-is-rank1, cross-team guard,
+   and env-flag-off cases. Production is blocked by data; unit coverage is sufficient.
+
+3. `WITHIN_TEAM_PROXIMITY_SWAP=0` available for rollback if unexpected fires emerge
+   on fleet deploy.
