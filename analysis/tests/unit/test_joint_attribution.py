@@ -362,6 +362,56 @@ class TestBeamSearch:
         # Receive: 1 (team A) is valid; 4 (team B) violates R2.
         assert assignment == [3, 2, 1]
 
+    def test_synthetic_first_action_passes_through(self) -> None:
+        """A synthetic first SERVE: keeps existing pid, no beam expansion.
+        Subsequent non-synthetic actions still get rule-checked from the
+        synthetic action's seeded state."""
+        actions = [
+            ClassifiedAction(
+                action_type=ActionType.SERVE, frame=50, ball_x=0.5, ball_y=0.5,
+                velocity=0.02, player_track_id=3, court_side="far", confidence=0.95,
+                is_synthetic=True,
+            ),
+            _a(ActionType.RECEIVE, frame=90),
+        ]
+        # NO contact for the synthetic serve frame 50 — only frame 90 has a contact.
+        contacts = [
+            _contact(frame=90, candidates=[(4, 0.05), (1, 0.07)]),
+        ]
+        team_assignments = {1: 0, 2: 0, 3: 1, 4: 1}
+
+        assignment = _beam_search(
+            actions, contacts, team_assignments,
+            serving_team=None, beam_width=50,
+        )
+        # Synthetic serve track 3 (team B) passed through; receive must be team A (rule).
+        assert assignment == [3, 1]
+
+    def test_synthetic_first_action_with_no_team_skips_state(self) -> None:
+        """A synthetic SERVE with pl_pid=-1 has no team — state passes unchanged
+        and the next action becomes effectively the rally seed."""
+        actions = [
+            ClassifiedAction(
+                action_type=ActionType.SERVE, frame=50, ball_x=0.5, ball_y=0.5,
+                velocity=0.02, player_track_id=-1, court_side="far", confidence=0.95,
+                is_synthetic=True,
+            ),
+            _a(ActionType.RECEIVE, frame=90),
+        ]
+        contacts = [
+            _contact(frame=90, candidates=[(1, 0.05), (4, 0.07)]),
+        ]
+        team_assignments = {1: 0, 2: 0, 3: 1, 4: 1}
+
+        assignment = _beam_search(
+            actions, contacts, team_assignments,
+            serving_team=None, beam_width=50,
+        )
+        # Synthetic placeholder; receive has no prior team constraint.
+        # Either candidate is rule-valid as the "first non-synthetic action".
+        # Beam picks the proximity-best (track 1).
+        assert assignment == [-1, 1]
+
     def test_block_and_cover_legal_sequence(self) -> None:
         """A block followed by a same-team cover is legal under R5.
 

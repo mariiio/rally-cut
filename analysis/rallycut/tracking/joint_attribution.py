@@ -131,9 +131,19 @@ def _is_valid_candidate(
     """Return True iff assigning ``candidate_team`` to this action obeys R1-R5.
 
     Used by the beam search to prune rule-violating partial assignments.
+
+    Special sentinel: ``count_consecutive_same_team == -1`` indicates that
+    the prior action was a synthetic passthrough with an unresolved player
+    (pid=-1). In this mode, all constraints are relaxed — the next action
+    is treated as the effective rally seed with no team or type restriction.
+    This arises when a synthetic SERVE carries no player attribution.
     """
     # UNKNOWN passes through — no team constraint.
     if action_type == ActionType.UNKNOWN:
+        return True
+
+    # Sentinel: synthetic-unresolved passthrough → unconstrained next action.
+    if prior.count_consecutive_same_team == -1:
         return True
 
     # R1: first action of a rally must be SERVE.
@@ -203,22 +213,27 @@ def _beam_search(
 
     Notes
     -----
-    - The contact for ``actions[i]`` is ``contacts[i]``. Lengths must match.
-    - Rallies with fewer contacts than actions get -inf score and fall back.
+    - Contacts are indexed by frame: ``contact_by_frame[action.frame]``.
+    - Synthetic actions (``action.is_synthetic=True``) are treated as
+      PASSTHROUGH: the existing ``action.player_track_id`` is kept and
+      state is advanced from that assignment (no beam expansion). If the
+      synthetic action's pid has no team mapping (e.g. pl_pid=-1), state
+      is left unchanged.
+    - Non-synthetic actions with no matching contact frame are also treated
+      as PASSTHROUGH (same logic as synthetic).
     - UNKNOWN actions accept any pid in their contact's candidates (no
       team constraint), but still receive a proximity score.
     """
-    if len(actions) != len(contacts):
-        logger.warning(
-            "joint_attribute: action/contact length mismatch (%d vs %d), "
-            "falling back",
-            len(actions), len(contacts),
-        )
-        return None
     if not actions:
         return []
 
-    # Initial beam: one entry per valid candidate for actions[0].
+    # Index contacts by frame so non-synthetic actions can look up their
+    # contact without requiring parallel list alignment.
+    contact_by_frame: dict[int, Contact] = {c.frame: c for c in contacts}
+
+    # Initial beam: one entry per valid candidate for the first non-passthrough
+    # action, OR a single passthrough entry if the first action is synthetic/
+    # has no contact.
     initial_state = RallyState(
         expected_team=None,
         count_consecutive_same_team=0,
@@ -228,17 +243,39 @@ def _beam_search(
 
     # Each beam entry is (cumulative_score, assignment_so_far, state_after).
     beam: list[tuple[float, list[int], RallyState]] = []
-    for tid, _dist in contacts[0].player_candidates:
-        tid_team = team_assignments.get(tid)
-        if tid_team is None:
-            continue
-        if not _is_valid_candidate(actions[0].action_type, tid_team, initial_state):
-            continue
-        score = _score_candidate(contacts[0], tid)
-        if not math.isfinite(score):
-            continue
-        new_state = _derive_state_after(actions[0], tid_team, initial_state)
-        beam.append((score, [tid], new_state))
+
+    # --- Seed beam from actions[0] ---
+    action_0 = actions[0]
+    contact_0 = contact_by_frame.get(action_0.frame)
+    if action_0.is_synthetic or contact_0 is None:
+        # Passthrough: keep existing pid, advance state if team is known.
+        existing_pid = action_0.player_track_id
+        existing_team = team_assignments.get(existing_pid)
+        if existing_team is not None:
+            new_state = _derive_state_after(action_0, existing_team, initial_state)
+        else:
+            # pid=-1 or unmapped: state cannot be seeded. Use sentinel
+            # count=-1 so the next action is treated as unconstrained
+            # (see _is_valid_candidate docstring).
+            new_state = RallyState(
+                expected_team=None,
+                count_consecutive_same_team=-1,
+                last_was_block=False,
+                serving_team=None,
+            )
+        beam = [(0.0, [existing_pid], new_state)]
+    else:
+        for tid, _dist in contact_0.player_candidates:
+            tid_team = team_assignments.get(tid)
+            if tid_team is None:
+                continue
+            if not _is_valid_candidate(action_0.action_type, tid_team, initial_state):
+                continue
+            score = _score_candidate(contact_0, tid)
+            if not math.isfinite(score):
+                continue
+            new_state = _derive_state_after(action_0, tid_team, initial_state)
+            beam.append((score, [tid], new_state))
 
     if not beam:
         return None
@@ -247,21 +284,41 @@ def _beam_search(
     for i in range(1, len(actions)):
         next_beam: list[tuple[float, list[int], RallyState]] = []
         action_i = actions[i]
-        contact_i = contacts[i]
-        for cum_score, partial, state in beam:
-            for tid, _dist in contact_i.player_candidates:
-                tid_team = team_assignments.get(tid)
-                if tid_team is None:
-                    continue
-                if not _is_valid_candidate(action_i.action_type, tid_team, state):
-                    continue
-                inc_score = _score_candidate(contact_i, tid)
-                if not math.isfinite(inc_score):
-                    continue
-                new_score = cum_score + inc_score
-                new_partial = partial + [tid]
-                new_state = _derive_state_after(action_i, tid_team, state)
-                next_beam.append((new_score, new_partial, new_state))
+        contact_i = contact_by_frame.get(action_i.frame)
+
+        if action_i.is_synthetic or contact_i is None:
+            # Passthrough: keep existing pid, advance state from each partial.
+            existing_pid = action_i.player_track_id
+            existing_team = team_assignments.get(existing_pid)
+            for cum_score, partial, state in beam:
+                if existing_team is not None:
+                    new_state = _derive_state_after(action_i, existing_team, state)
+                else:
+                    # pid=-1 or unmapped: use sentinel so the next real
+                    # action is unconstrained (see _is_valid_candidate).
+                    new_state = RallyState(
+                        expected_team=None,
+                        count_consecutive_same_team=-1,
+                        last_was_block=False,
+                        serving_team=None,
+                    )
+                next_beam.append((cum_score, partial + [existing_pid], new_state))
+        else:
+            for cum_score, partial, state in beam:
+                for tid, _dist in contact_i.player_candidates:
+                    tid_team = team_assignments.get(tid)
+                    if tid_team is None:
+                        continue
+                    if not _is_valid_candidate(action_i.action_type, tid_team, state):
+                        continue
+                    inc_score = _score_candidate(contact_i, tid)
+                    if not math.isfinite(inc_score):
+                        continue
+                    new_score = cum_score + inc_score
+                    new_partial = partial + [tid]
+                    new_state = _derive_state_after(action_i, tid_team, state)
+                    next_beam.append((new_score, new_partial, new_state))
+
         if not next_beam:
             return None
         # Prune to beam_width by descending score.
@@ -294,7 +351,9 @@ def joint_attribute(
     Parameters
     ----------
     actions, contacts
-        Parallel lists. ``contacts[i]`` corresponds to ``actions[i]``.
+        Lists of actions and contacts for the rally. Contacts are indexed
+        by frame; list lengths need not match (synthetic actions have no
+        corresponding contact entry).
     team_assignments
         Map from player track id to team (0=near=A, 1=far=B).
     serving_team

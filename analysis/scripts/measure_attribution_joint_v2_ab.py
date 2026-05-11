@@ -146,7 +146,10 @@ def _score(rallies_data: list[dict[str, Any]], joint_v2_on: bool) -> dict[str, A
                 for k, v in team_assignments_raw.items()
             }
             if team_assignments and actions:
-                reattribute_players(actions, contacts, team_assignments)
+                reattribute_players(
+                    actions, contacts, team_assignments,
+                    serving_team=(r["actions_json"] or {}).get("servingTeam"),
+                )
             pipeline_actions = [a.to_dict() for a in actions]
             normalised_gt = []
             for ga in r["gt"]:
@@ -246,7 +249,7 @@ def main() -> int:
         on_c  = on["agg"]["per_fixture"][fx]["counts"]["correct"]
         print(f"  {fx:<6} correct: {off_c} → {on_c} ({on_c - off_c:+d})")
 
-    print(f"\n=== FALLBACK RATE (G-F) ===")
+    print("\n=== FALLBACK RATE (G-F) ===")
     print(f"  joint_attribute fallback WARN lines: {on['fallback_count']} "
           f"(of {len(rallies_data)} rallies; gate ≤ 1)")
 
