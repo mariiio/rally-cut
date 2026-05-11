@@ -182,3 +182,92 @@ def _score_candidate(
         if tid == candidate_pid:
             return -math.log(dist + _SCORE_EPSILON)
     return float("-inf")
+
+
+def _beam_search(
+    actions: list[ClassifiedAction],
+    contacts: list[Contact],
+    team_assignments: dict[int, int],
+    serving_team: int | None,
+    beam_width: int = 50,
+) -> list[int] | None:
+    """Beam search over per-action player assignments under R1-R5.
+
+    Walks the action sequence left-to-right. At each step, expands each
+    surviving partial assignment by every pid in the corresponding
+    contact's player_candidates, filters by ``_is_valid_candidate``, scores
+    by ``_score_candidate``, and retains the top ``beam_width`` partials.
+
+    Returns the highest-scoring full assignment (list of pids parallel to
+    actions) or ``None`` if no rule-valid full assignment exists.
+
+    Notes
+    -----
+    - The contact for ``actions[i]`` is ``contacts[i]``. Lengths must match.
+    - Rallies with fewer contacts than actions get -inf score and fall back.
+    - UNKNOWN actions accept any pid in their contact's candidates (no
+      team constraint), but still receive a proximity score.
+    """
+    if len(actions) != len(contacts):
+        logger.warning(
+            "joint_attribute: action/contact length mismatch (%d vs %d), "
+            "falling back",
+            len(actions), len(contacts),
+        )
+        return None
+    if not actions:
+        return []
+
+    # Initial beam: one entry per valid candidate for actions[0].
+    initial_state = RallyState(
+        expected_team=None,
+        count_consecutive_same_team=0,
+        last_was_block=False,
+        serving_team=serving_team,
+    )
+
+    # Each beam entry is (cumulative_score, assignment_so_far, state_after).
+    beam: list[tuple[float, list[int], RallyState]] = []
+    for tid, _dist in contacts[0].player_candidates:
+        tid_team = team_assignments.get(tid)
+        if tid_team is None:
+            continue
+        if not _is_valid_candidate(actions[0].action_type, tid_team, initial_state):
+            continue
+        score = _score_candidate(contacts[0], tid)
+        if not math.isfinite(score):
+            continue
+        new_state = _derive_state_after(actions[0], tid_team, initial_state)
+        beam.append((score, [tid], new_state))
+
+    if not beam:
+        return None
+
+    # Expand for actions[1:].
+    for i in range(1, len(actions)):
+        next_beam: list[tuple[float, list[int], RallyState]] = []
+        action_i = actions[i]
+        contact_i = contacts[i]
+        for cum_score, partial, state in beam:
+            for tid, _dist in contact_i.player_candidates:
+                tid_team = team_assignments.get(tid)
+                if tid_team is None:
+                    continue
+                if not _is_valid_candidate(action_i.action_type, tid_team, state):
+                    continue
+                inc_score = _score_candidate(contact_i, tid)
+                if not math.isfinite(inc_score):
+                    continue
+                new_score = cum_score + inc_score
+                new_partial = partial + [tid]
+                new_state = _derive_state_after(action_i, tid_team, state)
+                next_beam.append((new_score, new_partial, new_state))
+        if not next_beam:
+            return None
+        # Prune to beam_width by descending score.
+        next_beam.sort(key=lambda x: x[0], reverse=True)
+        beam = next_beam[:beam_width]
+
+    # Return the highest-scoring full assignment.
+    beam.sort(key=lambda x: x[0], reverse=True)
+    return beam[0][1]

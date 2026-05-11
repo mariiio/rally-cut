@@ -13,6 +13,7 @@ from rallycut.tracking.action_classifier import ActionType, ClassifiedAction
 from rallycut.tracking.contact_detector import Contact
 from rallycut.tracking.joint_attribution import (
     RallyState,
+    _beam_search,
     _derive_state_after,
     _is_valid_candidate,
     _score_candidate,
@@ -271,3 +272,124 @@ class TestScoreCandidate:
         """A contact with no candidates rejects everything."""
         contact = _contact(candidates=[])
         assert _score_candidate(contact, candidate_pid=1) == float("-inf")
+
+
+class TestBeamSearch:
+    """End-to-end tests of the beam search returning a per-action pid list."""
+
+    def test_canonical_bug_pattern_returns_rule_valid_assignment(self) -> None:
+        """The user-quoted bug: serve by team B, receive currently attributed to team B.
+        Beam search should pick the team-A receiver (which is in the candidate list)
+        because that's the only R2-compliant assignment."""
+        actions = [
+            _a(ActionType.SERVE, frame=50),
+            _a(ActionType.RECEIVE, frame=90),
+        ]
+        contacts = [
+            _contact(frame=50, candidates=[(3, 0.04)]),
+            # The wrong-team nearest candidate (4) is first; the correct candidate (1) is second.
+            _contact(frame=90, candidates=[(4, 0.05), (1, 0.07)]),
+        ]
+        team_assignments = {1: 0, 2: 0, 3: 1, 4: 1}  # teams 0=near=A, 1=far=B
+
+        assignment = _beam_search(
+            actions, contacts, team_assignments,
+            serving_team=1,  # team B serves
+            beam_width=50,
+        )
+        # Serve by track 3 (team B); receive by track 1 (team A, the correct team).
+        assert assignment == [3, 1]
+
+    def test_returns_none_when_no_valid_assignment_exists(self) -> None:
+        """If every candidate path violates a rule, return None for the fallback."""
+        actions = [
+            _a(ActionType.SERVE, frame=50),
+            _a(ActionType.RECEIVE, frame=90),
+        ]
+        contacts = [
+            _contact(frame=50, candidates=[(3, 0.04)]),
+            # Only team-B candidates exist for the receive — violates R2.
+            _contact(frame=90, candidates=[(3, 0.05), (4, 0.07)]),
+        ]
+        team_assignments = {1: 0, 2: 0, 3: 1, 4: 1}
+
+        assignment = _beam_search(
+            actions, contacts, team_assignments,
+            serving_team=1, beam_width=50,
+        )
+        assert assignment is None  # fallback signal
+
+    def test_picks_proximity_best_within_rule_valid_space(self) -> None:
+        """Among rule-valid assignments, the highest soft-score (closest) wins."""
+        actions = [
+            _a(ActionType.SERVE, frame=50),
+            _a(ActionType.RECEIVE, frame=90),
+        ]
+        contacts = [
+            _contact(frame=50, candidates=[(3, 0.04), (4, 0.20)]),  # both team B; 3 is closer
+            _contact(frame=90, candidates=[(1, 0.05), (2, 0.10)]),  # both team A; 1 is closer
+        ]
+        team_assignments = {1: 0, 2: 0, 3: 1, 4: 1}
+
+        assignment = _beam_search(
+            actions, contacts, team_assignments,
+            serving_team=1, beam_width=50,
+        )
+        # Both serve candidates are team B (rule-valid); 3 is closer.
+        # Both receive candidates are team A (rule-valid); 1 is closer.
+        assert assignment == [3, 1]
+
+    def test_unknown_action_passes_through_any_pid(self) -> None:
+        """UNKNOWN actions accept any candidate; beam search picks the proximity-best."""
+        actions = [
+            _a(ActionType.SERVE, frame=50),
+            _a(ActionType.UNKNOWN, frame=70),
+            _a(ActionType.RECEIVE, frame=90),
+        ]
+        contacts = [
+            _contact(frame=50, candidates=[(3, 0.04)]),
+            _contact(frame=70, candidates=[(2, 0.05), (3, 0.08)]),  # UNKNOWN: either valid
+            _contact(frame=90, candidates=[(1, 0.05), (4, 0.07)]),  # receive: must be team A
+        ]
+        team_assignments = {1: 0, 2: 0, 3: 1, 4: 1}
+
+        assignment = _beam_search(
+            actions, contacts, team_assignments,
+            serving_team=1, beam_width=50,
+        )
+        # UNKNOWN: 2 is closer → picked.
+        # Receive: 1 (team A) is valid; 4 (team B) violates R2.
+        assert assignment == [3, 2, 1]
+
+    def test_block_and_cover_legal_sequence(self) -> None:
+        """A block followed by a same-team cover is legal under R5.
+
+        Sequence: SERVE(B) → RECEIVE(A) → SET(A) → ATTACK(A) → BLOCK(B) → DIG(B) → SET(B) → ATTACK(B)
+        """
+        actions = [
+            _a(ActionType.SERVE, frame=50),
+            _a(ActionType.RECEIVE, frame=90),
+            _a(ActionType.SET, frame=130),
+            _a(ActionType.ATTACK, frame=170),
+            _a(ActionType.BLOCK, frame=180),
+            _a(ActionType.DIG, frame=200),
+            _a(ActionType.SET, frame=240),
+            _a(ActionType.ATTACK, frame=280),
+        ]
+        contacts = [
+            _contact(frame=50, candidates=[(3, 0.04)]),
+            _contact(frame=90, candidates=[(1, 0.05)]),
+            _contact(frame=130, candidates=[(2, 0.06)]),
+            _contact(frame=170, candidates=[(1, 0.07)]),
+            _contact(frame=180, candidates=[(3, 0.05)]),  # block by team B
+            _contact(frame=200, candidates=[(4, 0.06)]),  # cover by team B (same as blocker)
+            _contact(frame=240, candidates=[(3, 0.05)]),  # set by team B
+            _contact(frame=280, candidates=[(4, 0.07)]),  # attack by team B
+        ]
+        team_assignments = {1: 0, 2: 0, 3: 1, 4: 1}
+
+        assignment = _beam_search(
+            actions, contacts, team_assignments,
+            serving_team=1, beam_width=50,
+        )
+        assert assignment == [3, 1, 2, 1, 3, 4, 3, 4]
