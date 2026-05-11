@@ -1,0 +1,14 @@
+{
+  "fires_at_max_gap_10_margin_005": [
+    {
+      "video": "dark",
+      "rally_start_ms": 230281,
+      "current_frame": 181,
+      "current_action": "dig",
+      "prev_frame": 172,
+      "gap": 9,
+      "ball_y_minus_net": -0.09156361667834434,
+      "is_tp": false
+    }
+  ]
+}

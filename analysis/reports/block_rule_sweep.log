@@ -1,0 +1,16 @@
+ max_gap net_margin  fires  TPs  FPs FP examples (vid/rally/frame/labels)                        
+--------------------------------------------------------------------------------------------------------------
+       7       0.05      0    0    0  -
+       7       0.08      0    0    0  -
+       7       0.10      0    0    0  -
+      10       0.05      1    0    1  dark/230s f181 (attack→dig)
+      10       0.08      1    0    1  dark/230s f181 (attack→dig)
+      10       0.10      0    0    0  -
+      15       0.05     20    1   19  tutu/127s f254 (attack→dig); yaya/47s f259 (attack→dig); gigi/4s f322 (attack→dig)
+      15       0.08     19    1   18  tutu/127s f254 (attack→dig); yaya/47s f259 (attack→dig); gigi/4s f322 (attack→dig)
+      15       0.10     16    0   16  tutu/127s f254 (attack→dig); gigi/4s f322 (attack→dig); muchi/4s f267 (attack→dig)
+
+Wrote reports/block_rule_sweep.json
+
+Note: TP = the relabel would correctly produce a block at a GT block frame.
+FP = relabel would produce a block where no GT block exists nearby.

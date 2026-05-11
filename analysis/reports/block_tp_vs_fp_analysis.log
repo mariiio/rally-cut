@@ -1,0 +1,23 @@
+TPs: 24    FPs: 152
+
+signal                     TP min/Q1/med/Q3/max                     FP min/Q1/med/Q3/max                    
+peak_p                     0.73/1.00/1.00/1.00/1.00                 0.52/0.91/0.99/1.00/1.00                
+ball_player_dist           0.17/0.24/0.26/0.31/0.45                 0.05/0.23/0.28/0.32/0.47                
+opposite_team              0.00/0.00/1.00/1.00/1.00                 0.00/0.00/1.00/1.00/1.00                
+player_y_to_net            0.01/0.03/0.05/0.06/0.10                 0.00/0.02/0.04/0.05/0.10                
+player_bbox_top            0.35/0.41/0.49/0.54/0.59                 0.31/0.45/0.50/0.55/0.62                
+ball_y_above_net           0.12/0.24/0.30/0.31/0.40                 -0.05/0.23/0.28/0.33/0.43               
+direction_change_deg       0.00/19.18/45.62/121.53/173.63           0.00/18.64/33.29/54.72/176.71           
+
+
+=== Candidate combined-gate sweep ===
+gate description                                               TPs   FPs
+opposite_team only                                              16    91
+opposite_team + ball_above_net>=0.05                            16    90
+opposite_team + ball_above_net>=0.10                            16    87
+opposite_team + ball_player_dist<=0.10                           0     1
+opposite_team + ball_above_net>=0.10 + ball_player_dist<=0.15     0     2
+opposite_team + ball_above_net>=0.10 + dc>=30deg                 9    49
+opposite_team + ball_above_net>=0.10 + dc>=60deg                 5    20
+opposite_team + ball_above_net>=0.10 + player_to_net<=0.20      16    87
+opposite_team + ball_above_net>=0.10 + ball_player_dist<=0.15 + dc>=30     0     0
