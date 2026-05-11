@@ -108,3 +108,129 @@ class TestShouldPrependServe:
         assert SERVE_PREPEND_MIN_GAP == 25
         assert SERVE_PREPEND_FIRST_ACTION_SERVE_CEIL == 0.50
         assert SERVE_PREPEND_GUARD_FRAMES == 15
+
+
+import pytest
+from rallycut.evaluation.tracking.db import get_connection
+from rallycut.tracking.action_classifier import classify_rally_actions
+from rallycut.tracking.ball_tracker import BallPosition
+from rallycut.tracking.contact_detector import ContactDetectionConfig, detect_contacts
+from rallycut.tracking.player_tracker import PlayerPosition
+from rallycut.tracking.sequence_action_runtime import get_sequence_probs
+
+
+def _load_rally(rally_id_prefix: str) -> dict:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """SELECT r.id, pt.fps, pt.frame_count, pt.court_split_y,
+                          pt.ball_positions_json, pt.positions_json,
+                          pt.actions_json, pt.primary_track_ids
+                   FROM rallies r LEFT JOIN player_tracks pt ON pt.rally_id = r.id
+                   WHERE r.id LIKE %s LIMIT 1""",
+                [f"{rally_id_prefix}%"],
+            )
+            row = cur.fetchone()
+    assert row is not None, f"Rally {rally_id_prefix} not found"
+    rid, fps, fcount, csy, bp_json, pp_json, aj, primary_raw = row
+    bp = [BallPosition(frame_number=int(b["frameNumber"]), x=float(b["x"]),
+                       y=float(b["y"]), confidence=float(b.get("confidence", 0)))
+          for b in bp_json if isinstance(b, dict)]
+    pp = [PlayerPosition(frame_number=int(p["frameNumber"]), track_id=int(p["trackId"]),
+                         x=float(p["x"]), y=float(p["y"]),
+                         width=float(p["width"]), height=float(p["height"]),
+                         confidence=float(p.get("confidence", 0)),
+                         keypoints=p.get("keypoints"))
+          for p in pp_json if isinstance(p, dict)]
+    ta_str = (aj or {}).get("teamAssignments", {}) or {}
+    ta_int = {int(k): (0 if v == "A" else 1) for k, v in ta_str.items() if v in ("A", "B")}
+    return {
+        "rally_id": rid, "fps": fps, "fcount": fcount, "csy": csy,
+        "bp": bp, "pp": pp, "ta_int": ta_int, "primary_raw": primary_raw or [],
+    }
+
+
+class TestPrependIntegration:
+    @pytest.mark.slow
+    def test_wawa_8c49e480_prepends_serve_near_frame_110(self) -> None:
+        """Canonical case: GT serve at 101, pipeline first contact at 426
+        (originally mis-labeled as serve).
+
+        After v1.3 prepend:
+          - A synthetic serve lands within ±15 of GT 101.
+          - The OLD first contact (frame 426) is NO LONGER labeled "serve".
+          - There is exactly one serve in the final action list.
+          - All downstream actions kept their non-serve labels (re-classification
+            handled by `classify_rally`, not by manual re-labeling).
+        """
+        r = _load_rally("8c49e480")
+        seq = get_sequence_probs(
+            r["bp"], r["pp"], r["csy"], r["fcount"] or 0, r["ta_int"], calibrator=None,
+        )
+        assert seq is not None
+        contact_seq = detect_contacts(
+            ball_positions=r["bp"], player_positions=r["pp"],
+            config=ContactDetectionConfig(),
+            net_y=r["csy"], frame_count=r["fcount"] or None,
+            team_assignments=r["ta_int"],
+            sequence_probs=seq,
+            primary_track_ids=r["primary_raw"] or None,
+        )
+        ra = classify_rally_actions(
+            contact_seq,
+            team_assignments=r["ta_int"],
+            sequence_probs=seq,
+        )
+        serves = [a for a in ra.actions if a.action_type.value == "serve"]
+        # Exactly one serve — the synthetic prepend, not a duplicate
+        assert len(serves) == 1, (
+            f"expected exactly 1 serve, got {len(serves)}: "
+            f"{[(s.frame, s.is_synthetic) for s in serves]}"
+        )
+        first_serve = serves[0]
+        assert abs(first_serve.frame - 101) <= 15, (
+            f"expected serve within ±15 of GT frame 101, got {first_serve.frame}"
+        )
+        assert first_serve.is_synthetic
+        # The old first contact (frame 426) must NOT be labeled serve anymore
+        old_first_actions = [a for a in ra.actions if a.frame == 426]
+        if old_first_actions:
+            assert old_first_actions[0].action_type.value != "serve", (
+                "Old first contact at frame 426 should have been re-classified "
+                "as a non-serve action by classify_rally re-run"
+            )
+
+    @pytest.mark.slow
+    def test_correctly_detected_serve_rally_unchanged(self) -> None:
+        """On a rally where the pipeline already detects the serve correctly,
+        v1.3 must NOT fire — the first contact's own serve-prob is high enough
+        that the gate is blocked.
+
+        Uses a sample from the pipeline_already_correct cluster.
+        """
+        # Pick any rally where pipeline_already_correct holds — riri/ef32c552
+        # had gt=127, pred=120 (within tolerance).
+        r = _load_rally("ef32c552")
+        seq = get_sequence_probs(
+            r["bp"], r["pp"], r["csy"], r["fcount"] or 0, r["ta_int"], calibrator=None,
+        )
+        assert seq is not None
+        contact_seq = detect_contacts(
+            ball_positions=r["bp"], player_positions=r["pp"],
+            config=ContactDetectionConfig(),
+            net_y=r["csy"], frame_count=r["fcount"] or None,
+            team_assignments=r["ta_int"],
+            sequence_probs=seq,
+            primary_track_ids=r["primary_raw"] or None,
+        )
+        ra = classify_rally_actions(
+            contact_seq,
+            team_assignments=r["ta_int"],
+            sequence_probs=seq,
+        )
+        serves = [a for a in ra.actions if a.action_type.value == "serve"]
+        assert len(serves) == 1
+        # Real serve, not synthetic
+        assert not serves[0].is_synthetic
+        # Frame near GT 127 (allow some tolerance for HIT_TOLERANCE=15)
+        assert abs(serves[0].frame - 127) <= 15

@@ -28,6 +28,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, overload
 
+from rallycut.actions.trajectory_features import ACTION_TYPES
 from rallycut.tracking.candidate_decoder import DecodedContact
 from rallycut.tracking.contact_detector import Contact, ContactSequence, ball_crossed_net
 
@@ -3406,6 +3407,29 @@ def viterbi_decode_actions(
     return result
 
 
+def _interpolate_ball_position_for_synthetic(
+    ball_positions: list[BallPosition],
+    frame: int,
+) -> tuple[float, float]:
+    """Pick a reasonable ball (x, y) for a synthesized contact at `frame`.
+
+    Prefer an exact match. Else pick the closest visible (x > 0.01 OR y > 0.01)
+    ball position within ±10 frames. Else return (0.5, 0.5) — the synthesizer
+    is the first contact so its exact position rarely matters for downstream
+    rules, and court_side is decided separately by net_y comparison.
+    """
+    by_frame = {b.frame_number: b for b in ball_positions}
+    exact = by_frame.get(frame)
+    if exact is not None and (exact.x > 0.01 or exact.y > 0.01):
+        return (exact.x, exact.y)
+    for delta in range(1, 11):
+        for f in (frame - delta, frame + delta):
+            nearby = by_frame.get(f)
+            if nearby is not None and (nearby.x > 0.01 or nearby.y > 0.01):
+                return (nearby.x, nearby.y)
+    return (0.5, 0.5)
+
+
 def classify_rally_actions(
     contact_sequence: ContactSequence,
     rally_id: str = "",
@@ -3511,6 +3535,94 @@ def classify_rally_actions(
         camera_height=camera_height,
         sequence_probs=sequence_probs,
     )
+
+    # v1.3 serve-peak prepend: when the first classified action is "serve"
+    # but MS-TCN++ has a strong serve-class peak earlier in the rally, the
+    # first detected contact is actually a downstream action (typically
+    # receive). Inject a synthetic Contact at the peak frame into the
+    # ContactSequence and re-run classify_rally so the existing rule engine
+    # re-classifies every contact in the new serve's context — no manual
+    # re-labeling required.
+    if result.actions and sequence_probs is not None:
+        from rallycut.tracking.serve_prepend import should_prepend_serve
+
+        first_action = min(result.actions, key=lambda a: a.frame)
+        if first_action.action_type == ActionType.SERVE:
+            serve_idx = ACTION_TYPES.index("serve") + 1
+            faf = first_action.frame
+            if 0 <= faf < sequence_probs.shape[1]:
+                first_action_serve_prob = float(sequence_probs[serve_idx, faf])
+            else:
+                first_action_serve_prob = 0.0
+            peak_frame = should_prepend_serve(
+                sequence_probs=sequence_probs,
+                first_action_frame=faf,
+                first_action_serve_prob=first_action_serve_prob,
+                rally_start_frame=contact_sequence.rally_start_frame or 0,
+            )
+            if peak_frame is not None:
+                # Build a synthetic Contact at peak_frame. Interpolate ball
+                # position from the ball-tracker output; if the ball isn't
+                # visible at peak_frame (off-screen server case), fall back
+                # to the closest visible ball position within ±10 frames.
+                from rallycut.tracking.contact_detector import (
+                    Contact as _Contact,
+                )
+                from rallycut.tracking.contact_detector import (
+                    ContactSequence as _ContactSequence,
+                )
+                ball_xy = _interpolate_ball_position_for_synthetic(
+                    contact_sequence.ball_positions, peak_frame,
+                )
+                synthetic_contact = _Contact(
+                    frame=peak_frame,
+                    ball_x=ball_xy[0],
+                    ball_y=ball_xy[1],
+                    velocity=0.0,
+                    direction_change_deg=0.0,
+                    player_track_id=-1,
+                    player_distance=float("inf"),
+                    court_side=(
+                        "near" if ball_xy[1] > (contact_sequence.net_y or 0.5)
+                        else "far"
+                    ),
+                    is_at_net=False,
+                    is_validated=True,
+                    confidence=float(
+                        sequence_probs[serve_idx, peak_frame]
+                    ) if 0 <= peak_frame < sequence_probs.shape[1] else 0.95,
+                    arc_fit_residual=0.0,
+                )
+                # Build a NEW ContactSequence with the synthetic contact
+                # prepended; sort to keep ordering invariant. The classifier
+                # will treat the synthetic contact as a real serve (first
+                # contact = serve rule) and re-classify everything else.
+                injected = _ContactSequence(
+                    contacts=sorted(
+                        [synthetic_contact, *contact_sequence.contacts],
+                        key=lambda c: c.frame,
+                    ),
+                    net_y=contact_sequence.net_y,
+                    rally_start_frame=contact_sequence.rally_start_frame,
+                    ball_positions=contact_sequence.ball_positions,
+                    player_positions=contact_sequence.player_positions,
+                )
+                result = action_classifier.classify_rally(
+                    injected, rally_id,
+                    team_assignments=team_assignments,
+                    classifier=learned,
+                    match_team_assignments=match_team_assignments,
+                    calibrator=calibrator,
+                    camera_height=camera_height,
+                    sequence_probs=sequence_probs,
+                )
+                # Tag the new first action (the synthesized serve) so
+                # downstream consumers know it's a synthetic prepend.
+                if result.actions:
+                    re_first = min(result.actions, key=lambda a: a.frame)
+                    if re_first.frame == peak_frame:
+                        re_first.is_synthetic = True
+                        re_first.player_track_id = -1
 
     # Repair with only Rule 1 (consecutive recv/dig → set, +0.8pp LOO-CV).
     # All other rules hurt accuracy — see scripts/ablate_repair_rules.py.
