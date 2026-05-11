@@ -597,6 +597,57 @@ def _depth_scale_at_y(
     return near_w / width_at_y if width_at_y > 0 else 1.0
 
 
+def _collect_best_per_track(
+    player_positions: list[PlayerPosition],
+    frame: int,
+    search_frames: int,
+    ball_x: float,
+    ball_y: float,
+    primary_track_ids: list[int] | None,
+    lower_bound_frame: int,
+    upper_bound_frame: int,
+    court_calibrator: CourtCalibrator | None,
+) -> dict[int, tuple[float, float, float]]:
+    """Collect best (closest depth-corrected) position per track in a window.
+
+    Used by `_find_nearest_players` (and the v3.0 adaptive-window fallback).
+    Returns ``{track_id: (rank_dist, img_dist, center_y)}`` — the same shape
+    as the dict that `_find_nearest_players` builds and ranks.
+
+    `lower_bound_frame` and `upper_bound_frame` define the absolute frame
+    range to consider (inclusive). The pre-v3 caller uses
+    `frame ± search_frames`; the v3 adaptive fallback uses an asymmetric
+    `[frame, frame + _ADAPTIVE_FORWARD_FRAMES]` for the forward-only second
+    pass. `search_frames` is kept for backward compatibility with callers
+    that don't pass bounds explicitly, but `lower/upper_bound_frame` take
+    precedence.
+
+    `primary_track_ids` filtering and depth-correction are unchanged from
+    the inlined version.
+    """
+    primary_set = set(primary_track_ids) if primary_track_ids else None
+    best_per_track: dict[int, tuple[float, float, float]] = {}
+
+    for p in player_positions:
+        if p.frame_number < lower_bound_frame or p.frame_number > upper_bound_frame:
+            continue
+        if primary_set is not None and p.track_id not in primary_set:
+            continue
+
+        img_dist = _player_to_ball_dist(p, ball_x, ball_y)
+
+        # Depth-correction (perspective scaling), unchanged from prior inlined code.
+        scale_y = p.y - p.height * 0.25
+        scale = _depth_scale_at_y(scale_y, court_calibrator)
+        rank_dist = img_dist * scale
+
+        prior = best_per_track.get(p.track_id)
+        if prior is None or rank_dist < prior[0]:
+            best_per_track[p.track_id] = (rank_dist, img_dist, p.y)
+
+    return best_per_track
+
+
 def _find_nearest_players(
     frame: int,
     ball_x: float,
@@ -629,29 +680,17 @@ def _find_nearest_players(
         List of (track_id, distance, player_center_y), sorted by
         depth-corrected distance. Up to max_candidates entries.
     """
-    # Best distances per track (a track may appear in multiple frames)
-    # track_id → (rank_dist, img_dist, center_y)
-    best_per_track: dict[int, tuple[float, float, float]] = {}
-
-    primary_set = set(primary_track_ids) if primary_track_ids else None
-
-    for p in player_positions:
-        if abs(p.frame_number - frame) > search_frames:
-            continue
-        if primary_set is not None and p.track_id not in primary_set:
-            continue
-
-        img_dist = _player_to_ball_dist(p, ball_x, ball_y)
-
-        # Rank by depth-corrected distance: scale by perspective at player Y.
-        # Use bbox upper-quarter Y for perspective scaling (stable regardless
-        # of whether wrist or bbox was used for distance).
-        scale_y = p.y - p.height * 0.25
-        scale = _depth_scale_at_y(scale_y, court_calibrator)
-        rank_dist = img_dist * scale
-
-        if p.track_id not in best_per_track or rank_dist < best_per_track[p.track_id][0]:
-            best_per_track[p.track_id] = (rank_dist, img_dist, p.y)
+    # Pass 1: standard ±search_frames window (unchanged behavior).
+    best_per_track = _collect_best_per_track(
+        player_positions=player_positions,
+        frame=frame,
+        search_frames=search_frames,
+        ball_x=ball_x, ball_y=ball_y,
+        primary_track_ids=primary_track_ids,
+        lower_bound_frame=frame - search_frames,
+        upper_bound_frame=frame + search_frames,
+        court_calibrator=court_calibrator,
+    )
 
     ranked = sorted(best_per_track.items(), key=lambda x: x[1][0])
     return [
