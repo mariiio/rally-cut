@@ -1,0 +1,146 @@
+{
+  "off": {
+    "per_fixture": {
+      "cece": {
+        "counts": {
+          "correct": 22,
+          "wrong_cross_team": 3,
+          "wrong_same_team": 1,
+          "wrong_unknown_team": 0,
+          "abstained": 0,
+          "missing": 3,
+          "n_gt_actions": 29
+        },
+        "rates": {
+          "correct_rate": 0.7586206896551724,
+          "wrong_rate": 0.13793103448275862,
+          "missing_rate": 0.10344827586206896,
+          "abstained_rate": 0.0
+        }
+      },
+      "gigi": {
+        "counts": {
+          "correct": 35,
+          "wrong_cross_team": 7,
+          "wrong_same_team": 3,
+          "wrong_unknown_team": 2,
+          "abstained": 0,
+          "missing": 9,
+          "n_gt_actions": 56
+        },
+        "rates": {
+          "correct_rate": 0.625,
+          "wrong_rate": 0.21428571428571427,
+          "missing_rate": 0.16071428571428573,
+          "abstained_rate": 0.0
+        }
+      },
+      "wawa": {
+        "counts": {
+          "correct": 25,
+          "wrong_cross_team": 6,
+          "wrong_same_team": 3,
+          "wrong_unknown_team": 1,
+          "abstained": 0,
+          "missing": 16,
+          "n_gt_actions": 51
+        },
+        "rates": {
+          "correct_rate": 0.49019607843137253,
+          "wrong_rate": 0.19607843137254902,
+          "missing_rate": 0.3137254901960784,
+          "abstained_rate": 0.0
+        }
+      }
+    },
+    "combined": {
+      "counts": {
+        "correct": 82,
+        "wrong_cross_team": 16,
+        "wrong_same_team": 7,
+        "wrong_unknown_team": 3,
+        "abstained": 0,
+        "missing": 28,
+        "n_gt_actions": 136
+      },
+      "rates": {
+        "correct_rate": 0.6029411764705882,
+        "wrong_rate": 0.19117647058823528,
+        "missing_rate": 0.20588235294117646,
+        "abstained_rate": 0.0
+      }
+    }
+  },
+  "on": {
+    "per_fixture": {
+      "cece": {
+        "counts": {
+          "correct": 22,
+          "wrong_cross_team": 3,
+          "wrong_same_team": 1,
+          "wrong_unknown_team": 0,
+          "abstained": 0,
+          "missing": 3,
+          "n_gt_actions": 29
+        },
+        "rates": {
+          "correct_rate": 0.7586206896551724,
+          "wrong_rate": 0.13793103448275862,
+          "missing_rate": 0.10344827586206896,
+          "abstained_rate": 0.0
+        }
+      },
+      "gigi": {
+        "counts": {
+          "correct": 35,
+          "wrong_cross_team": 7,
+          "wrong_same_team": 3,
+          "wrong_unknown_team": 2,
+          "abstained": 0,
+          "missing": 9,
+          "n_gt_actions": 56
+        },
+        "rates": {
+          "correct_rate": 0.625,
+          "wrong_rate": 0.21428571428571427,
+          "missing_rate": 0.16071428571428573,
+          "abstained_rate": 0.0
+        }
+      },
+      "wawa": {
+        "counts": {
+          "correct": 25,
+          "wrong_cross_team": 6,
+          "wrong_same_team": 3,
+          "wrong_unknown_team": 1,
+          "abstained": 0,
+          "missing": 16,
+          "n_gt_actions": 51
+        },
+        "rates": {
+          "correct_rate": 0.49019607843137253,
+          "wrong_rate": 0.19607843137254902,
+          "missing_rate": 0.3137254901960784,
+          "abstained_rate": 0.0
+        }
+      }
+    },
+    "combined": {
+      "counts": {
+        "correct": 82,
+        "wrong_cross_team": 16,
+        "wrong_same_team": 7,
+        "wrong_unknown_team": 3,
+        "abstained": 0,
+        "missing": 28,
+        "n_gt_actions": 136
+      },
+      "rates": {
+        "correct_rate": 0.6029411764705882,
+        "wrong_rate": 0.19117647058823528,
+        "missing_rate": 0.20588235294117646,
+        "abstained_rate": 0.0
+      }
+    }
+  }
+}
