@@ -119,3 +119,45 @@ def _derive_state_after(
         last_was_block=False,
         serving_team=serving_team,
     )
+
+
+def _is_valid_candidate(
+    action_type: ActionType,
+    candidate_team: int,
+    prior: RallyState,
+) -> bool:
+    """Return True iff assigning ``candidate_team`` to this action obeys R1-R5.
+
+    Used by the beam search to prune rule-violating partial assignments.
+    """
+    # UNKNOWN passes through — no team constraint.
+    if action_type == ActionType.UNKNOWN:
+        return True
+
+    # R1: first action of a rally must be SERVE.
+    if prior.expected_team is None and prior.serving_team is None:
+        if action_type != ActionType.SERVE:
+            return False
+        # Serving team unset → any team valid for the seed.
+        return True
+
+    # First action with known serving_team: must be SERVE and team must match.
+    if prior.expected_team is None and prior.serving_team is not None:
+        if action_type != ActionType.SERVE:
+            return False
+        return candidate_team == prior.serving_team
+
+    # Non-first action: prior.expected_team is set.
+    # R4: max 3 same-team contacts unless the next action is ATTACK (which crosses).
+    if (
+        prior.count_consecutive_same_team >= _MAX_SAME_TEAM
+        and candidate_team == prior.expected_team
+        and action_type not in _NET_CROSSING_ACTIONS
+        and action_type != ActionType.BLOCK
+    ):
+        return False
+
+    # R2/R3/R5: candidate_team must match prior.expected_team.
+    # (For BLOCK after an ATTACK: prior.expected_team is the receiving team,
+    # which is exactly the team that does the block.)
+    return candidate_team == prior.expected_team

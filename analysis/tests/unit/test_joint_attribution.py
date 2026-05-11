@@ -9,6 +9,7 @@ from rallycut.tracking.action_classifier import ActionType, ClassifiedAction
 from rallycut.tracking.joint_attribution import (
     RallyState,
     _derive_state_after,
+    _is_valid_candidate,
 )
 
 
@@ -102,3 +103,114 @@ class TestRallyStateMachine:
         )
         state = _derive_state_after(_a(ActionType.UNKNOWN), team_at_action=0, prior=prior)
         assert state == prior  # no change
+
+
+class TestIsValidCandidate:
+    """Truth table for _is_valid_candidate: per-rule pass/fail cases."""
+
+    def test_first_action_must_be_serve_by_serving_team(self) -> None:
+        """R1: with serving_team known, the first action's team must match."""
+        prior = RallyState(
+            expected_team=None, count_consecutive_same_team=0,
+            last_was_block=False, serving_team=0,
+        )
+        assert _is_valid_candidate(ActionType.SERVE, candidate_team=0, prior=prior) is True
+        assert _is_valid_candidate(ActionType.SERVE, candidate_team=1, prior=prior) is False
+
+    def test_first_action_serve_seeds_when_serving_team_none(self) -> None:
+        """If serving_team is unset, any team is valid for the first SERVE."""
+        prior = RallyState(
+            expected_team=None, count_consecutive_same_team=0,
+            last_was_block=False, serving_team=None,
+        )
+        assert _is_valid_candidate(ActionType.SERVE, candidate_team=0, prior=prior) is True
+        assert _is_valid_candidate(ActionType.SERVE, candidate_team=1, prior=prior) is True
+
+    def test_first_action_must_be_serve_not_other(self) -> None:
+        """First action is SERVE — non-SERVE first actions are rejected."""
+        prior = RallyState(
+            expected_team=None, count_consecutive_same_team=0,
+            last_was_block=False, serving_team=None,
+        )
+        assert _is_valid_candidate(ActionType.RECEIVE, candidate_team=1, prior=prior) is False
+        assert _is_valid_candidate(ActionType.ATTACK, candidate_team=0, prior=prior) is False
+
+    def test_r2_net_crossing_flips_required(self) -> None:
+        """After SERVE/ATTACK, next non-BLOCK action must be on opposite team."""
+        # State after a serve by team 0 (expected_team=1 set by state machine)
+        prior = RallyState(
+            expected_team=1, count_consecutive_same_team=1,
+            last_was_block=False, serving_team=0,
+        )
+        # Valid: receive on opposite team
+        assert _is_valid_candidate(ActionType.RECEIVE, candidate_team=1, prior=prior) is True
+        # Invalid: receive on same team (R2 violation — serving team can't receive own serve)
+        assert _is_valid_candidate(ActionType.RECEIVE, candidate_team=0, prior=prior) is False
+
+    def test_r3_same_side_preserves(self) -> None:
+        """After RECEIVE/SET/DIG, next non-BLOCK action must be on same team."""
+        prior = RallyState(
+            expected_team=1, count_consecutive_same_team=1,
+            last_was_block=False, serving_team=0,
+        )
+        # Valid: set on same team
+        assert _is_valid_candidate(ActionType.SET, candidate_team=1, prior=prior) is True
+        # Invalid: set jumps team
+        assert _is_valid_candidate(ActionType.SET, candidate_team=0, prior=prior) is False
+
+    def test_r5_block_passes_through_team_constraint(self) -> None:
+        """A BLOCK action can be on either team — the rule constraint is on
+        the NEXT action's team (cover by blocker's team).
+
+        However, in beach VB the block is always by the team OPPOSITE the
+        attacker. The prior state's expected_team after an ATTACK is the
+        receiving team; a BLOCK at this point should be by the receiving
+        team. So the constraint actually does apply: block team == expected_team.
+        """
+        # State after ATTACK by team 0 — expected_team=1 (receiving)
+        prior = RallyState(
+            expected_team=1, count_consecutive_same_team=1,
+            last_was_block=False, serving_team=0,
+        )
+        # Valid: block by receiving team 1
+        assert _is_valid_candidate(ActionType.BLOCK, candidate_team=1, prior=prior) is True
+        # Invalid: block by attacking team 0 (the attacker can't block their own attack)
+        assert _is_valid_candidate(ActionType.BLOCK, candidate_team=0, prior=prior) is False
+
+    def test_r4_max_3_same_side_blocks_4th_same_team(self) -> None:
+        """After 3 same-team contacts, the next non-attack same-team action is rejected.
+
+        In practice the 3rd same-team contact is usually an ATTACK which is net-crossing
+        (R2 forces next to flip). R4 catches the abnormal case where the chain has
+        3 same-side actions and a 4th would push the count to 4.
+        """
+        # After 3 consecutive same-team contacts
+        prior = RallyState(
+            expected_team=1, count_consecutive_same_team=3,
+            last_was_block=False, serving_team=0,
+        )
+        # The 4th same-team action is rejected by R4
+        assert _is_valid_candidate(ActionType.SET, candidate_team=1, prior=prior) is False
+        # But an attack by same team is still allowed (it crosses; R2 fires next)
+        assert _is_valid_candidate(ActionType.ATTACK, candidate_team=1, prior=prior) is True
+
+    def test_r5_after_block_cover_allowed_same_team(self) -> None:
+        """After a BLOCK, the cover (same team as blocker) is allowed and
+        the count resets — so the cover plus 3 more same-team contacts are legal."""
+        prior = RallyState(
+            expected_team=0, count_consecutive_same_team=0,
+            last_was_block=True, serving_team=0,
+        )
+        # Cover by same team as blocker (team 0)
+        assert _is_valid_candidate(ActionType.DIG, candidate_team=0, prior=prior) is True
+        # Cover by opposing team (team 1) — invalid; ball is still on blocker's side
+        assert _is_valid_candidate(ActionType.DIG, candidate_team=1, prior=prior) is False
+
+    def test_unknown_always_valid(self) -> None:
+        """UNKNOWN actions are passthrough — any team valid (state-machine skip)."""
+        prior = RallyState(
+            expected_team=1, count_consecutive_same_team=1,
+            last_was_block=False, serving_team=0,
+        )
+        assert _is_valid_candidate(ActionType.UNKNOWN, candidate_team=0, prior=prior) is True
+        assert _is_valid_candidate(ActionType.UNKNOWN, candidate_team=1, prior=prior) is True
