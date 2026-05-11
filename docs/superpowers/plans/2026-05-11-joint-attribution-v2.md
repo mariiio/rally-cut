@@ -1,5 +1,7 @@
 # Joint Rule-Aware Attribution (v2.0) Implementation Plan
 
+> **STATUS: SUPERSEDED / NO-GO.** Plan executed through Task 7. Hard-rule beam-search proved fundamentally incompatible with the pipeline's upstream noise (servingTeam ~72-76% accurate, action types <100% accurate). Gates G-A, G-B, G-C, G-F all failed; cross_team errors INCREASED. Code removed from codebase 2026-05-11. v3 (local coherence-repair loop) supersedes. Plan retained as historical record.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace per-contact local attribution with a beam-search joint solver over the entire rally that enforces volleyball game rules (R1–R5) as HARD constraints. Targets the 17 `wrong_cross_team` errors on the 3 fresh-GT videos that v1's local predicate can't reach.

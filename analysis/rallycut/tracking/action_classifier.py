@@ -2951,7 +2951,6 @@ def reattribute_players(
     contacts: list[Contact],
     team_assignments: dict[int, int] | None,
     max_distance_ratio: float = 1.5,
-    serving_team: str | None = None,
     reid_predictions: dict[int, dict[str, Any]] | None = None,
     reid_min_margin: float = 0.15,
 ) -> list[ClassifiedAction]:
@@ -2977,9 +2976,6 @@ def reattribute_players(
         team_assignments: Map of track_id → team (0=near, 1=far).
         max_distance_ratio: Maximum distance ratio for candidate (1.5 = candidate
             can be up to 50% farther than current player).
-        serving_team: "A", "B", or None — the team that opened the rally.
-            Passed to joint_attribute (Pass 2b) to seed the R1 constraint.
-            When None, joint_attribute seeds from the first detected SERVE.
         reid_predictions: Map of contact frame → {track_id: player_id} predicted
             by the fine-tuned ReID classifier. When provided, enables Pass 3.
         reid_min_margin: Minimum probability margin for ReID re-attribution.
@@ -3147,25 +3143,6 @@ def reattribute_players(
     if n_reattributed > 0:
         logger.info("Re-attributed %d/%d actions using team signal",
                      n_reattributed, len(actions))
-
-    # Pass 2b (v2.0, 2026-05-11): joint rule-aware attribution.
-    # Default-OFF; enable via JOINT_ATTRIBUTION_V2=1.
-    # Layered after v1 team-chain predicate so the v1 fixes feed v2's
-    # starting state — they compose. Spec:
-    # docs/superpowers/specs/2026-05-11-joint-attribution-v2-design.md
-    if os.environ.get("JOINT_ATTRIBUTION_V2", "0") == "1" and team_assignments:
-        # serving_team_int converts the "A"/"B"/None string form to 0/1/None.
-        # When None, joint_attribute seeds from the first detected SERVE (R1).
-        # Lazy import avoids circular dependency (joint_attribution imports from here).
-        from rallycut.tracking.joint_attribution import joint_attribute  # noqa: PLC0415
-        serving_team_int = (
-            0 if serving_team == "A"
-            else 1 if serving_team == "B"
-            else None
-        )
-        joint_attribute(
-            actions, contacts, team_assignments, serving_team=serving_team_int,
-        )
 
     # Pass 3: ReID re-attribution (requires reid_predictions)
     if reid_predictions:

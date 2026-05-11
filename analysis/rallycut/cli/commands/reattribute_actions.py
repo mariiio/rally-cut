@@ -667,7 +667,6 @@ def reattribute_actions_cmd(
             reattribute_players(
                 actions, contacts, reattrib_ta,
                 reid_predictions=reid_predictions,
-                serving_team=actions_data.get("servingTeam"),
             )
             assign_court_side_from_teams(actions, reattrib_ta)
 

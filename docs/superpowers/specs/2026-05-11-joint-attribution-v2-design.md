@@ -1,7 +1,7 @@
 # Joint Rule-Aware Attribution (v2.0)
 
 **Date:** 2026-05-11
-**Status:** Design — pending implementation plan
+**Status:** **SUPERSEDED / NO-GO** — implemented, measured, removed from codebase 2026-05-11. Hard-rule beam-search architecture proved fundamentally incompatible with the pipeline's upstream noise (action types + Viterbi servingTeam). All gates failed on the 3 GT panel; cross_team errors went UP (17 → 27) due to cascading rule enforcement. See the post-mortem in `analysis/reports/attribution_baseline/joint_v2_2026_05_11.md`. v3 supersedes with a local coherence-violation repair loop. This spec is retained as historical record.
 **Workstream context:** Second iteration of the action-attribution improvement ladder. v1 (`attribution_team_chain_v1_2026_05_11.md`) relaxed the local nearest-guard predicate; v2 reframes attribution as a rally-level joint optimization with volleyball rules as HARD constraints. Composes over the same upstream signals (contact detection F1 0.927, action classification, cross-rally PID 95.1% PERMUTED).
 
 ## Goal
