@@ -16,6 +16,7 @@ from rallycut.cli.commands.remap_track_ids import (
     _remap_actions,
     _remap_contacts,
     _remap_positions,
+    _resolve_raw_mapping_source,
     _should_reverse,
 )
 from rallycut.tracking.match_tracker import MATCHER_VERSION
@@ -639,3 +640,93 @@ class TestSnapshotIdempotent:
     def _serialize(payload: dict[str, Any]) -> str:
         import json
         return json.dumps(payload, sort_keys=True)
+
+
+class TestResolveRawMappingSource:
+    """Source-priority for the raw_id → canonical_pid mapping a remap will apply.
+
+    Regression target: 2026-05-11 incident on video 5c756c41 where 7/10 rallies
+    silently lost 1–2 players on retrack. Root cause was that re-application of
+    remap (snapshot restore + apply mapping) was sourcing the mapping from
+    ``trackToPlayer``, which gets overwritten to a canonical-space identity at
+    the end of each remap run. With raw tracker IDs outside ``{1..4}`` (e.g.
+    BoT-SORT had emitted ``{1, 3, 9, 10}`` after mid-rally ID switches),
+    canonical-space identity dropped 9 and 10 — they were unmapped on the
+    second remap. Fix: read ``appliedFullMapping`` when ``remapApplied=true``;
+    fall back to ``trackToPlayer`` only on the first run.
+    """
+
+    def test_first_run_reads_track_to_player(self) -> None:
+        rally_entry: dict[str, Any] = {
+            "rallyId": "test-1",
+            "trackToPlayer": {"1": 1, "3": 4, "9": 2, "10": 3},
+            # remapApplied not set / False → first-run path
+        }
+        result = _resolve_raw_mapping_source(rally_entry, None)
+        assert result == {1: 1, 3: 4, 9: 2, 10: 3}
+
+    def test_re_apply_reads_applied_full_mapping_not_track_to_player(self) -> None:
+        """Regression for 2026-05-11 incident.
+
+        After the first remap, ``trackToPlayer`` is overwritten to canonical-
+        space identity ``{1:1, 2:2, 3:3, 4:4}`` but ``appliedFullMapping``
+        preserves the actual raw→canonical mapping. The re-apply must source
+        from ``appliedFullMapping`` — sourcing from ``trackToPlayer`` would
+        drop raw track IDs 9 and 10 (not in identity) and collapse the rally
+        from 4 players to 2.
+        """
+        rally_entry: dict[str, Any] = {
+            "rallyId": "test-1",
+            "trackToPlayer": {"1": 1, "2": 2, "3": 3, "4": 4},
+            "appliedFullMapping": {"1": 1, "3": 4, "9": 2, "10": 3},
+            "remapApplied": True,
+        }
+        result = _resolve_raw_mapping_source(rally_entry, None)
+        assert result == {1: 1, 3: 4, 9: 2, 10: 3}
+
+    def test_re_apply_falls_back_to_track_to_player_when_afm_missing(self) -> None:
+        """Legacy rallies pre-1c4ce3a have no ``appliedFullMapping``; the
+        re-apply must still produce a usable mapping by falling through to
+        ``trackToPlayer``."""
+        rally_entry: dict[str, Any] = {
+            "rallyId": "test-1",
+            "trackToPlayer": {"1": 1, "3": 4, "9": 2, "10": 3},
+            "remapApplied": True,
+            # appliedFullMapping absent
+        }
+        result = _resolve_raw_mapping_source(rally_entry, None)
+        assert result == {1: 1, 3: 4, 9: 2, 10: 3}
+
+    def test_canonical_per_rally_wins_over_applied_full_mapping(self) -> None:
+        rally_entry: dict[str, Any] = {
+            "rallyId": "test-1",
+            "trackToPlayer": {"1": 1, "2": 2, "3": 3, "4": 4},
+            "appliedFullMapping": {"1": 1, "3": 4, "9": 2, "10": 3},
+            "remapApplied": True,
+        }
+        canonical = {1: 2, 3: 1, 9: 4, 10: 3}
+        result = _resolve_raw_mapping_source(rally_entry, canonical)
+        assert result == canonical
+
+    def test_synthetic_subtrack_ids_stripped(self) -> None:
+        rally_entry: dict[str, Any] = {
+            "rallyId": "test-1",
+            "appliedFullMapping": {"1": 1, "3": 4, "-101": 2, "-102": 3},
+            "remapApplied": True,
+        }
+        result = _resolve_raw_mapping_source(rally_entry, None)
+        assert result == {1: 1, 3: 4}
+
+    def test_returns_empty_when_no_mapping_anywhere(self) -> None:
+        rally_entry: dict[str, Any] = {"rallyId": "test-1"}
+        result = _resolve_raw_mapping_source(rally_entry, None)
+        assert result == {}
+
+    def test_snake_case_track_to_player_key_supported(self) -> None:
+        """Legacy snake_case key support is preserved."""
+        rally_entry: dict[str, Any] = {
+            "rallyId": "test-1",
+            "track_to_player": {"1": 1, "3": 4, "9": 2, "10": 3},
+        }
+        result = _resolve_raw_mapping_source(rally_entry, None)
+        assert result == {1: 1, 3: 4, 9: 2, 10: 3}

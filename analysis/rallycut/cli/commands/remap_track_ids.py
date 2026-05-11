@@ -507,6 +507,54 @@ def _load_canonical_per_rally(
     return out, None
 
 
+def _resolve_raw_mapping_source(
+    rally_entry: dict[str, Any],
+    canonical_for_rally: dict[int, int] | None,
+) -> dict[int, int]:
+    """Resolve the raw_id → canonical_pid mapping to apply during remap.
+
+    Source priority (handles the remap-track-ids snapshot+restore loop):
+
+    1. ``canonical_for_rally`` (from ``canonical_pid_map_json``) — wins when
+       set and not version-stale.
+    2. ``appliedFullMapping`` — wins on re-application (``remapApplied=true``).
+       This is the same raw→canonical mapping that was applied on the prior
+       run. The snapshot still holds raw tracker IDs, so re-applying it
+       reproduces the prior canonical-space output bytewise. ``trackToPlayer``
+       is intentionally skipped on this branch: it gets overwritten to a
+       canonical-space identity at the end of each remap run (so downstream
+       consumers reading post-remap positions can do
+       ``trackToPlayer.get(pid_in_positions)`` and get the same pid back),
+       which makes it invalid as a re-apply mapping against the raw-ID
+       snapshot. Reading ``trackToPlayer`` here would drop every raw track ID
+       outside ``{1..max_players}``.
+    3. ``trackToPlayer`` — first-run path. ``match-players`` writes the fresh
+       raw→canonical mapping into this field on every run.
+
+    Negative track IDs (synthetic sub-track ids) are stripped defensively;
+    sub-track resolution flows through ``subTracks``, not ``trackToPlayer``.
+    """
+    if canonical_for_rally:
+        return canonical_for_rally
+    remap_applied = bool(rally_entry.get("remapApplied", False))
+    applied_full = rally_entry.get("appliedFullMapping") or {}
+    if remap_applied and applied_full:
+        return {
+            int(k): int(v) for k, v in applied_full.items()
+            if int(k) > 0
+        }
+    track_to_player = rally_entry.get("trackToPlayer") or rally_entry.get(
+        "track_to_player",
+        {},
+    )
+    if track_to_player:
+        return {
+            int(k): int(v) for k, v in track_to_player.items()
+            if int(k) > 0
+        }
+    return {}
+
+
 @handle_errors
 def remap_track_ids_cmd(
     video_id: str = typer.Argument(
@@ -593,7 +641,7 @@ def remap_track_ids_cmd(
         )
 
     # Build per-rally track→player mappings and index rally entries.
-    # Source priority: canonical_per_rally → matchAnalysisJson.trackToPlayer.
+    # Source-of-truth resolution is in `_resolve_raw_mapping_source`.
     # Sub-track overrides (frame-conditional pid resolution for split parents)
     # come from the rally entry's `subTracks` field regardless of which
     # mapping source wins.
@@ -602,22 +650,14 @@ def remap_track_ids_cmd(
     rally_entries_by_id: dict[str, dict[str, Any]] = {}
     for rally_entry in match_analysis.get("rallies", []):
         rid = rally_entry.get("rallyId") or rally_entry.get("rally_id", "")
-        track_to_player = rally_entry.get("trackToPlayer") or rally_entry.get(
-            "track_to_player", {}
-        )
         if rid:
             rally_entries_by_id[rid] = rally_entry
-            canonical_for_rally = canonical_per_rally.get(rid)
-            if canonical_for_rally:
-                raw_mappings[rid] = canonical_for_rally
-            elif track_to_player:
-                # Strip negative (synthetic sub-track) ids defensively. New
-                # match_analysis_json never contains them in trackToPlayer
-                # but legacy entries from before the strip may.
-                raw_mappings[rid] = {
-                    int(k): int(v) for k, v in track_to_player.items()
-                    if int(k) > 0
-                }
+            resolved_mapping = _resolve_raw_mapping_source(
+                rally_entry,
+                canonical_per_rally.get(rid),
+            )
+            if resolved_mapping:
+                raw_mappings[rid] = resolved_mapping
             plan = _build_remap_plan_for_rally(rally_entry)
             if plan.sub_track_overrides:
                 rally_overrides[rid] = plan.sub_track_overrides
