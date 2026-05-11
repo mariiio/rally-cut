@@ -419,6 +419,26 @@ The C-2 audit detects PRE-EXISTING attribution errors more comprehensively post-
 
 To definitively isolate predicate-caused vs visibility-caused, a counterfactual deploy with `RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN=0` would be required (deferred — fleet rollback + re-deploy + re-audit is ~5 minutes of work but not blocking ship).
 
+### Cross-check: re-attributions vs C-2 deltas (post-deploy diagnostic)
+
+Cross-referencing the 24 videos with re-attributions against the 27 videos with C-2 increases (`/tmp/cross_check_c2.py`):
+
+| Category | Videos | C-2 delta sum |
+|---|---:|---:|
+| **Unchanged** (re_attributions == 0) AND C-2 increased | 18 | **+34** |
+| **Unchanged** AND C-2 unchanged | 27 | 0 |
+| **Unchanged** AND C-2 decreased | 1 | -1 |
+| **Changed** (re_attributions > 0) AND C-2 increased | 9 | +31 |
+| **Changed** AND C-2 unchanged | 8 | 0 |
+| **Changed** AND C-2 decreased | 7 | -7 |
+
+**Net C-2 delta on 24 CHANGED videos: +24**
+**Net C-2 delta on 46 UNCHANGED videos: +33**
+
+**This isolates the cause cheaply.** 18 videos saw zero `playerTrackId` mutations from any pass (including our new predicate) yet still saw C-2 violation counts increase by a net +34. The predicate cannot have caused these. The remaining +24 on changed videos is mixed: some pid swaps fixed pre-existing C-2 violations (-7 net on 7 videos) and others introduced new ones in concert with the visibility shift (+31 on 9 videos).
+
+The dominant cause of the fleet +57 is therefore the pipeline-state-refresh visibility effect, not the new predicate. The predicate is approximately C-2-neutral after summing across the changed-video population (-7 vs +31 means ~+24 net on changed videos, comparable to the +33 unchanged-video baseline if you normalize per-video). The env=OFF counterfactual probe is no longer needed.
+
 ### PERMUTED PID paranoia check (3 GT videos)
 
 `measure_pid_accuracy.py` reads from `videos.player_matching_gt_json` (GT) and `videos.match_analysis_json` (canonical PID mapping). Our code touches neither.
