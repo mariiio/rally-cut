@@ -3144,6 +3144,22 @@ def reattribute_players(
         logger.info("Re-attributed %d/%d actions using team signal",
                      n_reattributed, len(actions))
 
+    # Pass 2b (v2.0, 2026-05-11): joint rule-aware attribution.
+    # Default-OFF; enable via JOINT_ATTRIBUTION_V2=1.
+    # Layered after v1 team-chain predicate so the v1 fixes feed v2's
+    # starting state — they compose. Spec:
+    # docs/superpowers/specs/2026-05-11-joint-attribution-v2-design.md
+    if os.environ.get("JOINT_ATTRIBUTION_V2", "0") == "1" and team_assignments:
+        # serving_team is the int form: 0=near=A, 1=far=B. The CLI sees the
+        # string form ("A"/"B"/None). When called from production with team_assignments
+        # already populated, we don't have direct access to servingTeam here —
+        # joint_attribute handles serving_team=None by seeding from the first SERVE.
+        # Lazy import avoids circular dependency (joint_attribution imports from here).
+        from rallycut.tracking.joint_attribution import joint_attribute  # noqa: PLC0415
+        joint_attribute(
+            actions, contacts, team_assignments, serving_team=None,
+        )
+
     # Pass 3: ReID re-attribution (requires reid_predictions)
     if reid_predictions:
         _reattribute_reid(actions, contact_by_frame, reid_predictions, reid_min_margin)
