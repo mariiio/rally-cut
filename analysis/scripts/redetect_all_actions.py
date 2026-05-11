@@ -64,7 +64,8 @@ def main() -> None:
             cur.execute(f"""
                 SELECT r.id, r.video_id, pt.id as pt_id,
                        pt.ball_positions_json, pt.positions_json,
-                       pt.frame_count, pt.court_split_y
+                       pt.frame_count, pt.court_split_y,
+                       pt.actions_json
                 FROM rallies r
                 JOIN player_tracks pt ON pt.rally_id = r.id
                 WHERE {where_sql}
@@ -92,6 +93,7 @@ def main() -> None:
         positions_json = cast(list[dict[str, Any]] | None, row[4])
         frame_count = cast(int | None, row[5])
         court_split_y = cast(float | None, row[6])
+        existing_actions_json = cast(dict[str, Any] | None, row[7]) or {}
 
         # Load court calibration (cached per video)
         if video_id not in calibrators:
@@ -154,15 +156,18 @@ def main() -> None:
             rally_actions = classify_rally_actions(
                 contacts, rally_id,
                 use_classifier=True,
+                team_assignments=match_teams,
                 match_team_assignments=match_teams,
                 sequence_probs=sequence_probs,
             )
 
-            # Serialize
+            # Serialize via RallyActions.to_dict() so teamAssignments + servingTeam
+            # are emitted from the current pipeline output (was previously dropped:
+            # this script only wrote {"actions": [...]} which stripped both fields
+            # on every deploy). Layer over the existing actions_json so any
+            # downstream-stamped fields (formation hints, etc.) survive.
             new_contacts_json = contacts.to_dict()
-            new_actions_json = {
-                "actions": [a.to_dict() for a in rally_actions.actions],
-            }
+            new_actions_json = {**existing_actions_json, **rally_actions.to_dict()}
 
             n_contacts = len(contacts.contacts)
             n_actions = len(rally_actions.actions)
