@@ -26,6 +26,7 @@ from rallycut.evaluation.tracking.db import load_court_calibration
 from rallycut.tracking.action_classifier import classify_rally_actions
 from rallycut.tracking.ball_tracker import BallPosition as BallPos
 from rallycut.tracking.contact_detector import detect_contacts
+from rallycut.tracking.match_tracker import build_match_team_assignments
 from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
 from rallycut.tracking.sequence_action_runtime import get_sequence_probs
 
@@ -50,16 +51,20 @@ def main() -> None:
                 "SELECT v.id, v.match_analysis_json FROM videos v "
                 "WHERE v.match_analysis_json IS NOT NULL"
             )
+            # Derive per-rally team assignments via the canonical match_tracker
+            # helper. min_confidence=0.0 mirrors `reattribute-actions`'s "all_teams"
+            # path, which is what stamps teamAssignments onto every rally.
+            # The previous implementation here was reading `match_analysis_json.
+            # team_assignments` which is a different (legacy) schema and now
+            # returns 0 rallies — leaving teamAssignments null fleet-wide.
             match_teams_by_rally: dict[str, dict[int, int]] = {}
             for vid, mj_raw in cur.fetchall():
                 mj = cast(dict[str, Any], mj_raw)
-                if not mj or "team_assignments" not in mj:
+                if not mj:
                     continue
-                for rid, teams in mj.get("team_assignments", {}).items():
-                    if teams.get("confidence", 0) >= 0.70:
-                        match_teams_by_rally[rid] = {
-                            int(tid): t for tid, t in teams.get("assignments", {}).items()
-                        }
+                match_teams_by_rally.update(
+                    build_match_team_assignments(mj, min_confidence=0.0)
+                )
 
             cur.execute(f"""
                 SELECT r.id, r.video_id, pt.id as pt_id,

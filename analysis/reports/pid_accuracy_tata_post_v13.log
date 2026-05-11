@@ -1,0 +1,48 @@
+=== DIRECT (matcher_pid as-is vs gt_pid) ===
+Per-rally:
+  1cafde0e: 2/4 (50%)  ←
+  1f9ce33a: 2/4 (50%)  ←
+  4e7e589c: 1/1 (100%)
+  613fde44: 2/4 (50%)  ←
+  689854e3: 2/4 (50%)  ←
+  6e4a9de1: 2/4 (50%)  ←
+  8b0b9e13: 2/4 (50%)  ←
+  8c802c26: 2/4 (50%)  ←
+  97c42190: 2/4 (50%)  ←
+  9f46f74e: 2/4 (50%)  ←
+  d5c51d52: 2/4 (50%)  ←
+  d934f57a: 2/4 (50%)  ←
+  e50f127e: 2/4 (50%)  ←
+  fdc4375b: 2/4 (50%)  ←
+OVERALL: 27/53 = 50.9%
+
+=== PERMUTED (best matcher→gt mapping applied) ===
+Optimal permutation matcher_pid → gt_pid: {1: 1, 2: 4, 3: 3, 4: 2}
+Per-rally:
+  1cafde0e: 4/4 (100%)
+  1f9ce33a: 4/4 (100%)
+  4e7e589c: 1/1 (100%)
+  613fde44: 4/4 (100%)
+  689854e3: 4/4 (100%)
+  6e4a9de1: 4/4 (100%)
+  8b0b9e13: 4/4 (100%)
+  8c802c26: 4/4 (100%)
+  97c42190: 4/4 (100%)
+  9f46f74e: 4/4 (100%)
+  d5c51d52: 4/4 (100%)
+  d934f57a: 4/4 (100%)
+  e50f127e: 4/4 (100%)
+  fdc4375b: 4/4 (100%)
+OVERALL: 53/53 = 100.0%
+
+=== INTERPRETATION ===
+• QUALITY METRIC: permuted accuracy = 100.0% (53/53). User's labeling rule (2026-05-02) is internal consistency only, no canonical convention — so canonical label disagreement is NOT a defect. PERMUTED is the number that should hold or improve across changes.
+• Direct = 50.9% differs from permuted by +49.1pp. Canonical labels disagree on this video; not a defect — see permuted.
+
+=== ID-stability per GT player ===
+(How many distinct matcher PIDs label each physical player across the whole video. 1 = stable; >1 = flicker / cross-rally inconsistency.)
+  GT PID1: 1 distinct matcher PID(s) ([1]) across 14 samples
+  GT PID2: 1 distinct matcher PID(s) ([4]) across 13 samples
+  GT PID3: 1 distinct matcher PID(s) ([3]) across 13 samples
+  GT PID4: 1 distinct matcher PID(s) ([2]) across 13 samples
+AVERAGE distinct PIDs per GT player: 1.00 (1.00 = perfectly stable; ≥1.5 = significant flicker)

@@ -1,0 +1,50 @@
+[tata] 16 GT rallies
+[toto] 11 GT rallies
+[lala] 7 GT rallies
+[lulu] 9 GT rallies
+[wawa] 5 GT rallies
+[cece] 5 GT rallies
+[cuco] 7 GT rallies
+[rere] 5 GT rallies
+[yeye] 7 GT rallies
+
+=== POST-v1.3 PER-FIXTURE ===
+fix      n_gt   correct    wrong  miss  abs
+  tata    109   32 (29.4%)   54 (49.5%)   23    0
+  toto     58   17 (29.3%)   36 (62.1%)    5    0
+  lala     71   24 (33.8%)   40 (56.3%)    7    0
+  lulu     37    1 ( 2.7%)   32 (86.5%)    4    0
+  wawa     32   10 (31.2%)   14 (43.8%)    8    0
+  cece     28    5 (17.9%)   20 (71.4%)    3    0
+  cuco     48    0 ( 0.0%)   44 (91.7%)    4    0
+  rere     36    8 (22.2%)   24 (66.7%)    4    0
+  yeye     62    8 (12.9%)   49 (79.0%)    5    0
+
+=== POST-v1.3 AGGREGATE (n=481) ===
+correct:   105 (21.8%)
+wrong:     313 (65.1%)
+missing:    63 (13.1%)
+abstain:     0 (0.0%)
+
+=== DIFF vs 2026-04-24 BASELINE ===
+metric               baseline  post-v1.3      delta
+n_gt_actions              468        481        +13
+correct                   205        105       -100
+correct_rate            0.438      0.218     -0.220
+wrong                     191        313       +122
+wrong_cross_team          145        193        +48
+wrong_same_team            44         60        +16
+missing                    72         63         -9
+
+=== PER-FIXTURE DIFF (correct_rate, post − baseline) ===
+  cece   base=30.4%  post=17.9%  delta=-12.6%
+  cuco   base=10.0%  post=0.0%  delta=-10.0%
+  lala   base=36.6%  post=33.8%  delta=-2.8%
+  lulu   base=10.8%  post=2.7%  delta=-8.1%
+  rere   base=34.3%  post=22.2%  delta=-12.1%
+  tata   base=70.4%  post=29.4%  delta=-41.0%
+  toto   base=27.1%  post=29.3%  delta=+2.2%
+  wawa   base=30.3%  post=31.2%  delta=+0.9%
+  yeye   base=80.6%  post=12.9%  delta=-67.7%
+
+Wrote: /Users/mario/Personal/Projects/RallyCut/analysis/reports/attribution_rebuild/post_v13_2026_05_11.json
