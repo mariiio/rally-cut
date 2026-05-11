@@ -19,7 +19,15 @@ from rallycut.tracking.contact_detector import (
     _RESCUE_GBM_CEILING,
     _RESCUE_SEQ_FLOOR,
     _apply_rescue_branch,
+    _passes_seq_anchored_rescue_gate,
     detect_contacts,
+)
+from rallycut.tracking.sequence_action_runtime import (
+    SEQ_ANCHORED_RESCUE_DC_MIN,
+    SEQ_ANCHORED_RESCUE_GBM_FLOOR,
+    SEQ_ANCHORED_RESCUE_MIN_DIST_TO_ACCEPTED,
+    SEQ_ANCHORED_RESCUE_PDIST_MAX,
+    SEQ_ANCHORED_RESCUE_SEQ_FLOOR,
 )
 
 
@@ -100,6 +108,81 @@ class TestApplyRescueBranch:
         """
         assert _RESCUE_GBM_CEILING == 0.10
         assert _RESCUE_SEQ_FLOOR == 0.95
+
+
+class TestSeqAnchoredRescueGate:
+    """Tests for the v1.2 seq-anchored rescue gate predicate.
+
+    Five conjunctive conditions: seq >= 0.95, dc >= 30°, pdist <= 0.05,
+    gbm >= 0.10, and min_dist_to_accepted >= 40 frames. Empirically
+    calibrated to recover ~8 fleet contact-detection FNs at 0 measured
+    false positives (see sequence_action_runtime.py for derivation).
+    """
+
+    def _strong_features(self) -> dict[str, float]:
+        """Features that satisfy every gate condition by a comfortable margin."""
+        return {
+            "seq_max_nonbg": 0.99,
+            "direction_change_deg": 150.0,
+            "player_distance": 0.02,
+            "gbm_prob": 0.20,
+            "candidate_frame": 300,
+        }
+
+    def test_all_conditions_met_passes(self) -> None:
+        f = self._strong_features()
+        assert _passes_seq_anchored_rescue_gate(**f, accepted_frames=[100, 500]) is True
+
+    def test_seq_below_floor_rejects(self) -> None:
+        f = self._strong_features()
+        f["seq_max_nonbg"] = SEQ_ANCHORED_RESCUE_SEQ_FLOOR - 0.01
+        assert _passes_seq_anchored_rescue_gate(**f, accepted_frames=[]) is False
+
+    def test_dc_below_floor_rejects(self) -> None:
+        f = self._strong_features()
+        f["direction_change_deg"] = SEQ_ANCHORED_RESCUE_DC_MIN - 0.01
+        assert _passes_seq_anchored_rescue_gate(**f, accepted_frames=[]) is False
+
+    def test_pdist_above_max_rejects(self) -> None:
+        f = self._strong_features()
+        f["player_distance"] = SEQ_ANCHORED_RESCUE_PDIST_MAX + 0.001
+        assert _passes_seq_anchored_rescue_gate(**f, accepted_frames=[]) is False
+
+    def test_gbm_below_floor_rejects(self) -> None:
+        f = self._strong_features()
+        f["gbm_prob"] = SEQ_ANCHORED_RESCUE_GBM_FLOOR - 0.001
+        assert _passes_seq_anchored_rescue_gate(**f, accepted_frames=[]) is False
+
+    def test_too_close_to_accepted_frame_rejects(self) -> None:
+        """A candidate within MIN_DIST_TO_ACCEPTED of an existing contact
+        is rejected — empirically these are pre-action artifacts."""
+        f = self._strong_features()
+        # 39 < 40 frame separation → reject
+        assert _passes_seq_anchored_rescue_gate(
+            **f, accepted_frames=[f["candidate_frame"] - SEQ_ANCHORED_RESCUE_MIN_DIST_TO_ACCEPTED + 1]
+        ) is False
+
+    def test_just_far_enough_passes(self) -> None:
+        """Exactly at MIN_DIST_TO_ACCEPTED is accepted (>= comparison)."""
+        f = self._strong_features()
+        assert _passes_seq_anchored_rescue_gate(
+            **f, accepted_frames=[f["candidate_frame"] - SEQ_ANCHORED_RESCUE_MIN_DIST_TO_ACCEPTED]
+        ) is True
+
+    def test_empty_accepted_frames_passes(self) -> None:
+        """If no contacts have been accepted yet, the min-distance gate
+        is trivially satisfied."""
+        f = self._strong_features()
+        assert _passes_seq_anchored_rescue_gate(**f, accepted_frames=[]) is True
+
+    def test_constants_match_calibration(self) -> None:
+        """Lock the calibrated constants — these came from a fleet-wide
+        sweep on 4987 rejected candidates. Re-tuning requires re-validation."""
+        assert SEQ_ANCHORED_RESCUE_SEQ_FLOOR == 0.95
+        assert SEQ_ANCHORED_RESCUE_DC_MIN == 30.0
+        assert SEQ_ANCHORED_RESCUE_PDIST_MAX == 0.05
+        assert SEQ_ANCHORED_RESCUE_GBM_FLOOR == 0.10
+        assert SEQ_ANCHORED_RESCUE_MIN_DIST_TO_ACCEPTED == 40
 
 
 class TestDetectContactsSignature:

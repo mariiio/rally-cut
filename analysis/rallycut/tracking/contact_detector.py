@@ -253,6 +253,17 @@ class ContactDetectionConfig:
     # monkey-patch them). Empirical basis: memory/fn_sequence_signal_2026_04.md.
     enable_sequence_recovery: bool = True
 
+    # Seq-anchored post-loop rescue (v1.2, shipped 2026-05-11). Catches
+    # GBM-rejected candidates where MS-TCN++ very strongly endorses the frame
+    # (seq >= 0.95) AND trajectory + player signals are also strong
+    # (direction-change, player-distance gates) AND the candidate is far
+    # enough from any already-accepted contact (>= 40 frames) to not be a
+    # pre-action artifact. See sequence_action_runtime.py for the gate
+    # constants and `_passes_seq_anchored_rescue_gate` for the pure
+    # predicate. Empirically validated: +8 fleet recoveries, 0 measured FPs
+    # at the time of ship.
+    enable_seq_anchored_rescue: bool = True
+
 
 @dataclass
 class Contact:
@@ -1654,6 +1665,50 @@ def _apply_rescue_branch(
     return gbm_prob < _RESCUE_GBM_CEILING and seq_max_nonbg >= _RESCUE_SEQ_FLOOR
 
 
+def _passes_seq_anchored_rescue_gate(
+    *,
+    seq_max_nonbg: float,
+    direction_change_deg: float,
+    player_distance: float,
+    gbm_prob: float,
+    candidate_frame: int,
+    accepted_frames: list[int],
+) -> bool:
+    """Pure predicate: does this GBM-rejected candidate pass the seq-anchored
+    rescue gate?
+
+    Used by `detect_contacts` after the main per-candidate loop, against the
+    full set of already-accepted contacts. The five conditions encode the
+    empirical separation between true recoveries and false positives observed
+    on a fleet-wide rejected-candidate dataset (n=4987 across 338 GT-labelled
+    rallies); see `sequence_action_runtime.py` for the calibrated gate
+    constants and their derivation.
+
+    Returns True iff the candidate should be added to the contact list.
+    """
+    from rallycut.tracking.sequence_action_runtime import (
+        SEQ_ANCHORED_RESCUE_DC_MIN,
+        SEQ_ANCHORED_RESCUE_GBM_FLOOR,
+        SEQ_ANCHORED_RESCUE_MIN_DIST_TO_ACCEPTED,
+        SEQ_ANCHORED_RESCUE_PDIST_MAX,
+        SEQ_ANCHORED_RESCUE_SEQ_FLOOR,
+    )
+
+    if seq_max_nonbg < SEQ_ANCHORED_RESCUE_SEQ_FLOOR:
+        return False
+    if direction_change_deg < SEQ_ANCHORED_RESCUE_DC_MIN:
+        return False
+    if player_distance > SEQ_ANCHORED_RESCUE_PDIST_MAX:
+        return False
+    if gbm_prob < SEQ_ANCHORED_RESCUE_GBM_FLOOR:
+        return False
+    if accepted_frames:
+        min_dist = min(abs(candidate_frame - f) for f in accepted_frames)
+        if min_dist < SEQ_ANCHORED_RESCUE_MIN_DIST_TO_ACCEPTED:
+            return False
+    return True
+
+
 def _refine_candidates_to_trajectory_peak(
     candidate_frames: list[int],
     ball_by_frame: dict[int, BallPosition],
@@ -2358,6 +2413,11 @@ def detect_contacts(
     net_zone = 0.08  # ±8% of screen around net
     contacts: list[Contact] = []
     prev_accepted_frame = 0  # Track ACCEPTED contacts for frames_since_last
+    # Pending-rescue buffer for the seq-anchored post-loop pass (v1.2). Each
+    # entry is a fully-constructed Contact that the GBM rejected; the
+    # post-loop pass re-evaluates them against the final set of accepted
+    # contacts and the seq-anchored gate.
+    pending_seq_anchored_rescue: list[tuple[Contact, CandidateFeatures]] = []
 
     for frame in candidate_frames:
         # Skip warmup period (ball tracking produces false detections early)
@@ -2566,6 +2626,32 @@ def detect_contacts(
             confidence = 0.0
 
         if not is_validated:
+            # v1.2 seq-anchored rescue: capture full per-candidate context
+            # so the post-loop pass can re-evaluate against the final set
+            # of accepted contacts. Only collect when the classifier branch
+            # ran (we need CandidateFeatures for the gate predicate).
+            if (
+                cfg.enable_seq_anchored_rescue
+                and classifier is not None
+                and classifier.is_trained
+            ):
+                rejected_contact = Contact(
+                    frame=frame,
+                    ball_x=ball.x,
+                    ball_y=ball.y,
+                    velocity=velocity,
+                    direction_change_deg=direction_change,
+                    player_track_id=track_id,
+                    player_distance=player_dist,
+                    player_candidates=[(tid, d) for tid, d, _y in candidates],
+                    candidate_bbox_motion=bbox_motion,
+                    court_side=court_side,
+                    is_at_net=is_at_net,
+                    is_validated=True,  # set on rescue commit
+                    confidence=confidence,
+                    arc_fit_residual=arc_residual,
+                )
+                pending_seq_anchored_rescue.append((rejected_contact, features))
             continue
 
         # Sequential attribution fix: when the nearest player is the same as
@@ -2687,6 +2773,34 @@ def detect_contacts(
             arc_fit_residual=arc_residual,
         ))
         prev_accepted_frame = frame
+
+    # v1.2 seq-anchored rescue (post-loop pass).
+    # Re-evaluate GBM-rejected candidates against the final set of accepted
+    # contacts. A rejected candidate is rescued iff `_passes_seq_anchored_rescue_gate`
+    # holds — strong MS-TCN++ endorsement (seq ≥ 0.95), strong trajectory
+    # signal (dc ≥ 30°), close player (pdist ≤ 0.05), non-trivial GBM score
+    # (gbm ≥ 0.10), and far from any already-accepted contact (≥ 40 frames,
+    # the empirically-derived FP-filter threshold).
+    n_seq_rescued = 0
+    if cfg.enable_seq_anchored_rescue and pending_seq_anchored_rescue:
+        accepted_frames_snapshot = [c.frame for c in contacts]
+        for rescued_contact, feat in pending_seq_anchored_rescue:
+            if _passes_seq_anchored_rescue_gate(
+                seq_max_nonbg=feat.seq_max_nonbg,
+                direction_change_deg=feat.direction_change_deg,
+                player_distance=feat.player_distance,
+                gbm_prob=rescued_contact.confidence,
+                candidate_frame=rescued_contact.frame,
+                accepted_frames=accepted_frames_snapshot,
+            ):
+                contacts.append(rescued_contact)
+                n_seq_rescued += 1
+        if n_seq_rescued:
+            contacts.sort(key=lambda c: c.frame)
+            logger.info(
+                f"Seq-anchored rescue: +{n_seq_rescued} contacts "
+                f"(from {len(pending_seq_anchored_rescue)} rejected candidates)"
+            )
 
     # Deduplicate contacts from proximity + standard candidates at similar frames
     pre_dedup = len(contacts)

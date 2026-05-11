@@ -1,0 +1,99 @@
+================================================================================
+MEASUREMENT 1: Post-retrack panel F1
+================================================================================
+video  rally       #GT  #Pred  matched   FN   FP
+------------------------------------------------------------
+ruru   be3134ba      8      5        4    4    1
+ruru   57a588b2      4      5        4    0    1
+ruru   cc2b967b      5      5        5    0    0
+ruru   3e61838c     11     11       10    1    1
+ruru   3655eb69      7      7        7    0    0
+ruru   9d5f5152     14     15       14    0    1
+tata   8b0b9e13     18     18       18    0    0
+tata   09553ef1      4      4        4    0    0
+tata   ad7cccbf      8      9        8    0    1
+tata   97c42190      5      5        5    0    0
+tata   e50f127e      4      5        4    0    1
+tata   30ffb876      1      0        0    1    0
+tata   8c802c26      9      9        9    0    0
+tata   724ead56      8      7        7    1    0
+tata   03144243      7      7        7    0    0
+tata   4bfafd6d      3      3        3    0    0
+tata   db841666      5      5        5    0    0
+vovo   38d9e796      5      5        2    3    3
+vovo   55c2c6e5      7      8        6    1    2
+vovo   e4a5349e     14     15       14    0    1
+vovo   c039ef17      1      1        1    0    0
+wuwu   37e14e1e      4      4        4    0    0
+wuwu   fb7f9c23      4      4        4    0    0
+wuwu   99a01ce4     11      9        8    3    1
+wuwu   5e8af221      4      4        4    0    0
+wawa   7094136a      5      6        5    0    1
+wawa   8c49e480      8      5        4    4    1
+wawa   fb6e37bf      5      3        3    2    0
+wawa   7f0f540a     10     12        8    2    4
+wawa   06c13117      5      4        4    1    0
+------------------------------------------------------------
+TOTAL: GT=204  Pred=200  matched=181  FN=23  FP=19  F1=0.896
+
+Reference baselines from earlier in session:
+  Pre-GT-fix:           F1=0.862  35 FN  19 FP  (GT included drift on ruru:3655eb69)
+  Post-GT-fix:          F1=0.898  28 FN  12 FP  (after fixing ruru entry)
+  Post-deploy + drift:  F1=??     ??     ??    (corrupted rallies were 0-action)
+  Post-retrack:         F1=0.896  23 FN  19 FP  (CURRENT)
+
+================================================================================
+MEASUREMENT 2: Fleet synth-vs-real serve census (post-retrack)
+================================================================================
+Fleet rallies with GT serve: 335
+  with pred serve: 327 (synthetic: 54, real: 273)
+  no pred serve:   8
+
+Hit rate (within +-15 frames of GT):
+  Synthetic: 41/54 (76%)
+  Real:      241/273 (88%)
+  Total:     282/327 hit (vs 335 GT-labeled)
+
+Reference baselines from earlier in session:
+  Pre-deploy stored:  44 synth + 194 real = 238 hit / 313 total / 22 no-pred
+  Post-deploy stored: 37 synth + 213 real = 250 hit / 290 total / 45 no-pred
+  Post-retrack:       54 synth + 273 real = 282 hit / 327 total / 8 no-pred
+
+================================================================================
+MEASUREMENT 3: Panel FN candidate-pool diagnostic
+(For each panel FN, does detect_contacts produce a candidate within +-15 of GT?)
+================================================================================
+video  rally       fn_frame candidate?  nearest   
+-------------------------------------------------------
+ruru   be3134ba         287 NO_CAND     -         
+ruru   be3134ba         646 NO_CAND     -         
+ruru   be3134ba         698 NO_CAND     -         
+ruru   be3134ba         740 NO_CAND     -         
+ruru   3e61838c        1147 NO_CAND     -         
+tata   30ffb876          54 NO_CAND     -         
+tata   724ead56         246 NO_CAND     -         
+vovo   38d9e796         166 NO_CAND     -         
+vovo   38d9e796         379 NO_CAND     -         
+vovo   38d9e796         432 NO_CAND     -         
+vovo   55c2c6e5          23 NO_CAND     -         
+wuwu   99a01ce4         813 NO_CAND     -         
+wuwu   99a01ce4         916 NO_CAND     -         
+wuwu   99a01ce4         986 NO_CAND     -         
+wawa   8c49e480         101 NO_CAND     -         
+wawa   8c49e480         186 NO_CAND     -         
+wawa   8c49e480         251 NO_CAND     -         
+wawa   8c49e480         338 NO_CAND     -         
+wawa   fb6e37bf         210 NO_CAND     -         
+wawa   fb6e37bf         277 NO_CAND     -         
+wawa   7f0f540a         197 NO_CAND     -         
+wawa   7f0f540a         619 NO_CAND     -         
+wawa   06c13117         514 NO_CAND     -         
+-------------------------------------------------------
+Total panel FNs: 23
+  Candidate exists (was rejected/filtered): 0 (0%)
+  No candidate generated:                    23 (100%)
+
+Reference: earlier diagnostic (pre-retrack, possibly contaminated by
+corrupted rallies) reported 94% out_of_gap (0 candidates near FN frames).
+If post-retrack 'no_candidate' rate is much lower, that finding was
+inflated by the corruption — recoverable signal exists on healthy data.
