@@ -286,6 +286,14 @@ class ContactDetectionConfig:
     warmup_skip_frames_relaxed: int = 2
     player_contact_radius_relaxed: float = 0.20
 
+    # Phase 1.5: generator-creation threshold relaxations
+    direction_change_candidate_min_deg_relaxed: float = 15.0
+    direction_change_candidate_prominence_relaxed: float = 5.0
+    min_peak_prominence_relaxed: float = 0.0015
+    min_candidate_velocity_relaxed: float = 0.0015
+    parabolic_min_residual_relaxed: float = 0.010
+    parabolic_min_prominence_relaxed: float = 0.004
+
 
 def _resolve_effective_config(cfg: ContactDetectionConfig) -> ContactDetectionConfig:
     """Apply RELAX_CONTACT_* env-flag relaxations to the config.
