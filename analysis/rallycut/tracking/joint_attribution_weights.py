@@ -20,8 +20,10 @@ class FactorWeights:
     """
 
     # Unary (per-contact evidence)
-    w_proximity: float = 2.0       # playerCandidates rank
-    w_dist: float = 1.0            # playerCandidates distance (per-player)
+    # Calibrated 2026-05-12 via coordinate ascent on the 22-rally fresh-GT panel.
+    # See reports/joint_attribution_calibration_2026_05_12.json for trajectory.
+    w_proximity: float = 1.0       # playerCandidates rank (was 2.0)
+    w_dist: float = 0.5            # playerCandidates distance (per-player) (was 1.0)
     w_dist_team: float = 0.5       # absent-state penalty proportional to team's nearest tracked player
     w_visual: float = 1.5          # cross-rally PID profile cosine similarity
     w_pose: float = 1.5            # pose model P(touching)
@@ -31,8 +33,8 @@ class FactorWeights:
     # Pairwise (rule)
     w_back_to_back: float = 3.0    # penalty for same-player consecutive contacts (non-absent)
     w_alternation: float = 3.0     # penalty for same-team consecutive across a net crossing
-    w_team_consistency: float = 2.0  # penalty for cross-team consecutive without a net crossing
-    w_absent_pair: float = 1.5     # penalty for two consecutive absent-* states
+    w_team_consistency: float = 3.0  # penalty for cross-team consecutive without a net crossing (was 2.0)
+    w_absent_pair: float = 1.125   # penalty for two consecutive absent-* states (was 1.5)
 
     # Higher-order (rule)
     w_3_contact: float = 4.0       # penalty per extra contact beyond 3 same-team same-side
