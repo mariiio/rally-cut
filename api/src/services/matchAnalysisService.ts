@@ -764,6 +764,28 @@ async function applyRemapToRally(
     },
   });
 
+  // Canonicalize resolved_track_id on action GT rows in the same mapping pass.
+  // After saveTrackingResult.reresolveRallyGt runs, resolved_track_id holds a
+  // RAW BoT-SORT id from the new tracking. The match-analysis remap canonicalizes
+  // positions_json's track IDs to 1-4; without this step, the GT row's
+  // resolved_track_id keeps the raw value and the UI must route through
+  // appliedFullMapping for display — which goes wrong if the mapping is stale
+  // for any reason. Translate raw → canonical here so display reads
+  // resolved_track_id directly.
+  //
+  // Skips MANUAL pins (labeler intent should never be overwritten by an
+  // automatic remap pass).
+  for (const [raw, canonical] of mapping) {
+    if (raw === canonical) continue;
+    await prisma.$executeRaw`
+      UPDATE rally_action_ground_truth
+         SET resolved_track_id = ${canonical}, updated_at = NOW()
+       WHERE rally_id::text = ${rallyId}
+         AND resolved_track_id = ${raw}
+         AND resolved_source <> 'MANUAL'
+    `;
+  }
+
   // Update matchAnalysisJson: store appliedFullMapping + set trackToPlayer to identity
   const rallyEntry = matchResult.rallies.find((r) => r.rallyId === rallyId);
   if (rallyEntry) {
