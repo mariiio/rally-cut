@@ -2,8 +2,7 @@
 
 After match-players assigns consistent player IDs (1-4) across rallies,
 this command remaps all stored track IDs in positions_json, contacts_json,
-actions_json, primaryTrackIds, and action_ground_truth_json so the UI shows
-consistent identities.
+actions_json, and primaryTrackIds so the UI shows consistent identities.
 
 Handles collisions: unmapped tracks that would collide with remapped player
 IDs are shifted to high IDs (101+) to avoid conflicts.
@@ -409,7 +408,6 @@ _SNAPSHOT_FIELDS = (
     "contacts",
     "actions",
     "primaryTrackIds",
-    "actionGroundTruth",
 )
 
 
@@ -418,9 +416,8 @@ def _capture_snapshot(
     contacts_json: Any,
     actions_json: Any,
     primary_ids: Any,
-    action_gt_json: Any,
 ) -> dict[str, Any]:
-    """Bundle the five remap-mutated fields into one snapshot dict.
+    """Bundle the four remap-mutated fields into one snapshot dict.
 
     Storing them together (rather than in separate columns) keeps the
     snapshot atomic: we never half-restore. None values are preserved as
@@ -431,24 +428,23 @@ def _capture_snapshot(
         "contacts": contacts_json,
         "actions": actions_json,
         "primaryTrackIds": primary_ids,
-        "actionGroundTruth": action_gt_json,
     }
 
 
 def _restore_snapshot(
     snapshot: dict[str, Any],
-) -> tuple[Any, Any, Any, Any, Any]:
+) -> tuple[Any, Any, Any, Any]:
     """Inverse of _capture_snapshot.
 
-    Returns (positions, contacts, actions, primary_ids, action_gt) in the
-    same order the SELECT uses, so the caller can reuse it directly.
+    Returns (positions, contacts, actions, primary_ids) in the same order
+    the SELECT uses, so the caller can reuse it directly. Existing snapshots
+    that include "actionGroundTruth" still work — the extra key is ignored.
     """
     return (
         snapshot.get("positions"),
         snapshot.get("contacts"),
         snapshot.get("actions"),
         snapshot.get("primaryTrackIds"),
-        snapshot.get("actionGroundTruth"),
     )
 
 
@@ -683,15 +679,15 @@ def remap_track_ids_cmd(
 
     # Load all player tracks for this video. pre_remap_state_json is the
     # idempotency anchor: when present, it carries the pristine pre-remap
-    # snapshot of {positions, contacts, actions, primaryTrackIds,
-    # actionGroundTruth}; we restore from it on every run so the mapping is
-    # always applied to the same input.
+    # snapshot of {positions, contacts, actions, primaryTrackIds};
+    # we restore from it on every run so the mapping is always applied to
+    # the same input.
     rally_ids_list = list(raw_mappings.keys())
     placeholders = ", ".join(["%s"] * len(rally_ids_list))
     query = f"""
         SELECT r.id, pt.id, pt.positions_json, pt.contacts_json,
                pt.actions_json, pt.primary_track_ids,
-               pt.action_ground_truth_json, pt.pre_remap_state_json
+               pt.pre_remap_state_json
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         WHERE r.id IN ({placeholders})
@@ -712,7 +708,6 @@ def remap_track_ids_cmd(
         contacts_json,
         actions_json,
         primary_ids,
-        action_gt_json,
         pre_remap_state,
     ) in rows:
         rally_id = str(rally_id_val)
@@ -736,16 +731,15 @@ def remap_track_ids_cmd(
         write_snapshot = False
         if snapshot_payload is None or reset_snapshot:
             snapshot_payload = _capture_snapshot(
-                pos_json, contacts_json, actions_json, primary_ids, action_gt_json,
+                pos_json, contacts_json, actions_json, primary_ids,
             )
             write_snapshot = True
 
-        pos_json, contacts_json, actions_json, primary_ids, action_gt_json = (
+        pos_json, contacts_json, actions_json, primary_ids = (
             _deepcopy_json(snapshot_payload.get("positions")),
             _deepcopy_json(snapshot_payload.get("contacts")),
             _deepcopy_json(snapshot_payload.get("actions")),
             _deepcopy_json(snapshot_payload.get("primaryTrackIds")),
-            _deepcopy_json(snapshot_payload.get("actionGroundTruth")),
         )
 
         # --- Step 2: Collect all track IDs (now original IDs) ---
@@ -846,7 +840,7 @@ def remap_track_ids_cmd(
 
         # Identity mapping means no NEW track ID rewriting is needed for
         # the matched tracks (mapping[k]=k for all matched). Skip the
-        # contacts/actions/GT remap below, but ONLY if positions cleanup
+        # contacts/actions remap below, but ONLY if positions cleanup
         # AND primary cleanup didn't drop anything either — otherwise
         # we still need to write the cleaned data back. Always record
         # `appliedFullMapping` + `remapApplied` so a future match-players
@@ -887,29 +881,6 @@ def remap_track_ids_cmd(
         # primary_track_ids cleanup happened above (before the identity
         # shortcut) so the contract holds even on identity rallies. The
         # `primary_ids` local was set to None to skip a second pass here.
-
-        # Remap action ground truth labels. GT labels have a `frame` field;
-        # apply the same frame-conditional resolution as the action stream.
-        if action_gt_json:
-            gt_labels = cast(list[dict[str, Any]], action_gt_json)
-            overrides_by_parent = _index_overrides_by_parent(sub_track_overrides)
-            gt_changed = False
-            for label in gt_labels:
-                old_tid = label.get("playerTrackId")
-                if old_tid is None:
-                    continue
-                old_tid_int = int(old_tid)
-                gt_frame = label.get("frame")
-                gt_frame_int = int(gt_frame) if gt_frame is not None else None
-                resolved = _resolve_with_overrides(
-                    old_tid_int, gt_frame_int, mapping, overrides_by_parent,
-                )
-                if resolved is not None and resolved != old_tid_int:
-                    label["playerTrackId"] = resolved
-                    gt_changed = True
-                    rally_count += 1
-            if gt_changed:
-                changes["action_ground_truth_json"] = json.dumps(gt_labels)
 
         # --- Step 4: Store appliedFullMapping + remapApplied flag ---
         rally_entry["appliedFullMapping"] = {

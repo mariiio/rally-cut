@@ -560,18 +560,16 @@ class TestSnapshotIdempotent:
             "contacts": {"contacts": [{"playerTrackId": 7, "frame": 0, "playerCandidates": [[12, 0.9]]}]},
             "actions": {"actions": [{"playerTrackId": 15, "frame": 1}], "teamAssignments": {"7": "near", "12": "far"}},
             "primaryTrackIds": [7, 12, 15, 23],
-            "actionGroundTruth": [{"playerTrackId": 23, "frame": 1}],
         }
 
     def _apply_remap(self, snapshot: dict[str, Any], track_to_player: dict[int, int]) -> dict[str, Any]:
         """Replicates the per-rally body of remap_track_ids_cmd: deep-copy from
-        snapshot, build full mapping (with collision shifts), apply to all five
+        snapshot, build full mapping (with collision shifts), apply to all four
         fields, return the resulting working copy."""
         pos = _deepcopy_json(snapshot["positions"])
         con = _deepcopy_json(snapshot["contacts"])
         act = _deepcopy_json(snapshot["actions"])
         pri = _deepcopy_json(snapshot["primaryTrackIds"])
-        gt = _deepcopy_json(snapshot["actionGroundTruth"])
 
         all_ids = {p["trackId"] for p in pos} | set(pri)
         mapping = _build_full_mapping(track_to_player, all_ids)
@@ -579,16 +577,11 @@ class TestSnapshotIdempotent:
         _remap_contacts(con, mapping)
         _remap_actions(act, mapping)
         pri = [mapping.get(t, t) for t in pri]
-        for label in gt:
-            old_tid = label.get("playerTrackId")
-            if old_tid is not None and old_tid in mapping:
-                label["playerTrackId"] = mapping[old_tid]
         return {
             "positions": pos,
             "contacts": con,
             "actions": act,
             "primaryTrackIds": pri,
-            "actionGroundTruth": gt,
         }
 
     def test_two_runs_byte_identical(self) -> None:
@@ -601,7 +594,7 @@ class TestSnapshotIdempotent:
         # Run 1: pre_remap_state_json IS NULL → capture snapshot from current row.
         snapshot = _capture_snapshot(
             pristine["positions"], pristine["contacts"], pristine["actions"],
-            pristine["primaryTrackIds"], pristine["actionGroundTruth"],
+            pristine["primaryTrackIds"],
         )
         run1_output = self._apply_remap(snapshot, track_to_player)
 
@@ -626,7 +619,7 @@ class TestSnapshotIdempotent:
 
         snapshot = _capture_snapshot(
             pristine["positions"], pristine["contacts"], pristine["actions"],
-            pristine["primaryTrackIds"], pristine["actionGroundTruth"],
+            pristine["primaryTrackIds"],
         )
         snapshot_serialized_before = self._serialize(snapshot)
 
