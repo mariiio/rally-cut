@@ -330,6 +330,24 @@ def _resolve_effective_config(cfg: ContactDetectionConfig) -> ContactDetectionCo
         new_cfg = dataclasses.replace(
             new_cfg, player_contact_radius=cfg.player_contact_radius_relaxed
         )
+    if os.environ.get("RELAX_CONTACT_DIR_GEN", "0") == "1":
+        new_cfg = dataclasses.replace(
+            new_cfg,
+            direction_change_candidate_min_deg=cfg.direction_change_candidate_min_deg_relaxed,
+            direction_change_candidate_prominence=cfg.direction_change_candidate_prominence_relaxed,
+        )
+    if os.environ.get("RELAX_CONTACT_VEL_GEN", "0") == "1":
+        new_cfg = dataclasses.replace(
+            new_cfg,
+            min_peak_prominence=cfg.min_peak_prominence_relaxed,
+            min_candidate_velocity=cfg.min_candidate_velocity_relaxed,
+        )
+    if os.environ.get("RELAX_CONTACT_PARABOLIC_GEN", "0") == "1":
+        new_cfg = dataclasses.replace(
+            new_cfg,
+            parabolic_min_residual=cfg.parabolic_min_residual_relaxed,
+            parabolic_min_prominence=cfg.parabolic_min_prominence_relaxed,
+        )
     return new_cfg
 
 
