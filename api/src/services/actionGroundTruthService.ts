@@ -469,7 +469,19 @@ export async function reresolveRallyGt(
     // Don't overwrite manual pins
     if (row.resolvedSource === 'MANUAL') continue;
 
-    const candidates = byFrame.get(row.frame) ?? [];
+    // Lookup candidates at the exact labeled frame. If empty, fall back to
+    // ±1 frame — covers high-fps videos where the tracker subsamples (e.g.,
+    // 60fps source, tracker outputs at even frames only, label happened to
+    // land on an odd frame). Player position barely moves in 1/60s, so the
+    // bbox IoU still matches strongly. Without this fallback the row lands
+    // in UNRESOLVED purely because of the frame-index parity.
+    let candidates = byFrame.get(row.frame) ?? [];
+    if (candidates.length === 0) {
+      candidates = [
+        ...(byFrame.get(row.frame - 1) ?? []),
+        ...(byFrame.get(row.frame + 1) ?? []),
+      ];
+    }
     const { resolvedTrackId, resolvedSource } = resolveGtRow(
       {
         snapshotBboxX1: row.snapshotBboxX1,
