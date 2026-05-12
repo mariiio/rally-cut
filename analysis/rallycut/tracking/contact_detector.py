@@ -10,7 +10,6 @@ building on the lower-level contact detection in ball_features.py.
 
 from __future__ import annotations
 
-import dataclasses
 import logging
 import math
 import os
@@ -273,82 +272,6 @@ class ContactDetectionConfig:
     # predicate. Empirically validated: +8 fleet recoveries, 0 measured FPs
     # at the time of ship.
     enable_seq_anchored_rescue: bool = True
-
-    # --- Relaxed-mode overrides (used when corresponding RELAX_CONTACT_* env
-    # flag is set; see _resolve_effective_config). Default values are chosen
-    # to soften each gate by approximately one threshold step. Phase 1 of
-    # the contact-detection FN reduction workstream.
-    # Spec: docs/superpowers/specs/2026-05-12-contact-detection-fn-reduction-design.md
-    min_direction_change_deg_relaxed: float = 12.0
-    min_peak_velocity_relaxed: float = 0.005
-    deceleration_min_speed_before_relaxed: float = 0.005
-    min_inflection_angle_deg_relaxed: float = 10.0
-    warmup_skip_frames_relaxed: int = 2
-    player_contact_radius_relaxed: float = 0.20
-
-    # Phase 1.5: generator-creation threshold relaxations
-    direction_change_candidate_min_deg_relaxed: float = 15.0
-    direction_change_candidate_prominence_relaxed: float = 5.0
-    min_peak_prominence_relaxed: float = 0.0015
-    min_candidate_velocity_relaxed: float = 0.0015
-    parabolic_min_residual_relaxed: float = 0.010
-    parabolic_min_prominence_relaxed: float = 0.004
-
-
-def _resolve_effective_config(cfg: ContactDetectionConfig) -> ContactDetectionConfig:
-    """Apply RELAX_CONTACT_* env-flag relaxations to the config.
-
-    Read at call time so monkeypatch.setenv works in tests (matches the pattern
-    used by RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN in action_classifier.py).
-
-    Each RELAX_CONTACT_* flag, when set to "1", swaps one or more strict-mode
-    fields for their *_relaxed counterparts in cfg. All flags default OFF;
-    setting nothing returns cfg unchanged.
-
-    Spec: docs/superpowers/specs/2026-05-12-contact-detection-fn-reduction-design.md
-    """
-    new_cfg = cfg
-    if os.environ.get("RELAX_CONTACT_DIR_CHANGE", "0") == "1":
-        new_cfg = dataclasses.replace(
-            new_cfg, min_direction_change_deg=cfg.min_direction_change_deg_relaxed
-        )
-    if os.environ.get("RELAX_CONTACT_VELOCITY", "0") == "1":
-        new_cfg = dataclasses.replace(
-            new_cfg,
-            min_peak_velocity=cfg.min_peak_velocity_relaxed,
-            deceleration_min_speed_before=cfg.deceleration_min_speed_before_relaxed,
-        )
-    if os.environ.get("RELAX_CONTACT_INFLECTION", "0") == "1":
-        new_cfg = dataclasses.replace(
-            new_cfg, min_inflection_angle_deg=cfg.min_inflection_angle_deg_relaxed
-        )
-    if os.environ.get("RELAX_CONTACT_WARMUP", "0") == "1":
-        new_cfg = dataclasses.replace(
-            new_cfg, warmup_skip_frames=cfg.warmup_skip_frames_relaxed
-        )
-    if os.environ.get("RELAX_CONTACT_PLAYER_RADIUS", "0") == "1":
-        new_cfg = dataclasses.replace(
-            new_cfg, player_contact_radius=cfg.player_contact_radius_relaxed
-        )
-    if os.environ.get("RELAX_CONTACT_DIR_GEN", "0") == "1":
-        new_cfg = dataclasses.replace(
-            new_cfg,
-            direction_change_candidate_min_deg=cfg.direction_change_candidate_min_deg_relaxed,
-            direction_change_candidate_prominence=cfg.direction_change_candidate_prominence_relaxed,
-        )
-    if os.environ.get("RELAX_CONTACT_VEL_GEN", "0") == "1":
-        new_cfg = dataclasses.replace(
-            new_cfg,
-            min_peak_prominence=cfg.min_peak_prominence_relaxed,
-            min_candidate_velocity=cfg.min_candidate_velocity_relaxed,
-        )
-    if os.environ.get("RELAX_CONTACT_PARABOLIC_GEN", "0") == "1":
-        new_cfg = dataclasses.replace(
-            new_cfg,
-            parabolic_min_residual=cfg.parabolic_min_residual_relaxed,
-            parabolic_min_prominence=cfg.parabolic_min_prominence_relaxed,
-        )
-    return new_cfg
 
 
 @dataclass
@@ -2518,7 +2441,7 @@ def detect_contacts(
         extract_attribution_features,
     )
 
-    cfg = _resolve_effective_config(config or ContactDetectionConfig())
+    cfg = config or ContactDetectionConfig()
 
     # Auto-load attribution models
     pose_attributor = (
