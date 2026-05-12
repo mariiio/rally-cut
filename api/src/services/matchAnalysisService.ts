@@ -753,17 +753,6 @@ async function applyRemapToRally(
   // Remap primaryTrackIds
   const newPrimaryIds = primaryIds.map((tid) => mapping.get(tid) ?? tid);
 
-  // Remap action ground truth if present
-  const actionGt = (playerTrack.actionGroundTruthJson ?? null) as Array<Record<string, unknown>> | null;
-  if (actionGt) {
-    for (const label of actionGt) {
-      const oldTid = label.playerTrackId as number | undefined;
-      if (oldTid != null && mapping.has(oldTid) && mapping.get(oldTid) !== oldTid) {
-        label.playerTrackId = mapping.get(oldTid);
-      }
-    }
-  }
-
   // Update DB
   await prisma.playerTrack.update({
     where: { rallyId },
@@ -772,7 +761,6 @@ async function applyRemapToRally(
       contactsJson: contactsData as unknown as Prisma.InputJsonValue,
       actionsJson: actionsData as unknown as Prisma.InputJsonValue,
       primaryTrackIds: newPrimaryIds as unknown as Prisma.InputJsonValue,
-      ...(actionGt ? { actionGroundTruthJson: actionGt as unknown as Prisma.InputJsonValue } : {}),
     },
   });
 
