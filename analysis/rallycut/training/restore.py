@@ -508,7 +508,8 @@ def _restore_action_gt(
     """Restore action ground truth from action_ground_truth.json.
 
     For each entry, matches a rally by video content_hash + start_ms + end_ms,
-    then upserts action_ground_truth_json on player_tracks.
+    then inserts rows into rally_action_ground_truth keyed by
+    (rally_id, frame, action). ON CONFLICT DO UPDATE so re-running is safe.
     """
     with open(action_gt_path) as f:
         action_gt = json.load(f)
@@ -517,15 +518,20 @@ def _restore_action_gt(
     if not rallies:
         return
 
+    action_map = {"serve": "SERVE", "receive": "RECEIVE", "set": "SET",
+                  "attack": "ATTACK", "block": "BLOCK", "dig": "DIG"}
+
     restored = 0
     for entry in rallies:
         content_hash = entry["video_content_hash"]
         start_ms = entry["rally_start_ms"]
         end_ms = entry["rally_end_ms"]
-        gt_json = entry["action_ground_truth_json"]
+        labels = entry["action_ground_truth_json"]
+
+        if not labels:
+            continue
 
         with conn.cursor() as cur:
-            # Find rally by video content_hash + timing
             cur.execute(
                 """
                 SELECT r.id
@@ -549,26 +555,76 @@ def _restore_action_gt(
             continue
 
         rally_id = str(row[0])
-        gt_json_str = json.dumps(gt_json)
 
-        with conn.cursor() as cur:
-            # Update existing player_tracks row, or insert if none exists
-            cur.execute(
-                """
-                UPDATE player_tracks
-                SET action_ground_truth_json = %s::jsonb
-                WHERE rally_id = %s
-                """,
-                (gt_json_str, rally_id),
-            )
-            if cur.rowcount == 0:
-                # No player_tracks row exists — insert one
+        for label in labels:
+            frame = label.get("frame")
+            action_raw = label.get("action")
+            if frame is None or not isinstance(action_raw, str):
+                continue
+            action_enum = action_map.get(action_raw.lower())
+            if action_enum is None:
+                continue
+
+            # New-format labels have snapshotBbox; legacy export-only labels do not.
+            bbox = label.get("snapshotBbox")
+            bbox_x1 = float(bbox[0]) if bbox else None
+            bbox_y1 = float(bbox[1]) if bbox else None
+            bbox_x2 = float(bbox[2]) if bbox else None
+            bbox_y2 = float(bbox[3]) if bbox else None
+
+            snapshot_track_id = label.get("trackId")
+            resolved_track_id = label.get("playerTrackId")
+            team = label.get("snapshotTeam")
+            ball_x = label.get("ballX")
+            ball_y = label.get("ballY")
+            resolved_source = label.get("resolvedSource")
+            if resolved_source not in (
+                "SNAPSHOT_EXACT", "IOU_MATCH", "NEAREST_CENTER", "MANUAL", "UNRESOLVED"
+            ):
+                # Legacy/exported rows that omit resolvedSource: pick based on data.
+                if bbox is not None and resolved_track_id is not None:
+                    resolved_source = "SNAPSHOT_EXACT"
+                else:
+                    resolved_source = "UNRESOLVED"
+
+            with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO player_tracks (id, rally_id, status, action_ground_truth_json, created_at)
-                    VALUES (gen_random_uuid(), %s, 'COMPLETED', %s::jsonb, NOW())
+                    INSERT INTO rally_action_ground_truth (
+                        id, rally_id, frame, action,
+                        snapshot_bbox_x1, snapshot_bbox_y1, snapshot_bbox_x2, snapshot_bbox_y2,
+                        snapshot_ball_x, snapshot_ball_y, snapshot_team, snapshot_track_id,
+                        resolved_track_id, resolved_at, resolved_source,
+                        created_at, updated_at, created_by
+                    )
+                    VALUES (
+                        gen_random_uuid(), %s::uuid, %s, %s::"ActionLabel",
+                        %s, %s, %s, %s,
+                        %s, %s, %s::"ServingTeam", %s,
+                        %s, NOW(), %s::"ResolveSource",
+                        NOW(), NOW(), NULL
+                    )
+                    ON CONFLICT (rally_id, frame, action) DO UPDATE SET
+                        snapshot_bbox_x1   = EXCLUDED.snapshot_bbox_x1,
+                        snapshot_bbox_y1   = EXCLUDED.snapshot_bbox_y1,
+                        snapshot_bbox_x2   = EXCLUDED.snapshot_bbox_x2,
+                        snapshot_bbox_y2   = EXCLUDED.snapshot_bbox_y2,
+                        snapshot_ball_x    = EXCLUDED.snapshot_ball_x,
+                        snapshot_ball_y    = EXCLUDED.snapshot_ball_y,
+                        snapshot_team      = EXCLUDED.snapshot_team,
+                        snapshot_track_id  = EXCLUDED.snapshot_track_id,
+                        resolved_track_id  = EXCLUDED.resolved_track_id,
+                        resolved_at        = NOW(),
+                        resolved_source    = EXCLUDED.resolved_source,
+                        updated_at         = NOW()
                     """,
-                    (rally_id, gt_json_str),
+                    (
+                        rally_id, int(frame), action_enum,
+                        bbox_x1, bbox_y1, bbox_x2, bbox_y2,
+                        ball_x, ball_y, team, int(snapshot_track_id) if snapshot_track_id is not None else None,
+                        int(resolved_track_id) if resolved_track_id is not None else None,
+                        resolved_source,
+                    ),
                 )
 
         restored += 1
