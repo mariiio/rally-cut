@@ -7,7 +7,6 @@ from rallycut.cli.commands.analyze import app as analyze_app
 from rallycut.cli.commands.audit_action_gt import audit_action_gt_cmd
 from rallycut.cli.commands.audit_coherence_invariants import audit_coherence_invariants_cmd
 from rallycut.cli.commands.audit_pid_invariants import audit_pid_invariants_cmd
-from rallycut.cli.commands.migrate_action_gt import migrate_action_gt_cmd
 from rallycut.cli.commands.cleanup_stale_attribution import cleanup_stale_attribution_cmd
 from rallycut.cli.commands.cleanup_team_assignments import cleanup_team_assignments_cmd
 from rallycut.cli.commands.cleanup_team_labels_by_majority import (
@@ -21,6 +20,7 @@ from rallycut.cli.commands.evaluate import app as evaluate_app
 from rallycut.cli.commands.evaluate_tracking import app as evaluate_tracking_app
 from rallycut.cli.commands.label import app as label_app
 from rallycut.cli.commands.match_players import match_players as match_players_command
+from rallycut.cli.commands.migrate_action_gt import migrate_action_gt_cmd
 from rallycut.cli.commands.preflight import preflight as preflight_command
 from rallycut.cli.commands.preview_check import preview_check as preview_check_command
 from rallycut.cli.commands.profile import profile as profile_command
