@@ -100,6 +100,15 @@ class ClassifiedAction:
     set_dest_zone: int | None = None     # attacker feet court-x zone 1-5 at next attack
 
     def to_dict(self) -> dict[str, Any]:
+        # attribution_source labels the producer of playerTrackId so downstream
+        # consumers (PGM, reattribution, audits) can distinguish between an
+        # action_classifier-assigned PID and a PGM-assigned one. -1 sentinel and
+        # None are both treated as "abstained".
+        attribution_source = (
+            "action_classifier"
+            if self.player_track_id is not None and self.player_track_id != -1
+            else "action_classifier_abstained"
+        )
         d = {
             "action": self.action_type.value,
             "frame": self.frame,
@@ -110,6 +119,7 @@ class ClassifiedAction:
             "courtSide": self.court_side,
             "confidence": self.confidence,
             "team": self.team,
+            "attribution_source": attribution_source,
         }
         # Omitted when False for backward compatibility with existing stored data
         if self.is_synthetic:
