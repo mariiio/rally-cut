@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import struct
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -49,6 +50,23 @@ def _bbox_at(
                     "x2": float(x) + float(w),
                     "y2": float(y) + float(h),
                 }
+    return None
+
+
+def _embedding_at(
+    raw_positions: list[dict[str, Any]] | None,
+    frame: int,
+    track_id: int,
+) -> bytes | None:
+    """Return raw OSNet embedding bytes if present in rawPositionsJson for (frame, trackId)."""
+    if not raw_positions:
+        return None
+    for p in raw_positions:
+        if p.get("frameNumber") == frame and p.get("trackId") == track_id:
+            emb = p.get("embedding")
+            if isinstance(emb, list) and len(emb) > 0:
+                # 128 × float32 little-endian → bytes
+                return struct.pack(f"<{len(emb)}f", *emb)
     return None
 
 
@@ -134,6 +152,14 @@ def build_label_row(
         else (int(player_track_id) if player_track_id is not None else None)
     )
 
+    # OSNet embedding: try raw_positions first (R3+ writes embeddings there), then fall back
+    # to positions (post-remap) when raw_positions lookup misses.
+    embedding_bytes: bytes | None = None
+    if track_id is not None:
+        embedding_bytes = _embedding_at(raw_positions, frame, int(track_id))
+    if embedding_bytes is None and player_track_id is not None:
+        embedding_bytes = _embedding_at(positions, frame, int(player_track_id))
+
     return {
         "frame": int(frame),
         "action": action_enum,
@@ -145,6 +171,7 @@ def build_label_row(
         "snapshot_ball_y": ball[1] if ball else label.get("ballY"),
         "snapshot_team": team,
         "snapshot_track_id": snapshot_track_id_value,
+        "snapshot_reid_embedding": embedding_bytes,
         "resolved_track_id": resolved_track_id,
         "resolved_source": resolved_source,
     }
@@ -196,16 +223,20 @@ def backfill_video(conn: psycopg.Connection, video_id: str) -> dict[str, int]:
                         id, rally_id, frame, action,
                         snapshot_bbox_x1, snapshot_bbox_y1, snapshot_bbox_x2, snapshot_bbox_y2,
                         snapshot_ball_x, snapshot_ball_y, snapshot_team, snapshot_track_id,
+                        snapshot_reid_embedding,
                         resolved_track_id, resolved_at, resolved_source,
                         created_at, updated_at, created_by
                     ) VALUES (
                         gen_random_uuid(), %s::uuid, %s, %s::"ActionLabel",
                         %s, %s, %s, %s,
                         %s, %s, %s::"ServingTeam", %s,
+                        %s,
                         %s, NOW(), %s::"ResolveSource",
                         NOW(), NOW(), NULL
                     )
-                    ON CONFLICT (rally_id, frame, action) DO NOTHING
+                    ON CONFLICT (rally_id, frame, action) DO UPDATE SET
+                        snapshot_reid_embedding = COALESCE(EXCLUDED.snapshot_reid_embedding, rally_action_ground_truth.snapshot_reid_embedding),
+                        updated_at = NOW()
                     RETURNING id
                     """,
                     (
@@ -220,6 +251,7 @@ def backfill_video(conn: psycopg.Connection, video_id: str) -> dict[str, int]:
                         row["snapshot_ball_y"],
                         row["snapshot_team"],
                         row["snapshot_track_id"],
+                        row["snapshot_reid_embedding"],
                         row["resolved_track_id"],
                         row["resolved_source"],
                     ),

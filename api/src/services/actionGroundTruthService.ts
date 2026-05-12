@@ -28,14 +28,36 @@ function bufferToFloat32(buf: Buffer | null): Float32Array | null {
   return new Float32Array(ab);
 }
 
-function float32ToBuffer(arr: Float32Array | null): Buffer | null {
+function float32ToBuffer(arr: Float32Array | null): Uint8Array<ArrayBuffer> | null {
   if (!arr) return null;
-  return Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength);
+  // Copy into a plain ArrayBuffer to satisfy Prisma's Bytes type (no SharedArrayBuffer).
+  const copy = arr.buffer.slice(arr.byteOffset, arr.byteOffset + arr.byteLength) as ArrayBuffer;
+  return new Uint8Array(copy);
 }
 
-// Suppress unused warning for float32ToBuffer — it is the write-side helper
-// used by R4 when embedding capture is wired.
-void float32ToBuffer;
+/** Shape of entries inside rawPositionsJson (tracker-native format, written by R3+). */
+interface RawPos {
+  frameNumber: number;
+  trackId: number;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  confidence?: number;
+  embedding?: number[];
+}
+
+/**
+ * Extract the OSNet embedding for (frame, trackId) from rawPositionsJson.
+ * Returns null when the record is absent or has no embedding field.
+ */
+function findEmbedding(raw: RawPos[] | null, frame: number, trackId: number): Float32Array | null {
+  if (!raw) return null;
+  const hit = raw.find(p => p.frameNumber === frame && p.trackId === trackId);
+  const emb = hit?.embedding;
+  if (!emb || !Array.isArray(emb) || emb.length === 0) return null;
+  return new Float32Array(emb);
+}
 
 /** One label entry as provided by the caller (lowercase action string). */
 export interface ActionGtLabel {
@@ -130,6 +152,7 @@ export async function saveActionGroundTruth(
         select: {
           frameCount: true,
           positionsJson: true,
+          rawPositionsJson: true,
           ballPositionsJson: true,
           actionsJson: true,
         },
@@ -151,6 +174,7 @@ export async function saveActionGroundTruth(
 
   // Parse positions for snapshot lookup (cast through unknown for Prisma Json types)
   const positions = (pt?.positionsJson ?? []) as unknown as PlayerPosition[];
+  const rawPositions = (pt?.rawPositionsJson ?? null) as unknown as RawPos[] | null;
   const ballPositions = (pt?.ballPositionsJson ?? []) as unknown as BallPosition[];
   const teamAssignments = readTeamAssignments(pt?.actionsJson);
 
@@ -211,6 +235,12 @@ export async function saveActionGroundTruth(
         resolvedTrackId = null;
       }
 
+      // Extract OSNet embedding from rawPositionsJson (R3+ tracker writes embedding on each position).
+      const embeddingArr = pt && trackId !== null
+        ? findEmbedding(rawPositions, label.frame, trackId)
+        : null;
+      const snapshotReidEmbedding = embeddingArr ? float32ToBuffer(embeddingArr) : null;
+
       // Upsert by (rallyId, frame, action)
       const upserted = await tx.rallyActionGroundTruth.upsert({
         where: {
@@ -232,6 +262,7 @@ export async function saveActionGroundTruth(
           snapshotBallY,
           snapshotTeam,
           snapshotTrackId: trackId,
+          snapshotReidEmbedding,
           resolvedSource,
           resolvedTrackId,
           resolvedAt: resolvedSource !== 'UNRESOLVED' ? new Date() : null,
@@ -246,6 +277,7 @@ export async function saveActionGroundTruth(
           snapshotBallY,
           snapshotTeam,
           snapshotTrackId: trackId,
+          snapshotReidEmbedding,
           resolvedSource,
           resolvedTrackId,
           resolvedAt: resolvedSource !== 'UNRESOLVED' ? new Date() : null,

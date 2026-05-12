@@ -1,6 +1,9 @@
+import struct
+
 from rallycut.cli.commands.migrate_action_gt import (
     _ball_at,
     _bbox_at,
+    _embedding_at,
     _team_for,
     build_label_row,
 )
@@ -129,3 +132,50 @@ def test_build_label_row_prefers_trackid_over_player_track_id_when_both_present(
     # Snapshot came from raw_positions[trackId=11], NOT positions[trackId=2]
     assert row["snapshot_bbox_x1"] == 0.1
     assert row["resolved_track_id"] == 11
+
+
+def test_embedding_at_returns_bytes_when_present() -> None:
+    emb = [float(i) for i in range(128)]
+    raw = [{"frameNumber": 50, "trackId": 7, "x": 0.1, "y": 0.1, "width": 0.1, "height": 0.2, "embedding": emb}]
+    result = _embedding_at(raw, 50, 7)
+    assert result is not None
+    assert len(result) == 512
+    # Verify first float round-trips correctly
+    (first_val,) = struct.unpack_from("<f", result, 0)
+    assert abs(first_val - 0.0) < 1e-6
+
+
+def test_embedding_at_returns_none_when_absent() -> None:
+    raw = [{"frameNumber": 50, "trackId": 7, "x": 0.1, "y": 0.1, "width": 0.1, "height": 0.2}]
+    assert _embedding_at(raw, 50, 7) is None
+    assert _embedding_at(None, 50, 7) is None
+    assert _embedding_at(raw, 99, 7) is None  # wrong frame
+
+
+def test_build_label_row_captures_embedding_from_raw_positions() -> None:
+    emb = [float(i) for i in range(128)]
+    row = build_label_row(
+        {"frame": 50, "action": "serve", "trackId": 7},
+        raw_positions=[{"frameNumber": 50, "trackId": 7, "x": 0.1, "y": 0.1, "width": 0.1, "height": 0.2, "embedding": emb}],
+        positions=None,
+        ball_positions=[],
+        primary_track_ids=[7],
+        team_assignments={"7": "A"},
+    )
+    assert row is not None
+    assert row["snapshot_reid_embedding"] is not None
+    # 128 float32 LE = 512 bytes
+    assert len(row["snapshot_reid_embedding"]) == 512
+
+
+def test_build_label_row_embedding_null_when_absent() -> None:
+    row = build_label_row(
+        {"frame": 50, "action": "serve", "trackId": 7},
+        raw_positions=[{"frameNumber": 50, "trackId": 7, "x": 0.1, "y": 0.1, "width": 0.1, "height": 0.2}],
+        positions=None,
+        ball_positions=[],
+        primary_track_ids=[7],
+        team_assignments={"7": "A"},
+    )
+    assert row is not None
+    assert row["snapshot_reid_embedding"] is None

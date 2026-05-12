@@ -262,4 +262,30 @@ describe('actionGroundTruthService', () => {
     expect(row.resolvedTrackId).toBe(99);
     expect(row.resolvedSource).toBe('MANUAL');
   });
+
+  // ------------------------------------------------------------------
+  // Test 9: captures snapshotReidEmbedding when rawPositionsJson has embedding
+  // ------------------------------------------------------------------
+  it('captures snapshotReidEmbedding when rawPositions has an embedding for the labeled trackId', async () => {
+    // Re-seed the rally's PlayerTrack rawPositionsJson with an embedded position.
+    await prisma.playerTrack.update({
+      where: { rallyId },
+      data: {
+        rawPositionsJson: [{
+          frameNumber: 10,
+          trackId: 1,
+          x: 0.1, y: 0.1, width: 0.1, height: 0.2,
+          confidence: 0.9,
+          embedding: Array.from({ length: 128 }, (_, i) => Math.sin(i * 0.1)),
+        }] as unknown as object,
+      },
+    });
+
+    await saveActionGroundTruth(rallyId, userId, [{ frame: 10, action: 'serve', trackId: 1 }]);
+
+    const row = await prisma.rallyActionGroundTruth.findFirstOrThrow({ where: { rallyId } });
+    expect(row.snapshotReidEmbedding).not.toBeNull();
+    // 128 float32 = 512 bytes
+    expect((row.snapshotReidEmbedding as Buffer).length).toBe(512);
+  });
 });
