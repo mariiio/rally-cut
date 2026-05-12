@@ -10,6 +10,7 @@ building on the lower-level contact detection in ball_features.py.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import math
 import os
@@ -284,6 +285,44 @@ class ContactDetectionConfig:
     min_inflection_angle_deg_relaxed: float = 10.0
     warmup_skip_frames_relaxed: int = 2
     player_contact_radius_relaxed: float = 0.20
+
+
+def _resolve_effective_config(cfg: ContactDetectionConfig) -> ContactDetectionConfig:
+    """Apply RELAX_CONTACT_* env-flag relaxations to the config.
+
+    Read at call time so monkeypatch.setenv works in tests (matches the pattern
+    used by RELAX_NEAREST_GUARD_FOR_TEAM_CHAIN in action_classifier.py).
+
+    Each RELAX_CONTACT_* flag, when set to "1", swaps one or more strict-mode
+    fields for their *_relaxed counterparts in cfg. All flags default OFF;
+    setting nothing returns cfg unchanged.
+
+    Spec: docs/superpowers/specs/2026-05-12-contact-detection-fn-reduction-design.md
+    """
+    new_cfg = cfg
+    if os.environ.get("RELAX_CONTACT_DIR_CHANGE", "0") == "1":
+        new_cfg = dataclasses.replace(
+            new_cfg, min_direction_change_deg=cfg.min_direction_change_deg_relaxed
+        )
+    if os.environ.get("RELAX_CONTACT_VELOCITY", "0") == "1":
+        new_cfg = dataclasses.replace(
+            new_cfg,
+            min_peak_velocity=cfg.min_peak_velocity_relaxed,
+            deceleration_min_speed_before=cfg.deceleration_min_speed_before_relaxed,
+        )
+    if os.environ.get("RELAX_CONTACT_INFLECTION", "0") == "1":
+        new_cfg = dataclasses.replace(
+            new_cfg, min_inflection_angle_deg=cfg.min_inflection_angle_deg_relaxed
+        )
+    if os.environ.get("RELAX_CONTACT_WARMUP", "0") == "1":
+        new_cfg = dataclasses.replace(
+            new_cfg, warmup_skip_frames=cfg.warmup_skip_frames_relaxed
+        )
+    if os.environ.get("RELAX_CONTACT_PLAYER_RADIUS", "0") == "1":
+        new_cfg = dataclasses.replace(
+            new_cfg, player_contact_radius=cfg.player_contact_radius_relaxed
+        )
+    return new_cfg
 
 
 @dataclass
