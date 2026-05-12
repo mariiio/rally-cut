@@ -10,6 +10,8 @@ from __future__ import annotations
 import math
 
 from rallycut.tracking.joint_attribution_factors import (
+    pairwise_alternation,
+    pairwise_no_back_to_back,
     unary_action_prior,
     unary_distance,
     unary_proximity,
@@ -95,3 +97,79 @@ def test_unary_action_prior_no_initial_pid() -> None:
     score = unary_action_prior("P1", initial_pid=None, weights=DEFAULT_WEIGHTS)
     expected = math.log(0.25) * DEFAULT_WEIGHTS.w_prior  # 1/4 if no info
     assert math.isclose(score, expected, abs_tol=1e-9)
+
+
+# ---- pairwise_no_back_to_back ----
+
+def test_pairwise_no_back_to_back_same_player_penalized() -> None:
+    """X_t == X_{t+1} (both tracked players) gets a penalty."""
+    score = pairwise_no_back_to_back(
+        "P1", "P1", action_t="dig", action_t1="set", weights=DEFAULT_WEIGHTS
+    )
+    assert score == -DEFAULT_WEIGHTS.w_back_to_back
+
+
+def test_pairwise_no_back_to_back_different_player_zero() -> None:
+    score = pairwise_no_back_to_back(
+        "P1", "P2", action_t="dig", action_t1="set", weights=DEFAULT_WEIGHTS
+    )
+    assert score == 0.0
+
+
+def test_pairwise_no_back_to_back_block_attack_exception() -> None:
+    """Same player consecutive is allowed if first action was a block."""
+    score = pairwise_no_back_to_back(
+        "P1", "P1", action_t="block", action_t1="attack", weights=DEFAULT_WEIGHTS
+    )
+    assert score == 0.0  # exception, no penalty
+
+
+def test_pairwise_no_back_to_back_absent_states_no_penalty() -> None:
+    """Two absent states consecutive is handled by R_absent_pair, not back-to-back."""
+    score = pairwise_no_back_to_back(
+        "ABSENT_TEAM_A", "ABSENT_TEAM_A",
+        action_t="dig", action_t1="set", weights=DEFAULT_WEIGHTS,
+    )
+    assert score == 0.0
+
+
+# ---- pairwise_alternation ----
+
+def test_pairwise_alternation_same_team_across_net_penalized() -> None:
+    """Same team consecutive AND a net crossing happened -> penalty."""
+    team_assignments = {1: "A", 2: "A", 3: "B", 4: "B"}
+    score = pairwise_alternation(
+        "P1", "P2", net_crossed=True,
+        team_assignments=team_assignments, weights=DEFAULT_WEIGHTS,
+    )
+    assert score == -DEFAULT_WEIGHTS.w_alternation
+
+
+def test_pairwise_alternation_diff_team_across_net_zero() -> None:
+    team_assignments = {1: "A", 2: "A", 3: "B", 4: "B"}
+    score = pairwise_alternation(
+        "P1", "P3", net_crossed=True,
+        team_assignments=team_assignments, weights=DEFAULT_WEIGHTS,
+    )
+    assert score == 0.0
+
+
+def test_pairwise_alternation_diff_team_same_side_penalized() -> None:
+    """Different teams without a net crossing -> penalty (impossible play)."""
+    team_assignments = {1: "A", 2: "A", 3: "B", 4: "B"}
+    score = pairwise_alternation(
+        "P1", "P3", net_crossed=False,
+        team_assignments=team_assignments, weights=DEFAULT_WEIGHTS,
+    )
+    assert score == -DEFAULT_WEIGHTS.w_team_consistency
+
+
+def test_pairwise_alternation_absent_states_neutral() -> None:
+    """Alternation rule doesn't penalize involving absent states."""
+    team_assignments = {1: "A", 2: "A", 3: "B", 4: "B"}
+    score = pairwise_alternation(
+        "ABSENT_TEAM_A", "P2", net_crossed=True,
+        team_assignments=team_assignments, weights=DEFAULT_WEIGHTS,
+    )
+    # ABSENT_TEAM_A is on team A; P2 is on team A; net crossed -> rule fires
+    assert score == -DEFAULT_WEIGHTS.w_alternation

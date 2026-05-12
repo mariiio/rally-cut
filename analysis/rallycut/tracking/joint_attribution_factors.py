@@ -92,3 +92,54 @@ def unary_action_prior(
     if pid == initial_pid:
         return math.log(0.6) * weights.w_prior
     return math.log(0.1) * weights.w_prior
+
+
+def _state_team(state: State, team_assignments: dict[int, str]) -> str | None:
+    """Resolve a state to its team letter, or None if unresolvable."""
+    if state == "ABSENT_TEAM_A":
+        return "A"
+    if state == "ABSENT_TEAM_B":
+        return "B"
+    pid = int(state[1:])
+    return team_assignments.get(pid)
+
+
+def pairwise_no_back_to_back(
+    state_t: State,
+    state_t1: State,
+    action_t: str | None,
+    action_t1: str | None,
+    weights: FactorWeights,
+) -> float:
+    """Penalty if consecutive contacts have the same player.
+    Exception: block-attack by the same player is allowed."""
+    if is_absent(state_t) or is_absent(state_t1):
+        return 0.0
+    if state_t != state_t1:
+        return 0.0
+    # Block-attack exception
+    if action_t == "block" and action_t1 == "attack":
+        return 0.0
+    return -weights.w_back_to_back
+
+
+def pairwise_alternation(
+    state_t: State,
+    state_t1: State,
+    net_crossed: bool,
+    team_assignments: dict[int, str],
+    weights: FactorWeights,
+) -> float:
+    """Two soft rules folded into one factor:
+    - Same team across a net crossing: penalty (should alternate)
+    - Different team without a net crossing: penalty (impossible play)"""
+    team_t = _state_team(state_t, team_assignments)
+    team_t1 = _state_team(state_t1, team_assignments)
+    if team_t is None or team_t1 is None:
+        return 0.0
+    same_team = team_t == team_t1
+    if net_crossed and same_team:
+        return -weights.w_alternation
+    if not net_crossed and not same_team:
+        return -weights.w_team_consistency
+    return 0.0
