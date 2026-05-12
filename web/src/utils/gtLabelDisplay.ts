@@ -4,40 +4,28 @@ import { resolveCanonicalPid } from '@/utils/canonicalPid';
 /**
  * Resolve the display pid (1-4) for a GT label.
  *
- * Delegates the trackId → pid lookup to ``resolveCanonicalPid`` so
- * ``appliedFullMapping`` (Hungarian) takes precedence over sort-order.
- * Adds the GT-specific fallback to legacy ``playerTrackId`` for rows
- * predating the ``trackId`` anchor (commit 3cf67c1).
+ * After Task 5's resolver runs, resolvedTrackId is the post-remap canonical
+ * pid (when the resolver wrote SNAPSHOT_EXACT/MANUAL/NEAREST_CENTER from
+ * positionsJson) OR the raw BoT-SORT id (when it wrote IOU_MATCH from
+ * rawPositionsJson). For display we route through appliedFullMapping
+ * (raw → canonical pid 1-4); if the lookup misses, resolvedTrackId
+ * is already canonical so return it directly.
  */
 export function resolveGtDisplayPid(
   gt: ActionGroundTruthLabel,
   appliedFullMapping: Record<string, number> | undefined,
   playerNumberMap: Map<number, number> | undefined,
 ): number | null {
-  if (gt.trackId !== undefined) {
-    const resolved = resolveCanonicalPid(
-      gt.trackId, appliedFullMapping, playerNumberMap,
-    );
-    if (resolved !== null) return resolved;
-  }
-  if (gt.playerTrackId !== undefined && gt.playerTrackId >= 0) {
-    const localNum = playerNumberMap?.get(gt.playerTrackId);
-    if (localNum !== undefined) return localNum;
-    // Legacy rows stored the canonical pid directly in `playerTrackId`; when
-    // no local map covers it we return it as-is and let the caller decide
-    // how to render. Non-canonical values (<1 or >4) are intentionally
-    // dropped above via the `>= 0` guard plus the caller-side `anchor >= 0`
-    // gate so we never render `P-1`.
-    return gt.playerTrackId;
-  }
-  return null;
+  if (gt.resolvedTrackId == null) return null;
+  const resolved = resolveCanonicalPid(
+    gt.resolvedTrackId, appliedFullMapping, playerNumberMap,
+  );
+  return resolved ?? gt.resolvedTrackId;
 }
 
-/** Raw anchor id for a GT label (trackId first, playerTrackId as legacy fallback). */
+/** Anchor id for a GT label — uses resolvedTrackId (current attribution). */
 export function gtAnchorId(gt: ActionGroundTruthLabel): number | null {
-  if (gt.trackId !== undefined) return gt.trackId;
-  if (gt.playerTrackId !== undefined) return gt.playerTrackId;
-  return null;
+  return gt.resolvedTrackId ?? null;
 }
 
 /** Look up the current rally entry from a cached match analysis. */

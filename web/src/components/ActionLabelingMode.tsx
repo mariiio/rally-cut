@@ -4,7 +4,7 @@ import { useEffect, useCallback, RefObject, useMemo } from 'react';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useEditorStore } from '@/stores/editorStore';
-import type { ActionGroundTruthLabel } from '@/services/api';
+import type { ActionGroundTruthLabel, ActionGroundTruthInput } from '@/services/api';
 import { pidToTrackId as resolveDisplayPidToTrackId } from '@/utils/canonicalPid';
 import { rallyMatchEntry } from '@/utils/gtLabelDisplay';
 
@@ -194,7 +194,7 @@ export function ActionLabelingMode({ videoRef, onLabelAdded }: ActionLabelingMod
       }
     }
 
-    const label: ActionGroundTruthLabel = {
+    const label: ActionGroundTruthInput = {
       frame,
       action,
       trackId: nearestTrackId >= 0 ? resolveRawTrackId(nearestTrackId) : undefined,

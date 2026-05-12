@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
-import { trackPlayers, getPlayerTrack, swapPlayerTracks, promoteRawTrack, saveCourtCalibration, deleteCourtCalibration, getActionGroundTruth, saveActionGroundTruth as apiSaveActionGroundTruth, trackAllRallies as apiTrackAllRallies, getBatchTrackingStatus as apiGetBatchTrackingStatus, getVideoScoreGt, saveRallyScoreGt, getMatchAnalysis, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData, type ActionGroundTruthLabel, type QualityReport, type BatchTrackingStatus, type ScoreGtEntry, type ScoreTeam, type MatchAnalysis } from '@/services/api';
+import { trackPlayers, getPlayerTrack, swapPlayerTracks, promoteRawTrack, saveCourtCalibration, deleteCourtCalibration, getActionGroundTruth, saveActionGroundTruth as apiSaveActionGroundTruth, reattachActionLabel as apiReattachActionLabel, trackAllRallies as apiTrackAllRallies, getBatchTrackingStatus as apiGetBatchTrackingStatus, getVideoScoreGt, saveRallyScoreGt, getMatchAnalysis, type TrackPlayersResponse, type GetPlayerTrackResponse, type PlayerPosition as ApiPlayerPosition, type BallPosition, type ContactsData, type ActionsData, type ActionGroundTruthLabel, type ActionGroundTruthInput, type QualityReport, type BatchTrackingStatus, type ScoreGtEntry, type ScoreTeam, type MatchAnalysis } from '@/services/api';
 
 // Types for player tracking data (store format)
 export interface PlayerPosition {
@@ -147,7 +147,7 @@ interface PlayerTrackingState {
 
   // Action labeling actions
   setIsLabelingActions: (value: boolean) => void;
-  addActionLabel: (rallyId: string, label: ActionGroundTruthLabel) => void;
+  addActionLabel: (rallyId: string, label: ActionGroundTruthInput) => void;
   removeActionLabel: (rallyId: string, frame: number) => void;
   updateActionLabel: (rallyId: string, frame: number, action: ActionGroundTruthLabel['action']) => void;
   /** Update the player anchor for an existing GT label. `trackId` is the raw
@@ -155,6 +155,9 @@ interface PlayerTrackingState {
   updateActionLabelPlayer: (rallyId: string, frame: number, trackId: number) => void;
   loadActionGroundTruth: (rallyId: string) => Promise<void>;
   saveActionGroundTruth: (rallyId: string) => Promise<void>;
+  /** Reattach an action GT label to a different track id (sets resolvedSource=MANUAL).
+   *  Refreshes the rally's labels from the server after the PATCH. */
+  reattachActionLabel: (rallyId: string, rowId: string, newResolvedTrackId: number) => Promise<void>;
 
   // Match analysis loader (backs appliedFullMapping / trackToPlayer lookups).
   loadMatchAnalysis: (videoId: string, forceRefresh?: boolean) => Promise<MatchAnalysis | null>;
@@ -762,12 +765,15 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
         set({ isLabelingActions: value });
       },
 
-      addActionLabel: (rallyId: string, label: ActionGroundTruthLabel) => {
+      addActionLabel: (rallyId: string, label: ActionGroundTruthInput) => {
         set((state) => {
           const existing = state.actionGroundTruth[rallyId] ?? [];
-          // Replace if same frame exists, otherwise add
+          // Replace if same frame exists, otherwise add.
+          // The local store holds ActionGroundTruthLabel[] (full server shape) but
+          // new labels are created as ActionGroundTruthInput before they're saved;
+          // cast here so the optimistic list stays sortable by frame.
           const filtered = existing.filter(l => l.frame !== label.frame);
-          const updated = [...filtered, label].sort((a, b) => a.frame - b.frame);
+          const updated = [...filtered, label as unknown as ActionGroundTruthLabel].sort((a, b) => a.frame - b.frame);
           return {
             actionGroundTruth: { ...state.actionGroundTruth, [rallyId]: updated },
             actionGtDirty: { ...state.actionGtDirty, [rallyId]: true },
@@ -802,11 +808,9 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
           const existing = state.actionGroundTruth[rallyId] ?? [];
           const updated = existing.map(l => {
             if (l.frame !== frame) return l;
-            // Write the new stable anchor and drop the legacy field so older
-            // canonical-pid values (from pre-migration rows) don't shadow it.
-            const rest = { ...l };
-            delete rest.playerTrackId;
-            return { ...rest, trackId };
+            // Update resolvedTrackId optimistically so the overlay reflects the
+            // new attribution immediately (before the save round-trip).
+            return { ...l, resolvedTrackId: trackId };
           });
           return {
             actionGroundTruth: { ...state.actionGroundTruth, [rallyId]: updated },
@@ -831,9 +835,24 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
         const state = get();
         const labels = state.actionGroundTruth[rallyId] ?? [];
 
+        // Convert full ActionGroundTruthLabel[] to the save-time ActionGroundTruthInput[]
+        // shape. The server denormalizes (fills snapshot fields) from PlayerTrack data.
+        const inputLabels: ActionGroundTruthInput[] = labels.map((l) => ({
+          frame: l.frame,
+          action: l.action,
+          // For newly added (unsaved) labels the input trackId may be stored
+          // as resolvedTrackId after an optimistic updateActionLabelPlayer call.
+          // Cast: optimistic entries created via addActionLabel carry the raw
+          // input fields directly under the ActionGroundTruthLabel type via
+          // the cast in addActionLabel.
+          trackId: (l as unknown as ActionGroundTruthInput).trackId ?? l.resolvedTrackId ?? undefined,
+          ballX: (l as unknown as ActionGroundTruthInput).ballX ?? l.snapshotBallX ?? undefined,
+          ballY: (l as unknown as ActionGroundTruthInput).ballY ?? l.snapshotBallY ?? undefined,
+        }));
+
         set((s) => ({ actionGtSaving: { ...s.actionGtSaving, [rallyId]: true } }));
         try {
-          await apiSaveActionGroundTruth(rallyId, labels);
+          await apiSaveActionGroundTruth(rallyId, inputLabels);
           set((s) => ({
             actionGtDirty: { ...s.actionGtDirty, [rallyId]: false },
             actionGtSaving: { ...s.actionGtSaving, [rallyId]: false },
@@ -843,6 +862,12 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
           set((s) => ({ actionGtSaving: { ...s.actionGtSaving, [rallyId]: false } }));
           throw error;
         }
+      },
+
+      reattachActionLabel: async (rallyId: string, rowId: string, newResolvedTrackId: number) => {
+        await apiReattachActionLabel(rallyId, rowId, newResolvedTrackId);
+        // Refresh the rally's labels so the UI shows the new attribution.
+        await get().loadActionGroundTruth(rallyId);
       },
 
       loadMatchAnalysis: async (videoId: string, forceRefresh: boolean = false) => {

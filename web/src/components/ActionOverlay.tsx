@@ -274,8 +274,8 @@ export function ActionOverlay({
 
           // Position GT labels above auto-detected ones
           const offsetY = -45;
-          const x = gt.ballX ?? 0.5;
-          const y = gt.ballY ?? 0.3;
+          const x = gt.snapshotBallX ?? 0.5;
+          const y = gt.snapshotBallY ?? 0.3;
           label.style.display = 'block';
           label.style.left = `${x * 100}%`;
           label.style.top = `calc(${y * 100}% + ${offsetY}px)`;
