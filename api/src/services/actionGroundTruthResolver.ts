@@ -12,12 +12,19 @@ export interface GtRowInput {
   snapshotBboxY2: number | null;
   snapshotTrackId: number | null;
   snapshotReidEmbedding: Float32Array | null;  // 128-dim, null when not yet captured
+  // Advisory cross-check for the geometric-fallback tier. When non-null, the
+  // NEAREST_CENTER tier rejects candidates with a different team. Prevents
+  // the "two players clustered near the snapshot bbox" cross-team misattribution.
+  // Has no effect on SNAPSHOT_EXACT, IOU_MATCH, REID_MATCH tiers, which the
+  // bbox/embedding evidence already distinguishes.
+  snapshotTeam: 'A' | 'B' | null;
 }
 
 export interface Candidate {
   trackId: number;
   bbox: { x1: number; y1: number; x2: number; y2: number };
   embedding: Float32Array | null;  // optional appearance vector from tracker
+  team: 'A' | 'B' | null;          // optional team annotation from teamAssignments
 }
 
 export interface ResolveResult {
@@ -92,7 +99,23 @@ export function resolveGtRow(row: GtRowInput, positions: Candidate[]): ResolveRe
   }
 
   const [sx, sy] = center(snapshot);
-  const distRanked = positions
+  // Team cross-check: when the snapshot has a team annotation AND at least one
+  // candidate is annotated, restrict the NEAREST_CENTER candidate pool to the
+  // matching team. If no candidate has a team annotation, fall back to the
+  // unfiltered pool (preserves backward compat for callers that don't pass
+  // teamAssignments). This tier is the most error-prone — the bbox/embedding
+  // tiers above already rejected — so it's where cross-team noise leaks in.
+  let centerPool = positions;
+  if (row.snapshotTeam !== null) {
+    const anyAnnotated = positions.some(p => p.team !== null);
+    if (anyAnnotated) {
+      centerPool = positions.filter(p => p.team === row.snapshotTeam);
+    }
+  }
+  if (centerPool.length === 0) {
+    return { resolvedTrackId: null, resolvedSource: 'UNRESOLVED' };
+  }
+  const distRanked = centerPool
     .map(p => {
       const [cx, cy] = center(p.bbox);
       return { trackId: p.trackId, dist: Math.hypot(cx - sx, cy - sy) };

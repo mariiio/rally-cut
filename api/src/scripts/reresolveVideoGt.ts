@@ -1,5 +1,5 @@
-import { prisma } from '../lib/prisma';
-import { reresolveRallyGt } from '../services/actionGroundTruthService';
+import { prisma, type PrismaTransaction } from '../lib/prisma.js';
+import { reresolveRallyGt } from '../services/actionGroundTruthService.js';
 
 async function main() {
   const videoId = process.env.VIDEO_ID;
@@ -14,7 +14,7 @@ async function main() {
       frameNumber: number; trackId: number; x: number; y: number;
       width: number; height: number; confidence?: number; embedding?: number[] | null;
     }>;
-    await prisma.$transaction(async (tx) => { await reresolveRallyGt(tx, rally.id, rawPositions); });
+    await prisma.$transaction(async (tx: PrismaTransaction) => { await reresolveRallyGt(tx, rally.id, rawPositions); });
     process.stdout.write('.');
   }
   console.log(' done');

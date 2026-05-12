@@ -440,6 +440,9 @@ export async function reresolveRallyGt(
     confidence?: number;
     embedding?: number[] | null;     // 128 floats from the tracker, if available
   }>,
+  // Optional trackId → team map. When provided, threaded into each Candidate.team
+  // so the resolver's NEAREST_CENTER tier can reject wrong-team candidates.
+  teamAssignments?: Record<string, 'A' | 'B'> | null,
 ): Promise<void> {
   const rows = await tx.rallyActionGroundTruth.findMany({
     where: { rallyId },
@@ -451,6 +454,7 @@ export async function reresolveRallyGt(
   const byFrame = new Map<number, Candidate[]>();
   for (const p of rawPositions) {
     const list = byFrame.get(p.frameNumber) ?? [];
+    const team = teamAssignments ? (teamAssignments[String(p.trackId)] ?? null) : null;
     const candidate: Candidate = {
       trackId: p.trackId,
       bbox: {
@@ -460,6 +464,7 @@ export async function reresolveRallyGt(
         y2: p.y + p.height,
       },
       embedding: p.embedding ? new Float32Array(p.embedding) : null,
+      team,
     };
     list.push(candidate);
     byFrame.set(p.frameNumber, list);
@@ -490,6 +495,7 @@ export async function reresolveRallyGt(
         snapshotBboxY2: row.snapshotBboxY2,
         snapshotTrackId: row.snapshotTrackId,
         snapshotReidEmbedding: bufferToFloat32(row.snapshotReidEmbedding as Buffer | null),
+        snapshotTeam: row.snapshotTeam,
       },
       candidates,
     );

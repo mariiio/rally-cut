@@ -742,6 +742,10 @@ export async function saveTrackingResult(
         width: number;
         height: number;
       }>,
+      // Team assignments from the fresh tracker output (trackId → 'A'|'B').
+      // Passed through so the resolver's NEAREST_CENTER tier can reject
+      // wrong-team candidates when snapshotTeam is set on a GT row.
+      trackerResult.actions?.teamAssignments as Record<string, 'A' | 'B'> | undefined,
     );
 
     await invalidateMatcherCachesForRally(tx, rallyId, videoId);
