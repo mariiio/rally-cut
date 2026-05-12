@@ -82,6 +82,7 @@ def _team_for(
 def build_label_row(
     label: dict[str, Any],
     raw_positions: list[dict[str, Any]] | None,
+    positions: list[dict[str, Any]] | None,
     ball_positions: list[dict[str, Any]] | None,
     primary_track_ids: list[int] | None,
     team_assignments: dict[str, str] | None,
@@ -95,16 +96,43 @@ def build_label_row(
         return None
 
     track_id = label.get("trackId")
-    bbox = _bbox_at(raw_positions, frame, track_id) if track_id is not None else None
+    player_track_id = label.get("playerTrackId")
     ball = _ball_at(ball_positions, frame)
-    team = _team_for(track_id, primary_track_ids, team_assignments) if track_id is not None else None
 
-    if bbox is not None and track_id is not None:
-        resolved_track_id: int | None = int(track_id)
+    # Stage 1: try raw_positions by trackId (raw BoT-SORT id, preferred when present).
+    bbox: dict[str, float] | None = None
+    resolved_track_id: int | None = None
+    if track_id is not None:
+        bbox = _bbox_at(raw_positions, frame, int(track_id))
+        if bbox is not None:
+            resolved_track_id = int(track_id)
+
+    # Stage 2: fall back to positions by playerTrackId (canonical pid, post-remap).
+    # Either when trackId was absent OR when raw_positions lookup didn't find a bbox.
+    if bbox is None and player_track_id is not None:
+        bbox = _bbox_at(positions, frame, int(player_track_id))
+        if bbox is not None:
+            resolved_track_id = int(player_track_id)
+
+    if bbox is not None:
         resolved_source = "SNAPSHOT_EXACT"
     else:
-        resolved_track_id = None
         resolved_source = "UNRESOLVED"
+
+    # Team: prefer the resolved id when we found a bbox; else try whichever id is present.
+    team_id_for_lookup = resolved_track_id if resolved_track_id is not None else (
+        int(track_id) if track_id is not None else (int(player_track_id) if player_track_id is not None else None)
+    )
+    team = (
+        _team_for(team_id_for_lookup, primary_track_ids, team_assignments)
+        if team_id_for_lookup is not None else None
+    )
+
+    # snapshot_track_id: preserve the labeler's hint. Prefer trackId (raw) over playerTrackId (canonical).
+    snapshot_track_id_value = (
+        int(track_id) if track_id is not None
+        else (int(player_track_id) if player_track_id is not None else None)
+    )
 
     return {
         "frame": int(frame),
@@ -116,7 +144,7 @@ def build_label_row(
         "snapshot_ball_x": ball[0] if ball else label.get("ballX"),
         "snapshot_ball_y": ball[1] if ball else label.get("ballY"),
         "snapshot_team": team,
-        "snapshot_track_id": int(track_id) if track_id is not None else None,
+        "snapshot_track_id": snapshot_track_id_value,
         "resolved_track_id": resolved_track_id,
         "resolved_source": resolved_source,
     }
@@ -136,6 +164,7 @@ def backfill_video(conn: psycopg.Connection, video_id: str) -> dict[str, int]:
             SELECT pt.rally_id,
                    pt.action_ground_truth_json,
                    pt.raw_positions_json,
+                   pt.positions_json,
                    pt.ball_positions_json,
                    pt.primary_track_ids,
                    pt.actions_json
@@ -147,7 +176,7 @@ def backfill_video(conn: psycopg.Connection, video_id: str) -> dict[str, int]:
         )
         tracks = cur.fetchall()
 
-    for rally_id, gt, raw, ball, primary, actions_json in tracks:
+    for rally_id, gt, raw, positions, ball, primary, actions_json in tracks:
         if not gt:
             report["skipped_no_gt"] += 1
             continue
@@ -157,7 +186,7 @@ def backfill_video(conn: psycopg.Connection, video_id: str) -> dict[str, int]:
             if isinstance(ta, dict):
                 team_assignments = ta
         for label in gt:
-            row = build_label_row(label, raw, ball, primary, team_assignments)
+            row = build_label_row(label, raw, positions, ball, primary, team_assignments)
             if row is None:
                 continue
             with conn.cursor() as cur:
