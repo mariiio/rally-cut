@@ -357,6 +357,7 @@ enum ActionLabel {
 enum ResolveSource {
   SNAPSHOT_EXACT
   IOU_MATCH
+  REID_MATCH
   NEAREST_CENTER
   MANUAL
   UNRESOLVED
@@ -376,6 +377,7 @@ model RallyActionGroundTruth {
   snapshotBallY   Float?         @map("snapshot_ball_y")
   snapshotTeam    ServingTeam?   @map("snapshot_team")
   snapshotTrackId Int?           @map("snapshot_track_id")
+  snapshotReidEmbedding Bytes?   @map("snapshot_reid_embedding")  // 128-dim float32, 512 bytes
 
   resolvedTrackId Int?           @map("resolved_track_id")
   resolvedAt      DateTime?      @map("resolved_at") @db.Timestamptz(6)
