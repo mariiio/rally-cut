@@ -7,6 +7,7 @@ Spec: docs/superpowers/specs/2026-05-12-joint-attribution-pgm-design.md
 """
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass
 from typing import Any, Literal
@@ -165,3 +166,218 @@ def build_evidence(
             scores[state] = score
         evidence.append(scores)
     return evidence
+
+
+_EXHAUSTIVE_THRESHOLD = 8  # use exhaustive for N <= 8 contacts; coordinate descent for larger
+
+
+def _net_crossings_for(contacts: list[dict[str, Any]]) -> tuple[bool, ...]:
+    """For each consecutive contact pair, True if courtSide flipped between them.
+    "unknown" courtSide is treated as no-information (preserves the prior side)."""
+    sides: list[str | None] = []
+    last_known: str | None = None
+    for c in contacts:
+        side = c.get("courtSide")
+        if side in ("near", "far"):
+            last_known = side
+            sides.append(side)
+        else:
+            sides.append(last_known)
+    crossings: list[bool] = []
+    for i in range(len(sides) - 1):
+        if sides[i] is None or sides[i + 1] is None:
+            crossings.append(False)
+        else:
+            crossings.append(sides[i] != sides[i + 1])
+    return tuple(crossings)
+
+
+def score_joint_config(
+    config: tuple[State, ...],
+    rally: RallyContext,
+    weights: FactorWeights = DEFAULT_WEIGHTS,
+    evidence: list[dict[State, float]] | None = None,
+    net_crossings: tuple[bool, ...] | None = None,
+) -> float:
+    """Compute joint log-likelihood for a configuration.
+
+    Sums all unary, pairwise, and higher-order factor contributions.
+    `evidence` and `net_crossings` are precomputed once per rally; pass
+    them in for efficiency in the inner enumeration loop.
+    """
+    # Local import: see module-level note about circular import avoidance.
+    from rallycut.tracking.joint_attribution_factors import (
+        higher_3_contact_per_side,
+        higher_serve_first,
+        pairwise_absent_pair,
+        pairwise_alternation,
+        pairwise_no_back_to_back,
+    )
+
+    if evidence is None:
+        evidence = build_evidence(rally, weights)
+    if net_crossings is None:
+        net_crossings = _net_crossings_for(rally.contacts)
+
+    score = 0.0
+    # Unary
+    for t, state in enumerate(config):
+        score += evidence[t][state]
+    # Pairwise
+    for t in range(len(config) - 1):
+        action_t = (
+            rally.initial_actions[t].get("action")
+            if t < len(rally.initial_actions) else None
+        )
+        action_t1 = (
+            rally.initial_actions[t + 1].get("action")
+            if t + 1 < len(rally.initial_actions) else None
+        )
+        score += pairwise_no_back_to_back(
+            config[t], config[t + 1], action_t, action_t1, weights,
+        )
+        score += pairwise_alternation(
+            config[t], config[t + 1], net_crossings[t],
+            rally.team_assignments, weights,
+        )
+        score += pairwise_absent_pair(config[t], config[t + 1], weights)
+    # Higher-order
+    score += higher_3_contact_per_side(
+        config, net_crossings, rally.team_assignments, weights,
+    )
+    score += higher_serve_first(
+        config[0], rally.serving_team, rally.team_assignments, weights,
+    )
+    return score
+
+
+def _logaddexp(a: float, b: float) -> float:
+    """Numerically stable log(exp(a) + exp(b))."""
+    if a == -math.inf:
+        return b
+    if b == -math.inf:
+        return a
+    if a > b:
+        return a + math.log1p(math.exp(b - a))
+    return b + math.log1p(math.exp(a - b))
+
+
+def _exhaustive_map(
+    rally: RallyContext, weights: FactorWeights,
+) -> tuple[tuple[State, ...], float, list[dict[State, float]]]:
+    """Enumerate all 6^N configurations; return MAP + score + marginals."""
+    n = len(rally.contacts)
+    state_domain = build_state_domain(rally.team_assignments)
+    evidence = build_evidence(rally, weights)
+    net_crossings = _net_crossings_for(rally.contacts)
+
+    best_score = -math.inf
+    best_config: tuple[State, ...] | None = None
+    # Per-(contact, state) logsumexp accumulator for marginals.
+    per_contact_state_log_sum: list[dict[State, float]] = [
+        {state: -math.inf for state in state_domain} for _ in range(n)
+    ]
+
+    for config in itertools.product(state_domain, repeat=n):
+        score = score_joint_config(config, rally, weights, evidence, net_crossings)
+        if score > best_score:
+            best_score, best_config = score, config
+        # Accumulate marginals (logsumexp per (contact_t, state))
+        for t, state in enumerate(config):
+            cur = per_contact_state_log_sum[t][state]
+            per_contact_state_log_sum[t][state] = _logaddexp(cur, score)
+
+    assert best_config is not None
+    # Normalize marginals per contact
+    marginals: list[dict[State, float]] = []
+    for t in range(n):
+        log_sum_total = -math.inf
+        for state in state_domain:
+            log_sum_total = _logaddexp(log_sum_total, per_contact_state_log_sum[t][state])
+        marginal: dict[State, float] = {}
+        for state in state_domain:
+            log_p = per_contact_state_log_sum[t][state] - log_sum_total
+            marginal[state] = math.exp(log_p) if log_p > -50 else 0.0
+        # Renormalize to handle floating-point drift
+        total = sum(marginal.values())
+        if total > 0:
+            marginal = {s: p / total for s, p in marginal.items()}
+        marginals.append(marginal)
+
+    return best_config, best_score, marginals
+
+
+def _coordinate_descent_map(
+    rally: RallyContext, weights: FactorWeights, max_iter: int = 5,
+) -> tuple[tuple[State, ...], float, list[dict[State, float]]]:
+    """Coordinate-descent fallback for N > 8 contacts.
+
+    Initialize from initial_actions PIDs; iteratively re-assign each contact
+    to maximize the joint score given others. Approximate; finds local MAP.
+    Marginals are not computed; returned as uniform-ish (each MAP state at 1.0).
+    """
+    n = len(rally.contacts)
+    state_domain = build_state_domain(rally.team_assignments)
+    evidence = build_evidence(rally, weights)
+    net_crossings = _net_crossings_for(rally.contacts)
+
+    # Initialize from initial_actions (or first state in the domain if missing)
+    config: list[State] = [state_domain[0] for _ in range(n)]
+    for t in range(n):
+        if t < len(rally.initial_actions):
+            pid = rally.initial_actions[t].get("playerTrackId")
+            if pid is not None and 1 <= int(pid) <= 4:
+                config[t] = f"P{int(pid)}"
+
+    score = score_joint_config(tuple(config), rally, weights, evidence, net_crossings)
+    for _ in range(max_iter):
+        improved = False
+        for t in range(n):
+            best_state, best_score = config[t], score
+            for state in state_domain:
+                if state == config[t]:
+                    continue
+                new_config = config[:t] + [state] + config[t + 1:]
+                new_score = score_joint_config(
+                    tuple(new_config), rally, weights, evidence, net_crossings,
+                )
+                if new_score > best_score:
+                    best_state, best_score = state, new_score
+            if best_state != config[t]:
+                config[t] = best_state
+                score = best_score
+                improved = True
+        if not improved:
+            break
+
+    final = tuple(config)
+    marginals = [
+        {state: (1.0 if state == final[t] else 0.0) for state in state_domain}
+        for t in range(n)
+    ]
+    return final, score, marginals
+
+
+def joint_attribute_rally(
+    rally: RallyContext, weights: FactorWeights = DEFAULT_WEIGHTS,
+) -> RallyAttribution:
+    """Public API: compute joint MAP attribution for a rally.
+
+    Uses exhaustive enumeration when N <= 8 contacts; coordinate-descent
+    fallback for larger rallies. Returns the MAP assignment, joint score,
+    and per-contact marginals.
+    """
+    n = len(rally.contacts)
+    if n == 0:
+        return RallyAttribution(
+            map=(), score=0.0, marginals=[], fallback_used="exhaustive",
+        )
+    if n <= _EXHAUSTIVE_THRESHOLD:
+        config, score, marginals = _exhaustive_map(rally, weights)
+        return RallyAttribution(
+            map=config, score=score, marginals=marginals, fallback_used="exhaustive",
+        )
+    config, score, marginals = _coordinate_descent_map(rally, weights)
+    return RallyAttribution(
+        map=config, score=score, marginals=marginals, fallback_used="coordinate_descent",
+    )
