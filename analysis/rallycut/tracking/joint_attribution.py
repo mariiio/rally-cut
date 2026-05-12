@@ -168,7 +168,11 @@ def build_evidence(
     return evidence
 
 
-_EXHAUSTIVE_THRESHOLD = 8  # use exhaustive for N <= 8 contacts; coordinate descent for larger
+_EXHAUSTIVE_THRESHOLD = 6  # exhaustive for N <= 6 contacts; coordinate-descent fallback for larger.
+# Threshold lowered from 8 to 6 after profiling on the 409-rally action-GT corpus showed
+# 28% of rallies have N >= 7 (exhaustive >1s/rally; spec budget 50ms/rally avg).
+# Per-corpus distribution: 71.6% at N <= 6 (exhaustive, fast); 28.4% at N >= 7 (coord descent).
+# TODO(Phase B): numpy-vectorize the inner enumeration to raise the threshold safely.
 
 
 def _net_crossings_for(contacts: list[dict[str, Any]]) -> tuple[bool, ...]:
