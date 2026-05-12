@@ -221,6 +221,42 @@ export async function splitRally(
       });
     }
 
+    // Partition action GT rows: first child gets frame < firstEndFrame;
+    // second child gets frame >= secondStartFrame with frame -= secondStartFrame;
+    // rows in [firstEndFrame, secondStartFrame) are dropped (matches contacts/actions slicing behavior).
+    await tx.$executeRaw(Prisma.sql`
+      INSERT INTO rally_action_ground_truth (
+        id, rally_id, frame, action,
+        snapshot_bbox_x1, snapshot_bbox_y1, snapshot_bbox_x2, snapshot_bbox_y2,
+        snapshot_ball_x, snapshot_ball_y, snapshot_team, snapshot_track_id,
+        resolved_track_id, resolved_at, resolved_source,
+        created_at, updated_at, created_by)
+      SELECT
+        gen_random_uuid(), ${Prisma.raw(`'${firstRally.id}'::uuid`)}, frame, action,
+        snapshot_bbox_x1, snapshot_bbox_y1, snapshot_bbox_x2, snapshot_bbox_y2,
+        snapshot_ball_x, snapshot_ball_y, snapshot_team, snapshot_track_id,
+        resolved_track_id, resolved_at, resolved_source,
+        created_at, NOW(), created_by
+      FROM rally_action_ground_truth
+      WHERE rally_id::text = ${rallyId} AND frame < ${firstEndFrame}
+    `);
+    await tx.$executeRaw(Prisma.sql`
+      INSERT INTO rally_action_ground_truth (
+        id, rally_id, frame, action,
+        snapshot_bbox_x1, snapshot_bbox_y1, snapshot_bbox_x2, snapshot_bbox_y2,
+        snapshot_ball_x, snapshot_ball_y, snapshot_team, snapshot_track_id,
+        resolved_track_id, resolved_at, resolved_source,
+        created_at, updated_at, created_by)
+      SELECT
+        gen_random_uuid(), ${Prisma.raw(`'${secondRally.id}'::uuid`)}, frame - ${secondStartFrame}, action,
+        snapshot_bbox_x1, snapshot_bbox_y1, snapshot_bbox_x2, snapshot_bbox_y2,
+        snapshot_ball_x, snapshot_ball_y, snapshot_team, snapshot_track_id,
+        resolved_track_id, resolved_at, resolved_source,
+        created_at, NOW(), created_by
+      FROM rally_action_ground_truth
+      WHERE rally_id::text = ${rallyId} AND frame >= ${secondStartFrame}
+    `);
+
     // Update matchAnalysisJson.rallies[]
     const json: any = rally.video.matchAnalysisJson ?? { rallies: [] };
     const parentEntry = (json.rallies ?? []).find((r: any) => r.rallyId === rallyId);

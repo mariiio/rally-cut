@@ -17,7 +17,6 @@ export type SlicePlayerTrackInput = {
   contactsJson: AnyFrameEntry[] | null;
   actionsJson: AnyFrameEntry[] | null;
   groundTruthJson: AnyFrameEntry[] | null;
-  actionGroundTruthJson: AnyFrameEntry[] | null;
   qualityReportJson: unknown;
 };
 
@@ -104,10 +103,6 @@ export function concatPlayerTracks(
   const groundTruthJson = (a.groundTruthJson || b.groundTruthJson)
     ? [...(a.groundTruthJson ?? []), ...shiftFrames(b.groundTruthJson, 'frame', offset)]
     : null;
-  const actionGroundTruthJson = (a.actionGroundTruthJson || b.actionGroundTruthJson)
-    ? [...(a.actionGroundTruthJson ?? []), ...shiftFrames(b.actionGroundTruthJson, 'frame', offset)]
-    : null;
-
   const frameCount = a.frameCount + b.frameCount;
   const meta = recomputeMetadata(positionsJson, frameCount);
 
@@ -138,7 +133,6 @@ export function concatPlayerTracks(
     contactsJson,
     actionsJson,
     groundTruthJson,
-    actionGroundTruthJson,
   };
 }
 
@@ -153,7 +147,6 @@ export function slicePlayerTrack(
   const contacts = partitionByFrame(pt.contactsJson, 'frame', firstEndFrame, secondStartFrame);
   const actions = partitionByFrame(pt.actionsJson, 'frame', firstEndFrame, secondStartFrame);
   const gt = partitionByFrame(pt.groundTruthJson, 'frame', firstEndFrame, secondStartFrame);
-  const actGt = partitionByFrame(pt.actionGroundTruthJson, 'frame', firstEndFrame, secondStartFrame);
 
   const firstCount = firstEndFrame;
   const secondCount = Math.max(0, pt.frameCount - secondStartFrame);
@@ -183,7 +176,6 @@ export function slicePlayerTrack(
       contactsJson: contacts.firstArr,
       actionsJson: actions.firstArr,
       groundTruthJson: pt.groundTruthJson ? gt.firstArr : null,
-      actionGroundTruthJson: pt.actionGroundTruthJson ? actGt.firstArr : null,
     },
     second: {
       ...base,
@@ -195,7 +187,6 @@ export function slicePlayerTrack(
       contactsJson: contacts.secondArr,
       actionsJson: actions.secondArr,
       groundTruthJson: pt.groundTruthJson ? gt.secondArr : null,
-      actionGroundTruthJson: pt.actionGroundTruthJson ? actGt.secondArr : null,
     },
   };
 }

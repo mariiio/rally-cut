@@ -16,7 +16,6 @@ const basePt = {
   contactsJson: [{ frame: 50, playerTrackId: 1 }, { frame: 220, playerTrackId: 2 }],
   actionsJson: [{ frame: 55 }, { frame: 225 }],
   groundTruthJson: null,
-  actionGroundTruthJson: null,
   qualityReportJson: null,
 };
 
@@ -74,7 +73,7 @@ describe('concatPlayerTracks', () => {
     positionsJson: [{ frameNumber: 10, trackId: 1, confidence: 0.9 }],
     rawPositionsJson: [], ballPositionsJson: [{ frameNumber: 20 }],
     contactsJson: [{ frame: 50, playerTrackId: 1 }],
-    actionsJson: [], groundTruthJson: null, actionGroundTruthJson: null,
+    actionsJson: [], groundTruthJson: null,
   };
   const b = {
     fps: 30, frameCount: 150, courtSplitY: 0.5, processingTimeMs: 700, modelVersion: 'v1',
@@ -82,7 +81,7 @@ describe('concatPlayerTracks', () => {
     positionsJson: [{ frameNumber: 5, trackId: 2, confidence: 0.85 }],
     rawPositionsJson: [], ballPositionsJson: [{ frameNumber: 10 }],
     contactsJson: [{ frame: 30, playerTrackId: 2 }],
-    actionsJson: [], groundTruthJson: null, actionGroundTruthJson: null,
+    actionsJson: [], groundTruthJson: null,
   };
 
   it('shifts b frames up by a.frameCount', () => {

@@ -115,4 +115,40 @@ describe('splitRally', () => {
     await expect(splitRally(rallyId, userId, { firstEndMs: 7000, secondStartMs: 6000 }))
       .rejects.toBeInstanceOf(SplitBoundsError);
   });
+
+  it('partitions action GT rows by frame and shifts back-half', async () => {
+    await setupRally({ trackStatus: 'COMPLETED' });
+
+    // Seed two GT rows on the parent: frame 30 (will land on first child) and frame 250 (will land on second child shifted to 70).
+    await prisma.rallyActionGroundTruth.createMany({
+      data: [
+        {
+          rallyId, frame: 30, action: 'SERVE',
+          snapshotBboxX1: 0.1, snapshotBboxY1: 0.1, snapshotBboxX2: 0.2, snapshotBboxY2: 0.3,
+          snapshotTrackId: 1, resolvedTrackId: 1, resolvedSource: 'SNAPSHOT_EXACT', resolvedAt: new Date(),
+        },
+        {
+          rallyId, frame: 250, action: 'ATTACK',
+          snapshotBboxX1: 0.5, snapshotBboxY1: 0.5, snapshotBboxX2: 0.6, snapshotBboxY2: 0.7,
+          snapshotTrackId: 1, resolvedTrackId: 1, resolvedSource: 'SNAPSHOT_EXACT', resolvedAt: new Date(),
+        },
+      ],
+    });
+
+    // setupRally creates a parent rally with frameCount=300 and fps=30; 4000ms = frame 120, 6000ms = frame 180.
+    const { firstRally, secondRally } = await splitRally(rallyId, userId, { firstEndMs: 4000, secondStartMs: 6000 });
+
+    // Parent's GT cascade-deleted.
+    expect(await prisma.rallyActionGroundTruth.count({ where: { rallyId } })).toBe(0);
+
+    // First child: only the frame=30 row.
+    const firstRows = await prisma.rallyActionGroundTruth.findMany({ where: { rallyId: firstRally.id } });
+    expect(firstRows).toHaveLength(1);
+    expect(firstRows[0]).toMatchObject({ frame: 30, action: 'SERVE' });
+
+    // Second child: only the frame=250 row, shifted to frame=70 (250 - 180).
+    const secondRows = await prisma.rallyActionGroundTruth.findMany({ where: { rallyId: secondRally.id } });
+    expect(secondRows).toHaveLength(1);
+    expect(secondRows[0]).toMatchObject({ frame: 70, action: 'ATTACK' });
+  });
 });
