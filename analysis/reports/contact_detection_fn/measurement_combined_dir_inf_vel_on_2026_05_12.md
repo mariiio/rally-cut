@@ -223,6 +223,41 @@ visibility timing in the connection pool. A second measurement after the diff
 verification (which re-issued the UPDATE for one rally as a sanity check)
 returned the byte-identical baseline numbers above.
 
+## All-5 follow-up (controller-run, post-combined A/B)
+
+After the combined `DIR_CHANGE+INFLECTION+VELOCITY` A/B FAILed G-A and the
+hypothesis test confirmed upstream bottleneck, the controller (this session)
+ran one additional inline test: **all five validation-gate flags ON
+simultaneously** (adding `RELAX_CONTACT_WARMUP=1` and
+`RELAX_CONTACT_PLAYER_RADIUS=1` on top of the three above). Goal: probe whether
+the remaining two probe-flagged gates contribute anything beyond the three
+already tested.
+
+| Metric | Baseline | All 5 flags ON | Δ |
+| --- | --- | --- | --- |
+| Recall | 0.8909 | **0.8896** | **-0.13pp (regression)** |
+| Precision proxy | 0.9346 | 0.9337 | -0.09pp |
+| C-1 violations | 112 | 112 | unchanged |
+| C-2 violations | 333 | 332 | -1 |
+| serve recall | 0.8627 | 0.8603 | -0.24pp |
+| attack recall | 0.9342 | 0.9326 | -0.16pp |
+| set recall | 0.9336 | 0.9317 | -0.19pp |
+
+Adding WARMUP + PLAYER_RADIUS net-regresses recall AND erases the coherence
+gains the 3-flag relaxation produced. The warmup-frames reduction (5 → 2) and
+the larger player radius (0.15 → 0.20 with depth scaling preserved) introduce
+more spurious contacts than they recover real ones at the action-classifier
+output. This validates the spec's "global relaxation can't ship" pessimistic
+case for ALL combinations of the relaxation flags — not just the 3-flag subset.
+
+**Definitive conclusion:** No combination of the 5 validation-gate
+relaxation flags can satisfy G-A (≥+3pp recall). Phase 1 (global validation-gate
+relaxation) is conclusively at its ceiling.
+
+DB restored a second time from `/tmp/combined_pre_ab_snapshot.jsonl` (820
+rallies). Post-restore re-measure: recall 0.8909, all per-type counts
+byte-identical to baseline.
+
 ## References
 
 - Spec: `docs/superpowers/specs/2026-05-12-contact-detection-fn-reduction-design.md`
@@ -231,3 +266,4 @@ returned the byte-identical baseline numbers above.
 - Probe: `reports/contact_detection_fn/probe_2026_05_12.md`
 - Prior single-flag A/B: `reports/contact_detection_fn/measurement_dir_change_on_2026_05_12.md`
 - New JSON (gitignored): `reports/contact_detection_fn/measurement_combined_dir_inf_vel_on_2026_05_12.json`
+- All-5 measurement JSON (gitignored): `reports/contact_detection_fn/measurement_all5_on_2026_05_12.json`
