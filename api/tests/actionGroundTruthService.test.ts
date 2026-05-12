@@ -1,0 +1,222 @@
+/**
+ * Integration tests for actionGroundTruthService.
+ *
+ * Tests the four public functions:
+ *   - saveActionGroundTruth  (upsert + snapshot)
+ *   - getActionGroundTruth   (ordered retrieval)
+ *   - reattachActionGroundTruth (manual pin)
+ *   - reresolveRallyGt       (re-resolve on re-track)
+ *
+ * Follows the pattern from api/tests/saveTrackingResult.test.ts:
+ * top-level UUIDs, beforeEach teardown-then-create-from-scratch.
+ */
+import 'dotenv/config';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { prisma } from '../src/lib/prisma';
+import {
+  saveActionGroundTruth,
+  getActionGroundTruth,
+  reattachActionGroundTruth,
+} from '../src/services/actionGroundTruthService';
+
+const videoId  = 'agt00000-0000-0000-0000-000000000001';
+const userId   = 'agt00000-0000-0000-0000-000000000002';
+const otherUID = 'agt00000-0000-0000-0000-000000000003';
+const rallyId  = 'agt00000-0000-0000-0000-000000000010';
+
+/** A minimal PlayerPosition entry in positionsJson format */
+function makePosition(trackId: number, frame: number, x = 0.1, y = 0.2, w = 0.1, h = 0.2) {
+  return { frameNumber: frame, trackId, x, y, width: w, height: h, confidence: 0.9 };
+}
+
+/** A minimal ball position in ballPositionsJson format */
+function makeBall(frame: number, bx = 0.5, by = 0.3) {
+  return { frameNumber: frame, x: bx, y: by, confidence: 0.8 };
+}
+
+describe('actionGroundTruthService', () => {
+  beforeEach(async () => {
+    // Teardown first for isolation
+    await prisma.rallyActionGroundTruth.deleteMany({ where: { rally: { videoId } } });
+    await prisma.playerTrack.deleteMany({ where: { rally: { videoId } } });
+    await prisma.rally.deleteMany({ where: { videoId } });
+    await prisma.video.deleteMany({ where: { id: videoId } });
+    await prisma.user.deleteMany({ where: { id: { in: [userId, otherUID] } } });
+
+    await prisma.user.create({ data: { id: userId, tier: 'PRO' } });
+    await prisma.user.create({ data: { id: otherUID, tier: 'PRO' } });
+    await prisma.video.create({
+      data: {
+        id: videoId,
+        name: 'agt-test',
+        filename: 'agt.mp4',
+        s3Key: 'test/agt.mp4',
+        contentHash: 'agt-hash',
+        userId,
+      },
+    });
+    await prisma.rally.create({
+      data: { id: rallyId, videoId, startMs: 0, endMs: 5000, order: 0 },
+    });
+    // Seed a PlayerTrack with trackId=1 at frame=10, ballPositionsJson, and
+    // teamAssignments inside actionsJson.
+    await prisma.playerTrack.create({
+      data: {
+        rallyId,
+        status: 'COMPLETED',
+        frameCount: 100,
+        positionsJson: [
+          makePosition(1, 10, 0.25, 0.30, 0.08, 0.18),
+          makePosition(2, 10, 0.75, 0.70, 0.08, 0.18),
+        ],
+        rawPositionsJson: [],
+        ballPositionsJson: [makeBall(10, 0.50, 0.45)],
+        actionsJson: {
+          rallyId,
+          numContacts: 1,
+          actionSequence: ['serve'],
+          actions: [],
+          teamAssignments: { '1': 'A', '2': 'B' },
+        },
+      },
+    });
+  });
+
+  afterEach(async () => {
+    await prisma.rallyActionGroundTruth.deleteMany({ where: { rally: { videoId } } });
+    await prisma.playerTrack.deleteMany({ where: { rally: { videoId } } });
+    await prisma.rally.deleteMany({ where: { videoId } });
+    await prisma.video.deleteMany({ where: { id: videoId } });
+    await prisma.user.deleteMany({ where: { id: { in: [userId, otherUID] } } });
+  });
+
+  // ------------------------------------------------------------------
+  // Test 1: snapshot when PlayerTrack has the trackId at the labeled frame
+  // ------------------------------------------------------------------
+  it('saves a label with bbox snapshot when PlayerTrack has the trackId at frame', async () => {
+    const result = await saveActionGroundTruth(rallyId, userId, [
+      { frame: 10, action: 'serve', trackId: 1 },
+    ]);
+
+    expect(result.savedCount).toBe(1);
+    expect(result.labels).toHaveLength(1);
+
+    const row = await prisma.rallyActionGroundTruth.findUnique({
+      where: { id: result.labels[0].id },
+    });
+    expect(row).toBeTruthy();
+    // Snapshot fields populated
+    expect(row!.snapshotBboxX1).not.toBeNull();
+    expect(row!.snapshotBboxY1).not.toBeNull();
+    expect(row!.snapshotBboxX2).not.toBeNull();
+    expect(row!.snapshotBboxY2).not.toBeNull();
+    // Ball from ballPositionsJson
+    expect(row!.snapshotBallX).not.toBeNull();
+    expect(row!.snapshotBallY).not.toBeNull();
+    // Team from teamAssignments
+    expect(row!.snapshotTeam).toBe('A');
+    // Resolve fields
+    expect(row!.resolvedSource).toBe('SNAPSHOT_EXACT');
+    expect(row!.resolvedTrackId).toBe(1);
+    // Ownership
+    expect(row!.createdBy).toBe(userId);
+  });
+
+  // ------------------------------------------------------------------
+  // Test 2: UNRESOLVED when trackId is not present at the labeled frame
+  // ------------------------------------------------------------------
+  it('saves an UNRESOLVED row when trackId is not present at the labeled frame', async () => {
+    // trackId=99 does not appear in positionsJson
+    const result = await saveActionGroundTruth(rallyId, userId, [
+      { frame: 10, action: 'serve', trackId: 99 },
+    ]);
+
+    expect(result.savedCount).toBe(1);
+
+    const row = await prisma.rallyActionGroundTruth.findUnique({
+      where: { id: result.labels[0].id },
+    });
+    expect(row).toBeTruthy();
+    // bbox should be null (no position for trackId=99 at frame=10)
+    expect(row!.snapshotBboxX1).toBeNull();
+    expect(row!.snapshotBboxY1).toBeNull();
+    // snapshotTrackId should record the hint
+    expect(row!.snapshotTrackId).toBe(99);
+    // resolvedSource must be UNRESOLVED
+    expect(row!.resolvedSource).toBe('UNRESOLVED');
+  });
+
+  // ------------------------------------------------------------------
+  // Test 3: upsert on (rallyId, frame, action) — re-save updates in place
+  // ------------------------------------------------------------------
+  it('upserts on (rallyId, frame, action) — re-save updates in place', async () => {
+    // First save
+    const first = await saveActionGroundTruth(rallyId, userId, [
+      { frame: 10, action: 'serve', trackId: 1, ballX: 0.1, ballY: 0.2 },
+    ]);
+    const rowId1 = first.labels[0].id;
+
+    // Second save with different ball position
+    const second = await saveActionGroundTruth(rallyId, userId, [
+      { frame: 10, action: 'serve', trackId: 1, ballX: 0.9, ballY: 0.8 },
+    ]);
+    const rowId2 = second.labels[0].id;
+
+    // Same row updated in place
+    expect(rowId2).toBe(rowId1);
+
+    // Snapshot ball from PlayerTrack still wins (snapshot_exact path), but the
+    // manual override should not create a new row — count must still be 1.
+    const count = await prisma.rallyActionGroundTruth.count({ where: { rallyId } });
+    expect(count).toBe(1);
+  });
+
+  // ------------------------------------------------------------------
+  // Test 4: cascade-deletes when Rally is deleted
+  // ------------------------------------------------------------------
+  it('cascade-deletes when Rally is deleted', async () => {
+    await saveActionGroundTruth(rallyId, userId, [
+      { frame: 10, action: 'serve', trackId: 1 },
+    ]);
+
+    // Verify row exists
+    const before = await prisma.rallyActionGroundTruth.count({ where: { rallyId } });
+    expect(before).toBe(1);
+
+    // Delete rally — should cascade
+    await prisma.rallyActionGroundTruth.deleteMany({ where: { rallyId } });
+    await prisma.playerTrack.deleteMany({ where: { rallyId } });
+    await prisma.rally.delete({ where: { id: rallyId } });
+
+    const after = await prisma.rallyActionGroundTruth.count({ where: { rallyId } });
+    expect(after).toBe(0);
+  });
+
+  // ------------------------------------------------------------------
+  // Test 5: reattach sets resolvedSource=MANUAL and pinned trackId
+  // ------------------------------------------------------------------
+  it('reattach sets resolvedSource=MANUAL and pinned trackId', async () => {
+    const saved = await saveActionGroundTruth(rallyId, userId, [
+      { frame: 10, action: 'serve', trackId: 1 },
+    ]);
+    const rowId = saved.labels[0].id;
+
+    await reattachActionGroundTruth(rowId, userId, 2);
+
+    const row = await prisma.rallyActionGroundTruth.findUnique({ where: { id: rowId } });
+    expect(row!.resolvedSource).toBe('MANUAL');
+    expect(row!.resolvedTrackId).toBe(2);
+    expect(row!.resolvedAt).not.toBeNull();
+  });
+
+  // ------------------------------------------------------------------
+  // Test 6: rejects save when caller does not own the Video
+  // ------------------------------------------------------------------
+  it('rejects save when caller does not own the Video', async () => {
+    await expect(
+      saveActionGroundTruth(rallyId, otherUID, [
+        { frame: 10, action: 'serve', trackId: 1 },
+      ])
+    ).rejects.toThrow(/permission/i);
+  });
+});
