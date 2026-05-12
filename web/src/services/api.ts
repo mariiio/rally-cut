@@ -1858,15 +1858,59 @@ export interface ContactsData {
   contacts: ContactInfo[];
 }
 
-// Action ground truth label. `trackId` is the stable anchor (raw BoT-SORT id,
-// pre-remap); `playerTrackId` is the legacy canonical pid (1-4) kept for
-// back-compat during migration. Render display pid via current
-// `appliedFullMapping[trackId]` with `trackToPlayer[trackId]` as fallback.
+export type ResolveSource =
+  | 'SNAPSHOT_EXACT'
+  | 'IOU_MATCH'
+  | 'REID_MATCH'
+  | 'NEAREST_CENTER'
+  | 'MANUAL'
+  | 'UNRESOLVED';
+
+/**
+ * Action ground truth label, decoupled from PlayerTrack lifecycle.
+ *
+ * The snapshot fields (bbox, ball, team) are immutable after write —
+ * they describe what the labeler saw when they clicked. `resolvedTrackId`
+ * is the cached current attribution; null when the resolver couldn't
+ * match the snapshot to any current track (the UI shows these as ghost
+ * overlays with a reattach action).
+ *
+ * Legacy fields `trackId` / `playerTrackId` are kept for save-payload
+ * back-compat with the editor's existing click handler. Server denormalizes
+ * them into snapshot + resolved fields.
+ */
 export interface ActionGroundTruthLabel {
+  id: string;
+  frame: number;
+  action: 'serve' | 'receive' | 'set' | 'attack' | 'block' | 'dig';
+
+  // Immutable pixel-anchored snapshot.
+  snapshotBboxX1: number | null;
+  snapshotBboxY1: number | null;
+  snapshotBboxX2: number | null;
+  snapshotBboxY2: number | null;
+  snapshotBallX: number | null;
+  snapshotBallY: number | null;
+  snapshotTeam: 'A' | 'B' | null;
+  snapshotTrackId: number | null;
+
+  // Cached attribution — re-derived from snapshot after every retrack.
+  resolvedTrackId: number | null;
+  resolvedSource: ResolveSource;
+  resolvedAt: string | null;
+}
+
+/**
+ * Save-time input payload (legacy shape — server denormalizes).
+ *
+ * The labeler UI passes whichever track id is on screen at the moment
+ * they click; the server fills in the snapshot fields from the
+ * PlayerTrack data.
+ */
+export interface ActionGroundTruthInput {
   frame: number;
   action: 'serve' | 'receive' | 'set' | 'attack' | 'block' | 'dig';
   trackId?: number;
-  playerTrackId?: number;
   ballX?: number;
   ballY?: number;
 }
@@ -2201,8 +2245,8 @@ export async function getActionGroundTruth(
  */
 export async function saveActionGroundTruth(
   rallyId: string,
-  labels: ActionGroundTruthLabel[],
-): Promise<{ savedCount: number }> {
+  labels: ActionGroundTruthInput[],
+): Promise<{ savedCount: number; labels: { id: string }[] }> {
   const response = await fetch(`${API_BASE_URL}/v1/rallies/${rallyId}/action-ground-truth`, {
     method: 'PUT',
     headers: getHeaders('application/json'),
@@ -2215,6 +2259,29 @@ export async function saveActionGroundTruth(
   }
 
   return response.json();
+}
+
+/**
+ * Reattach an action GT label to a different (canonical pid or raw track) id.
+ * Sets resolvedSource=MANUAL; preserves the snapshot bbox/ball/team intact.
+ */
+export async function reattachActionLabel(
+  rallyId: string,
+  rowId: string,
+  resolvedTrackId: number,
+): Promise<void> {
+  const response = await fetch(
+    `${API_BASE_URL}/v1/rallies/${rallyId}/action-ground-truth/${rowId}/reattach`,
+    {
+      method: 'POST',
+      headers: getHeaders('application/json'),
+      body: JSON.stringify({ resolvedTrackId }),
+    },
+  );
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to reattach action GT label: ${response.status}`);
+  }
 }
 
 // ============================================================================
