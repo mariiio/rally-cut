@@ -15,7 +15,7 @@ import math
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from rallycut.evaluation.db import get_connection
 from rallycut.tracking.ball_tracker import BallPosition
@@ -36,6 +36,7 @@ OUT_JSON = (
     / "reports" / "contact_detection_fn" / "probe_2026_05_12.json"
 )
 MATCH_TOLERANCE_FRAMES = 10
+# Narrower than MATCH_TOLERANCE_FRAMES: ball gaps are rarer than action-classifier delays.
 BALL_PRESENCE_HALF_WINDOW = 5  # ball within +/-5 frames counts as "tracked at"
 
 
@@ -75,15 +76,18 @@ def load_corpus_rallies() -> list[dict[str, Any]]:
             gt_rows = cur.fetchall()
     gt_by_rally: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for rid, frame, action, resolved_tid, snap_tid in gt_rows:
-        gt_by_rally[rid].append({
-            "frame": int(frame),
+        rid_str = cast(str, rid)
+        frame_int = int(cast(int, frame)) if frame is not None else 0
+        gt_by_rally[rid_str].append({
+            "frame": frame_int,
             "action": str(action).lower() if action is not None else None,
             "track_id": resolved_tid if resolved_tid is not None else snap_tid,
         })
     for rid, vid, sm, em, actions_json, contacts_json, ball_json, pos_json, ptids in rows:
+        rid_str = cast(str, rid)
         rallies.append({
-            "rally_id": rid,
-            "video_id": vid,
+            "rally_id": rid_str,
+            "video_id": cast(str, vid),
             "start_ms": sm,
             "end_ms": em,
             "actions": (actions_json or {}).get("actions", []) if isinstance(actions_json, dict) else [],
@@ -91,7 +95,7 @@ def load_corpus_rallies() -> list[dict[str, Any]]:
             "ball_json": ball_json or [],
             "pos_json": pos_json or [],
             "primary_track_ids": ptids or [],
-            "gt": gt_by_rally.get(rid, []),
+            "gt": gt_by_rally.get(rid_str, []),
         })
     return rallies
 
@@ -133,25 +137,25 @@ def _build_players_by_frame(pos_json: list[dict[str, Any]]) -> list[PlayerPositi
 def _frame_velocity(
     ball_by_frame: dict[int, BallPosition], frame: int
 ) -> float:
-    """Speed (units/frame) at `frame` from +/-1 ball positions."""
-    before = ball_by_frame.get(frame - 1)
-    after = ball_by_frame.get(frame + 1)
+    """Speed (units/frame) at `frame` from the nearest ball positions
+    on either side, searching up to 5 frames in each direction.
+    Returns 0.0 if no bracketing pair exists.
+    """
+    before: BallPosition | None = None
+    after: BallPosition | None = None
+    for offset in range(1, 6):
+        if before is None and (frame - offset) in ball_by_frame:
+            before = ball_by_frame[frame - offset]
+        if after is None and (frame + offset) in ball_by_frame:
+            after = ball_by_frame[frame + offset]
+        if before is not None and after is not None:
+            break
     if before is None or after is None:
-        # Try wider
-        for offset in range(2, 6):
-            if before is None and (frame - offset) in ball_by_frame:
-                before = ball_by_frame[frame - offset]
-            if after is None and (frame + offset) in ball_by_frame:
-                after = ball_by_frame[frame + offset]
-            if before is not None and after is not None:
-                dx = after.x - before.x
-                dy = after.y - before.y
-                gap = (after.frame_number - before.frame_number)
-                return math.sqrt(dx * dx + dy * dy) / max(gap, 1)
         return 0.0
     dx = after.x - before.x
     dy = after.y - before.y
-    return math.sqrt(dx * dx + dy * dy) / 2.0
+    gap = max(after.frame_number - before.frame_number, 1)
+    return math.sqrt(dx * dx + dy * dy) / gap
 
 
 def diagnose_gates(
