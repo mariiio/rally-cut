@@ -436,13 +436,6 @@ def reattribute_actions_cmd(
         assign_court_side_from_teams,
         reattribute_players,
     )
-    from rallycut.tracking.joint_attribution import (
-        RallyContext,
-        apply_pgm_result_to_actions,
-        build_pgm_team_assignments,
-        joint_attribute_rally,
-        use_joint_attribution_enabled,
-    )
 
     # Load match analysis
     with get_connection() as conn:
@@ -669,13 +662,9 @@ def reattribute_actions_cmd(
                 if best_tid >= 0:
                     action.player_track_id = best_tid
 
-        # Re-attribute players if high-confidence and contacts have candidates.
-        # When USE_JOINT_ATTRIBUTION=1, the joint-attribution PGM replaces the
-        # legacy `reattribute_players` path (applied after serialization below
-        # so the PGM's attribution_source / attribution_confidence survive).
+        # Re-attribute players if high-confidence and contacts have candidates
         n_changed = 0
-        pgm_enabled = use_joint_attribution_enabled()
-        if reattrib_ta and has_candidates and actions and not pgm_enabled:
+        if reattrib_ta and has_candidates and actions:
             original_track_ids = [a.player_track_id for a in actions]
             reattribute_players(
                 actions, contacts, reattrib_ta,
@@ -721,30 +710,6 @@ def reattribute_actions_cmd(
                 a["team"] = _team_label(tid, team_assignments)
             elif a.get("courtSide") in ("near", "far"):
                 a["team"] = "A" if a["courtSide"] == "near" else "B"
-
-        # Default-OFF joint-attribution PGM. When `USE_JOINT_ATTRIBUTION=1`,
-        # overwrite each action's playerTrackId + attribution_source with the
-        # per-rally joint MAP. Legacy `reattribute_players` path is skipped
-        # above when the flag is enabled. Operates on the serialized dicts so
-        # the PGM's attribution_source / attribution_confidence survive.
-        if pgm_enabled and reattrib_ta and has_candidates:
-            actions_dicts = new_actions_data.get("actions", [])
-            contacts_dicts = contacts_data.get("contacts", [])
-            pgm_team_assignments = build_pgm_team_assignments(
-                reattrib_ta,
-                track_to_player=track_to_player_by_rally.get(rally_id),
-            )
-            rally_ctx = RallyContext(
-                rally_id=rally_id,
-                contacts=contacts_dicts,
-                initial_actions=actions_dicts,
-                team_assignments=pgm_team_assignments,
-                serving_team=cast(
-                    "str | None", new_actions_data.get("servingTeam"),
-                ),
-            )
-            pgm_result = joint_attribute_rally(rally_ctx)
-            apply_pgm_result_to_actions(actions_dicts, pgm_result, rally_ctx)
 
         # Formation-based serving_team prediction. Overrides the
         # contact-based `servingTeam` when the formation signal is
