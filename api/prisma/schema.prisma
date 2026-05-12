@@ -292,11 +292,11 @@ model Rally {
   order            Int               @default(0)
   createdAt        DateTime          @default(now()) @map("created_at")
   updatedAt        DateTime          @updatedAt @map("updated_at")
-  highlightRallies  HighlightRally[]
-  playerTrack       PlayerTrack?
+  highlightRallies HighlightRally[]
+  playerTrack      PlayerTrack?
   actionGroundTruth RallyActionGroundTruth[]
-  video             Video             @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  cameraEdits       RallyCameraEdit[]
+  video            Video             @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  cameraEdits      RallyCameraEdit[]
 
   @@index([videoId])
   @@index([videoId, startMs])
@@ -362,11 +362,6 @@ enum ResolveSource {
   UNRESOLVED
 }
 
-enum GtTeam {
-  A
-  B
-}
-
 model RallyActionGroundTruth {
   id              String         @id @default(uuid())
   rallyId         String         @map("rally_id")
@@ -379,7 +374,7 @@ model RallyActionGroundTruth {
   snapshotBboxY2  Float?         @map("snapshot_bbox_y2")
   snapshotBallX   Float?         @map("snapshot_ball_x")
   snapshotBallY   Float?         @map("snapshot_ball_y")
-  snapshotTeam    GtTeam?        @map("snapshot_team")
+  snapshotTeam    ServingTeam?   @map("snapshot_team")
   snapshotTrackId Int?           @map("snapshot_track_id")
 
   resolvedTrackId Int?           @map("resolved_track_id")

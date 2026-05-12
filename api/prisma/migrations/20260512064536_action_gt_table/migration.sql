@@ -4,9 +4,6 @@ CREATE TYPE "ActionLabel" AS ENUM ('SERVE', 'RECEIVE', 'SET', 'ATTACK', 'BLOCK',
 -- CreateEnum
 CREATE TYPE "ResolveSource" AS ENUM ('SNAPSHOT_EXACT', 'IOU_MATCH', 'NEAREST_CENTER', 'MANUAL', 'UNRESOLVED');
 
--- CreateEnum
-CREATE TYPE "GtTeam" AS ENUM ('A', 'B');
-
 -- CreateTable
 CREATE TABLE "rally_action_ground_truth" (
     "id" TEXT NOT NULL,
@@ -19,7 +16,7 @@ CREATE TABLE "rally_action_ground_truth" (
     "snapshot_bbox_y2" DOUBLE PRECISION,
     "snapshot_ball_x" DOUBLE PRECISION,
     "snapshot_ball_y" DOUBLE PRECISION,
-    "snapshot_team" "GtTeam",
+    "snapshot_team" "ServingTeam",
     "snapshot_track_id" INTEGER,
     "resolved_track_id" INTEGER,
     "resolved_at" TIMESTAMPTZ(6),
