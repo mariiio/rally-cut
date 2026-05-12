@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import itertools
 import math
+import os
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -385,3 +386,77 @@ def joint_attribute_rally(
     return RallyAttribution(
         map=config, score=score, marginals=marginals, fallback_used="coordinate_descent",
     )
+
+
+def build_pgm_team_assignments(
+    team_assignments_track: dict[int, int],
+    track_to_player: dict[int, int] | None = None,
+) -> dict[int, str]:
+    """Translate track-id-keyed team_assignments (track_id -> 0/1) to the
+    PGM's canonical PID-keyed schema (PID 1-4 -> 'A' or 'B').
+
+    The PGM's state domain is ('P1', 'P2', 'P3', 'P4', ABSENT_TEAM_A,
+    ABSENT_TEAM_B), so keys MUST be in 1-4. When `track_to_player` is
+    provided, we project track ids through it. When it is None, keys
+    are passed through as PIDs only when they are already in 1-4 (a
+    natural identity fallback for older rallies that store canonical
+    PIDs directly).
+
+    Values are mapped via the existing convention (team 0 -> 'A',
+    team 1 -> 'B') used by `team_label` in action_classifier.
+    """
+    result: dict[int, str] = {}
+    for track_id, team_int in team_assignments_track.items():
+        team_letter = "A" if team_int == 0 else "B"
+        if track_to_player is not None:
+            pid = track_to_player.get(track_id)
+            if pid is not None and 1 <= int(pid) <= 4:
+                result[int(pid)] = team_letter
+        elif 1 <= int(track_id) <= 4:
+            result[int(track_id)] = team_letter
+    return result
+
+
+def use_joint_attribution_enabled() -> bool:
+    """True iff USE_JOINT_ATTRIBUTION env var is exactly '1'.
+
+    Matches existing RELAX_CONTACT_* flag semantics — only the literal string
+    '1' enables; 'true', 'yes', 'on', etc. are inert."""
+    return os.environ.get("USE_JOINT_ATTRIBUTION", "0") == "1"
+
+
+def apply_pgm_result_to_actions(
+    actions: list[dict[str, Any]],
+    result: RallyAttribution,
+    rally: RallyContext,
+) -> None:
+    """Overwrite each action's playerTrackId + attribution_source from the MAP.
+
+    Handles ABSENT states by setting playerTrackId=None and
+    attribution_source='pgm_absent_team_X'. Mutates `actions` in place.
+
+    Pairs actions to MAP entries by frame proximity to the contact list
+    (max gap of 5 frames). Actions outside that window are left unchanged.
+    """
+    for action in actions:
+        cf = action["frame"]
+        # Find nearest contact by frame
+        best_t: int | None = None
+        best_d: int | None = None
+        for t, contact in enumerate(rally.contacts):
+            d = abs(int(contact["frame"]) - int(cf))
+            if best_d is None or d < best_d:
+                best_d, best_t = d, t
+        if best_t is None or best_d is None or best_d > 5:
+            continue  # no matching contact; leave unchanged
+        state = result.map[best_t]
+        if state.startswith("ABSENT_TEAM_"):
+            team = state[-1]
+            action["playerTrackId"] = None
+            action["team"] = team
+            action["attribution_source"] = f"pgm_absent_team_{team}"
+        else:
+            pid = int(state[1:])
+            action["playerTrackId"] = pid
+            action["attribution_source"] = "pgm_committed"
+        action["attribution_confidence"] = result.marginals[best_t][state]

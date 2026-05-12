@@ -26,6 +26,13 @@ from rallycut.evaluation.tracking.db import load_court_calibration
 from rallycut.tracking.action_classifier import classify_rally_actions
 from rallycut.tracking.ball_tracker import BallPosition as BallPos
 from rallycut.tracking.contact_detector import detect_contacts
+from rallycut.tracking.joint_attribution import (
+    RallyContext,
+    apply_pgm_result_to_actions,
+    build_pgm_team_assignments,
+    joint_attribute_rally,
+    use_joint_attribution_enabled,
+)
 from rallycut.tracking.match_tracker import build_match_team_assignments
 from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
 from rallycut.tracking.sequence_action_runtime import get_sequence_probs
@@ -58,6 +65,9 @@ def main() -> None:
             # team_assignments` which is a different (legacy) schema and now
             # returns 0 rallies — leaving teamAssignments null fleet-wide.
             match_teams_by_rally: dict[str, dict[int, int]] = {}
+            # track_to_player_by_rally is needed to translate raw track ids
+            # to canonical PIDs 1-4 for the joint-attribution PGM (default-OFF).
+            track_to_player_by_rally: dict[str, dict[int, int]] = {}
             for vid, mj_raw in cur.fetchall():
                 mj = cast(dict[str, Any], mj_raw)
                 if not mj:
@@ -65,6 +75,15 @@ def main() -> None:
                 match_teams_by_rally.update(
                     build_match_team_assignments(mj, min_confidence=0.0)
                 )
+                for rally_entry in mj.get("rallies") or []:
+                    rid = rally_entry.get("rallyId") or rally_entry.get("rally_id")
+                    t2p = rally_entry.get("trackToPlayer") or rally_entry.get(
+                        "track_to_player", {}
+                    )
+                    if rid and t2p:
+                        track_to_player_by_rally[str(rid)] = {
+                            int(k): int(v) for k, v in t2p.items()
+                        }
 
             cur.execute(f"""
                 SELECT r.id, r.video_id, pt.id as pt_id,
@@ -173,6 +192,25 @@ def main() -> None:
             # downstream-stamped fields (formation hints, etc.) survive.
             new_contacts_json = contacts.to_dict()
             new_actions_json = {**existing_actions_json, **rally_actions.to_dict()}
+
+            # Default-OFF joint-attribution PGM. When `USE_JOINT_ATTRIBUTION=1`,
+            # overwrite each action's playerTrackId + attribution_source with the
+            # per-rally joint MAP. Legacy path (flag unset / '0') is byte-identical.
+            if use_joint_attribution_enabled():
+                actions_dicts = new_actions_json.get("actions", [])
+                pgm_team_assignments = build_pgm_team_assignments(
+                    match_teams or {},
+                    track_to_player=track_to_player_by_rally.get(rally_id),
+                )
+                rally_ctx = RallyContext(
+                    rally_id=rally_id,
+                    contacts=new_contacts_json.get("contacts", []),
+                    initial_actions=actions_dicts,
+                    team_assignments=pgm_team_assignments,
+                    serving_team=rally_actions.serving_team,
+                )
+                pgm_result = joint_attribute_rally(rally_ctx)
+                apply_pgm_result_to_actions(actions_dicts, pgm_result, rally_ctx)
 
             n_contacts = len(contacts.contacts)
             n_actions = len(rally_actions.actions)
