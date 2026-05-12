@@ -273,6 +273,18 @@ class ContactDetectionConfig:
     # at the time of ship.
     enable_seq_anchored_rescue: bool = True
 
+    # --- Relaxed-mode overrides (used when corresponding RELAX_CONTACT_* env
+    # flag is set; see _resolve_effective_config). Default values are chosen
+    # to soften each gate by approximately one threshold step. Phase 1 of
+    # the contact-detection FN reduction workstream.
+    # Spec: docs/superpowers/specs/2026-05-12-contact-detection-fn-reduction-design.md
+    min_direction_change_deg_relaxed: float = 12.0
+    min_peak_velocity_relaxed: float = 0.005
+    deceleration_min_speed_before_relaxed: float = 0.005
+    min_inflection_angle_deg_relaxed: float = 10.0
+    warmup_skip_frames_relaxed: int = 2
+    player_contact_radius_relaxed: float = 0.20
+
 
 @dataclass
 class Contact:
