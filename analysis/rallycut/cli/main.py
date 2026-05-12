@@ -6,6 +6,7 @@ from rich.console import Console
 from rallycut.cli.commands.analyze import app as analyze_app
 from rallycut.cli.commands.audit_coherence_invariants import audit_coherence_invariants_cmd
 from rallycut.cli.commands.audit_pid_invariants import audit_pid_invariants_cmd
+from rallycut.cli.commands.migrate_action_gt import migrate_action_gt_cmd
 from rallycut.cli.commands.cleanup_stale_attribution import cleanup_stale_attribution_cmd
 from rallycut.cli.commands.cleanup_team_assignments import cleanup_team_assignments_cmd
 from rallycut.cli.commands.cleanup_team_labels_by_majority import (
@@ -55,6 +56,7 @@ app.command(name="remap-track-ids")(remap_track_ids_cmd)
 app.command(name="repair-identities")(repair_identities_cmd)
 app.command(name="audit-coherence-invariants")(audit_coherence_invariants_cmd)
 app.command(name="audit-pid-invariants")(audit_pid_invariants_cmd)
+app.command(name="migrate-action-gt")(migrate_action_gt_cmd)
 app.command(name="cleanup-team-assignments")(cleanup_team_assignments_cmd)
 app.command(name="cleanup-stale-attribution")(cleanup_stale_attribution_cmd)
 app.command(name="cleanup-team-labels-by-majority")(cleanup_team_labels_by_majority_cmd)
