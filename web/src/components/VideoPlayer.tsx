@@ -1,7 +1,7 @@
 'use client';
 
 import { useRef, useEffect, useCallback, useState, useMemo } from 'react';
-import { Box, CircularProgress, Typography } from '@mui/material';
+import { Box, CircularProgress, Typography, Snackbar, Alert } from '@mui/material';
 import UploadFileIcon from '@mui/icons-material/UploadFile';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useEditorStore } from '@/stores/editorStore';
@@ -79,6 +79,8 @@ export function VideoPlayer() {
   const [, setCameraTime] = useState(0);
   // Track video's actual aspect ratio to avoid letterboxing/cropping
   const [videoAspectRatio, setVideoAspectRatio] = useState<string>('16/9');
+  // Toast message for ghost-reattach feedback
+  const [ghostToast, setGhostToast] = useState<string | null>(null);
 
   // Ref for RAF loop - stores camera data to avoid effect restarts
   const rafDataRef = useRef<{
@@ -140,6 +142,8 @@ export function VideoPlayer() {
   const showLandingZones = usePlayerTrackingStore((state) => state.showLandingZones);
   const matchAnalysis = usePlayerTrackingStore((state) => state.matchAnalysis);
   const loadMatchAnalysis = usePlayerTrackingStore((state) => state.loadMatchAnalysis);
+  const selectedTrackId = usePlayerTrackingStore((state) => state.selectedTrackId);
+  const reattachActionLabel = usePlayerTrackingStore((state) => state.reattachActionLabel);
 
   // Get active match for fps
   const activeMatch = getActiveMatch();
@@ -243,6 +247,22 @@ export function VideoPlayer() {
     return rallyMatchEntry(analysis, currentRally?._backendId ?? null)
       ?.appliedFullMapping;
   }, [activeMatchId, matchAnalysis, currentRally]);
+
+  // Ghost reattach: called when labeler clicks an UNRESOLVED action GT bbox
+  const handleGhostClick = useCallback(async (ghostLabel: import('@/services/api').ActionGroundTruthLabel) => {
+    const rallyId = currentRally?._backendId;
+    if (!rallyId) return;
+    if (selectedTrackId == null) {
+      setGhostToast('Select a player first (click a player track), then click the ghost to reattach.');
+      return;
+    }
+    try {
+      await reattachActionLabel(rallyId, ghostLabel.id, selectedTrackId);
+      setGhostToast(`Reattached to track ${selectedTrackId}`);
+    } catch (err) {
+      setGhostToast(`Reattach failed: ${(err as Error).message}`);
+    }
+  }, [currentRally, selectedTrackId, reattachActionLabel]);
 
   // Get camera edit for current rally
   const currentCameraEdit = useMemo(() => {
@@ -1003,6 +1023,7 @@ export function VideoPlayer() {
               onDeleteLabel={(frame) => removeActionLabel(currentRally._backendId!, frame)}
               playerNumberMap={labelingPlayerNumbers}
               appliedFullMapping={currentAppliedFullMapping}
+              onGhostClick={isLabelingActions ? handleGhostClick : undefined}
             />
           )}
           {/* Landing zones overlay */}
@@ -1061,6 +1082,20 @@ export function VideoPlayer() {
           </div>
         </Box>
       </Box>
+      {/* Ghost reattach feedback toast */}
+      <Snackbar
+        open={!!ghostToast}
+        autoHideDuration={4000}
+        onClose={() => setGhostToast(null)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          severity={ghostToast?.startsWith('Reattach failed') ? 'error' : 'info'}
+          onClose={() => setGhostToast(null)}
+        >
+          {ghostToast}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

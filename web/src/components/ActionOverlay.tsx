@@ -6,6 +6,10 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import type { ActionsData, ActionGroundTruthLabel } from '@/services/api';
 import { resolveGtDisplayPid, gtAnchorId } from '@/utils/gtLabelDisplay';
 
+// How long (seconds) to show ghost overlays around their contact frame
+const GHOST_SHOW_DURATION = 2.0;
+const GHOST_FADE_IN = 0.5;
+
 // Action colors matching volleyball semantics
 const ACTION_COLORS: Record<string, string> = {
   serve: '#4CAF50',     // Green
@@ -33,12 +37,19 @@ interface ActionOverlayProps {
    *  match-players; pre-remap anchor for resolving action-GT trackId to
    *  a display pid. */
   appliedFullMapping?: Record<string, number>;
+  /**
+   * Called when the user clicks an unresolved (ghost) action GT label.
+   * Consumers should use this to trigger reattachment to the currently-selected
+   * player track.
+   */
+  onGhostClick?: (label: ActionGroundTruthLabel) => void;
 }
 
 // How long (seconds) to show the action label after its contact frame
 const LABEL_SHOW_DURATION = 1.0;
 // How long before the contact frame to start fading in
 const LABEL_FADE_IN = 0.15;
+
 
 export function ActionOverlay({
   actions,
@@ -51,6 +62,7 @@ export function ActionOverlay({
   onDeleteLabel,
   playerNumberMap,
   appliedFullMapping,
+  onGhostClick,
 }: ActionOverlayProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const labelsRef = useRef<HTMLDivElement[]>([]);
@@ -58,6 +70,8 @@ export function ActionOverlay({
   const [editAnchor, setEditAnchor] = useState<HTMLDivElement | null>(null);
   const [editFrame, setEditFrame] = useState<number | null>(null);
   const [editAction, setEditAction] = useState<string>('');
+  // Ghost overlay visibility: record of label.id → opacity (0 = hidden, >0 = visible)
+  const [ghostOpacities, setGhostOpacities] = useState<Record<string, number>>({});
 
   // Pre-calculate absolute time for each auto-detected action
   const actionsWithTime = useMemo(() => {
@@ -76,6 +90,15 @@ export function ActionOverlay({
       absoluteTime: rallyStartTime + l.frame / fps,
     }));
   }, [groundTruthLabels, fps, rallyStartTime]);
+
+  // Unresolved (ghost) GT labels — those with no current tracking match but a snapshot bbox.
+  const ghostLabels = useMemo(
+    () =>
+      gtWithTime.filter(
+        (l) => l.resolvedSource === 'UNRESOLVED' && l.snapshotBboxX1 != null,
+      ),
+    [gtWithTime],
+  );
 
   const handleGtLabelClick = useCallback((e: MouseEvent) => {
     if (!isLabelingMode) return;
@@ -216,6 +239,9 @@ export function ActionOverlay({
     };
   }, [actionsWithTime, gtWithTime, isLabelingMode, handleGtLabelClick, playerNumberMap, appliedFullMapping]);
 
+  // Ref to detect changes before calling setGhostOpacities (avoids React re-renders every frame)
+  const prevGhostOpacitiesRef = useRef<Record<string, number>>({});
+
   // Animation loop — uses requestVideoFrameCallback for frame-accurate sync
   useEffect(() => {
     const video = videoRef.current;
@@ -284,6 +310,36 @@ export function ActionOverlay({
           label.style.display = 'none';
         }
       }
+
+      // Update ghost overlay opacities (React state — only set when changed)
+      if (ghostLabels.length > 0) {
+        const next: Record<string, number> = {};
+        let changed = false;
+        for (const ghost of ghostLabels) {
+          const timeSinceAction = videoTime - ghost.absoluteTime;
+          const showDuration = isLabelingMode ? GHOST_SHOW_DURATION : LABEL_SHOW_DURATION;
+          const fadeIn = isLabelingMode ? GHOST_FADE_IN : LABEL_FADE_IN;
+
+          let opacity = 0;
+          if (timeSinceAction >= -fadeIn && timeSinceAction < showDuration) {
+            opacity = 1.0;
+            if (timeSinceAction < 0) {
+              opacity = 1 - Math.abs(timeSinceAction) / fadeIn;
+            }
+            if (timeSinceAction > showDuration - 0.3) {
+              opacity = Math.max(0, (showDuration - timeSinceAction) / 0.3);
+            }
+          }
+          next[ghost.id] = opacity;
+          if (prevGhostOpacitiesRef.current[ghost.id] !== opacity) {
+            changed = true;
+          }
+        }
+        if (changed) {
+          prevGhostOpacitiesRef.current = next;
+          setGhostOpacities(next);
+        }
+      }
     };
 
     const onFrame = (_now: DOMHighResTimeStamp, metadata: VideoFrameCallbackMetadata) => {
@@ -298,7 +354,7 @@ export function ActionOverlay({
     return () => {
       video.cancelVideoFrameCallback(rvfcId);
     };
-  }, [videoRef, actionsWithTime, gtWithTime, isLabelingMode]);
+  }, [videoRef, actionsWithTime, gtWithTime, isLabelingMode, ghostLabels]);
 
   const handleEditClose = () => {
     setEditAnchor(null);
@@ -323,6 +379,53 @@ export function ActionOverlay({
 
   return (
     <>
+      {/* Ghost overlays for UNRESOLVED action GT labels — rendered below resolved overlays (zIndex 1) */}
+      {ghostLabels.map((ghost) => {
+        const opacity = ghostOpacities[ghost.id] ?? 0;
+        if (opacity === 0) return null;
+        // snapshotBbox coords are normalized [0,1] relative to video frame dimensions
+        const x1 = ghost.snapshotBboxX1!;
+        const y1 = ghost.snapshotBboxY1!;
+        const x2 = ghost.snapshotBboxX2!;
+        const y2 = ghost.snapshotBboxY2!;
+        return (
+          <div
+            key={ghost.id}
+            onClick={() => onGhostClick?.(ghost)}
+            style={{
+              position: 'absolute',
+              left: `${x1 * 100}%`,
+              top: `${y1 * 100}%`,
+              width: `${(x2 - x1) * 100}%`,
+              height: `${(y2 - y1) * 100}%`,
+              border: '2px dashed rgba(180, 180, 180, 0.85)',
+              boxSizing: 'border-box',
+              cursor: isLabelingMode ? 'pointer' : 'default',
+              pointerEvents: isLabelingMode ? 'auto' : 'none',
+              opacity,
+              zIndex: 1,
+            }}
+          >
+            <span
+              style={{
+                position: 'absolute',
+                top: -22,
+                left: 0,
+                background: 'rgba(60, 60, 60, 0.85)',
+                color: 'white',
+                padding: '2px 6px',
+                fontSize: 11,
+                borderRadius: 3,
+                whiteSpace: 'nowrap',
+                userSelect: 'none',
+              }}
+            >
+              Unresolved · {ghost.action}
+            </span>
+          </div>
+        );
+      })}
+      {/* Imperative label container — z-index 20 sits above ghost overlays */}
       <div
         ref={containerRef}
         style={{
