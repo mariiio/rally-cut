@@ -35,6 +35,7 @@ import 'dotenv/config';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { prisma } from '../src/lib/prisma';
 import { markRetrackIfExtended, trackAllRallies } from '../src/services/batchTrackingService';
+import { updateRally } from '../src/services/rallyService';
 
 // ---------------------------------------------------------------------------
 // Fixed UUIDs for test isolation
@@ -242,5 +243,68 @@ describe('trackAllRallies skipTracked filter includes needsRetrack=true', () => 
     // R1 (no track) + R3 (needsRetrack=true) → 2 rallies; R2 (needsRetrack=false) is skipped
     expect(result.totalRallies).toBe(2);
     expect(result.jobId).toEqual(expect.any(String));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// reindexTrackingData shifts action GT frames in rally_action_ground_truth
+// ---------------------------------------------------------------------------
+
+describe('updateRally bounds shift action GT frames', () => {
+  const reindexRallyId = 'rroe0000-0000-0000-0000-000000000040';
+
+  beforeEach(async () => {
+    await prisma.rallyActionGroundTruth.deleteMany({ where: { rallyId: reindexRallyId } });
+    await prisma.playerTrack.deleteMany({ where: { rally: { videoId } } });
+    await prisma.rally.deleteMany({ where: { videoId } });
+    await prisma.video.deleteMany({ where: { id: videoId } });
+    await prisma.user.deleteMany({ where: { id: userId } });
+    await prisma.user.create({ data: { id: userId, tier: 'PRO' } });
+    await prisma.video.create({
+      data: {
+        id: videoId, name: 'reindex-test', filename: 'r.mp4', s3Key: 'test/r.mp4',
+        contentHash: 'reindex-hash', userId,
+      },
+    });
+    await prisma.rally.create({
+      data: { id: reindexRallyId, videoId, startMs: 1000, endMs: 4333, order: 0 },
+    });
+    await prisma.playerTrack.create({
+      data: {
+        rallyId: reindexRallyId, status: 'COMPLETED', fps: 30, frameCount: 100,
+        needsRetrack: false,
+      },
+    });
+    await prisma.rallyActionGroundTruth.create({
+      data: {
+        rallyId: reindexRallyId, frame: 50, action: 'SERVE',
+        snapshotTrackId: 7, resolvedTrackId: 7, resolvedSource: 'SNAPSHOT_EXACT', resolvedAt: new Date(),
+      },
+    });
+  });
+
+  afterEach(async () => {
+    await prisma.rallyActionGroundTruth.deleteMany({ where: { rallyId: reindexRallyId } });
+    await prisma.playerTrack.deleteMany({ where: { rally: { videoId } } });
+    await prisma.rally.deleteMany({ where: { videoId } });
+    await prisma.video.deleteMany({ where: { id: videoId } });
+    await prisma.user.deleteMany({ where: { id: userId } });
+  });
+
+  it('extending start earlier shifts GT frames forward', async () => {
+    // Extend startMs by 1s earlier (1000 → 0). deltaFrames = (0 - 1000) * 30 / 1000 = -30.
+    // Row at frame 50 → 50 - (-30) = 80.
+    await updateRally(reindexRallyId, userId, { startMs: 0 });
+
+    const row = await prisma.rallyActionGroundTruth.findFirstOrThrow({ where: { rallyId: reindexRallyId } });
+    expect(row.frame).toBe(80);
+  });
+
+  it('shortening start later deletes GT rows that fall outside the new range', async () => {
+    // Shorten startMs by 2s later (1000 → 3000). deltaFrames = (3000 - 1000) * 30 / 1000 = 60.
+    // Row at frame 50 → 50 - 60 = -10 → DELETED (frame < 0).
+    await updateRally(reindexRallyId, userId, { startMs: 3000 });
+
+    expect(await prisma.rallyActionGroundTruth.count({ where: { rallyId: reindexRallyId } })).toBe(0);
   });
 });

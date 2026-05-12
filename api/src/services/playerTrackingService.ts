@@ -1461,7 +1461,6 @@ export async function reindexTrackingData(
       ballPositionsJson: true,
       contactsJson: true,
       actionsJson: true,
-      actionGroundTruthJson: true,
       frameCount: true,
     },
   });
@@ -1525,12 +1524,6 @@ export async function reindexTrackingData(
     };
   }
 
-  // Action ground truth: shift frame on each label
-  let actionGtData = track.actionGroundTruthJson as Array<{ frame: number }> | null;
-  if (actionGtData && Array.isArray(actionGtData)) {
-    actionGtData = shiftFrameField(actionGtData);
-  }
-
   await tx.playerTrack.update({
     where: { id: track.id },
     data: {
@@ -1540,11 +1533,20 @@ export async function reindexTrackingData(
       ballPositionsJson: ballPositions as unknown as Prisma.JsonArray,
       contactsJson: contactsData ? (contactsData as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
       actionsJson: actionsData ? (actionsData as unknown as Prisma.InputJsonValue) : Prisma.DbNull,
-      ...(actionGtData !== null
-        ? { actionGroundTruthJson: actionGtData as unknown as Prisma.JsonArray }
-        : {}),
     },
   });
+
+  // Shift action GT frames in the new table to match PlayerTrack data.
+  await tx.$executeRaw`
+    UPDATE rally_action_ground_truth
+       SET frame = frame - ${deltaFrames}, updated_at = NOW()
+     WHERE rally_id::text = ${rallyId}
+  `;
+  await tx.$executeRaw`
+    DELETE FROM rally_action_ground_truth
+     WHERE rally_id::text = ${rallyId}
+       AND (frame < 0 OR frame >= ${newFrameCount})
+  `;
 
   console.log(
     `[PLAYER_TRACK] Reindexed rally ${rallyId}: deltaFrames=${deltaFrames}, ` +
