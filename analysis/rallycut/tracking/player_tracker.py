@@ -609,6 +609,9 @@ class PlayerPosition:
     # COCO 17-keypoint pose data from YOLO-Pose: shape (17, 3) with (x, y, conf)
     # normalized 0-1. None when detection model doesn't produce keypoints.
     keypoints: list[list[float]] | None = None
+    # OSNet ReID embedding (128 floats, L2-normalized) from the boxmot-botsort path.
+    # Absent on the ultralytics path and for tracks without a det_idx match.
+    embedding: list[float] | None = None
 
     def to_dict(self) -> dict:
         d: dict = {
@@ -622,6 +625,8 @@ class PlayerPosition:
         }
         if self.keypoints is not None:
             d["keypoints"] = self.keypoints
+        if self.embedding is not None:
+            d["embedding"] = self.embedding
         return d
 
 
@@ -1128,6 +1133,7 @@ class PlayerTracker:
         video_width: int,
         video_height: int,
         det_keypoints: np.ndarray | None = None,
+        det_embeddings: np.ndarray | None = None,
     ) -> list[PlayerPosition]:
         """Decode BoxMOT tracker output to PlayerPosition list.
 
@@ -1139,6 +1145,10 @@ class PlayerTracker:
             video_height: Video frame height.
             det_keypoints: YOLO-Pose keypoints (N_dets, 17, 3) normalized 0-1.
                     Index matches original detection order. Use det_idx to look up.
+            det_embeddings: OSNet embeddings (N_dets, 128) L2-normalized float32.
+                    Index matches original detection order. Use det_idx to look up.
+                    When provided, each track with a valid det_idx gets an embedding
+                    persisted on the PlayerPosition record (for action-GT ReID).
 
         Returns:
             List of PlayerPosition for this frame.
@@ -1160,12 +1170,15 @@ class PlayerTracker:
             w = (x2 - x1) / video_width
             h = (y2 - y1) / video_height
 
-            # Look up keypoints via det_idx (column 7)
+            # Look up keypoints and embedding via det_idx (column 7)
             kps = None
-            if det_keypoints is not None and len(row) > 7:
+            emb: list[float] | None = None
+            if len(row) > 7:
                 det_idx = int(row[7])
-                if 0 <= det_idx < len(det_keypoints):
+                if det_keypoints is not None and 0 <= det_idx < len(det_keypoints):
                     kps = det_keypoints[det_idx].tolist()
+                if det_embeddings is not None and 0 <= det_idx < len(det_embeddings):
+                    emb = det_embeddings[det_idx].astype(np.float32).flatten().tolist()
 
             positions.append(PlayerPosition(
                 frame_number=frame_number,
@@ -1176,6 +1189,7 @@ class PlayerTracker:
                 height=float(h),
                 confidence=float(conf),
                 keypoints=kps,
+                embedding=emb,
             ))
 
         return positions
@@ -2216,10 +2230,13 @@ class PlayerTracker:
                         # Update BoxMOT tracker
                         tracks = self._boxmot_tracker.update(dets_array, frame_to_track, embs)
 
-                        # Decode BoxMOT output to PlayerPosition
+                        # Decode BoxMOT output to PlayerPosition.
+                        # Pass embs so each track's OSNet embedding is persisted on
+                        # the PlayerPosition record (used by action-GT ReID resolver).
                         frame_positions = self._decode_boxmot_results(
                             tracks, frame_idx, video_width, video_height,
                             det_keypoints=det_keypoints,
+                            det_embeddings=embs,
                         )
                     else:
                         # Ultralytics path: YOLO detect + track in one call
@@ -2355,7 +2372,9 @@ class PlayerTracker:
             if progress_callback:
                 progress_callback(1.0)
 
-            # Save raw positions before filtering (for parameter tuning)
+            # Save raw positions before filtering (for parameter tuning).
+            # Embeddings are preserved so they flow through to rawPositionsJson
+            # and on to the action-GT ReID resolver (reresolveRallyGt).
             raw_positions = [
                 PlayerPosition(
                     frame_number=p.frame_number,
@@ -2365,6 +2384,7 @@ class PlayerTracker:
                     width=p.width,
                     height=p.height,
                     confidence=p.confidence,
+                    embedding=p.embedding,
                 )
                 for p in positions
             ]
@@ -2385,6 +2405,7 @@ class PlayerTracker:
                         width=p.width,
                         height=p.height,
                         confidence=p.confidence,
+                        embedding=p.embedding,
                     )
                     for p in raw_positions
                 ]
@@ -2523,6 +2544,7 @@ class PlayerTracker:
                     frame_positions = self._decode_boxmot_results(
                         tracks, frame_idx, video_width, video_height,
                         det_keypoints=det_kps,
+                        det_embeddings=embs,
                     )
                 else:
                     # Ultralytics path: YOLO detect + track in one call

@@ -429,3 +429,97 @@ class TestComputeCourtRoiFromCalibration:
         roi, _ = compute_court_roi_from_calibration(cal)
         assert roi is not None
         assert len(roi) == 4
+
+
+class TestDecodeBoxmotEmbeddings:
+    """_decode_boxmot_results threads OSNet embeddings onto PlayerPosition records.
+
+    R3 of the action-GT ReID retrofit: embeddings from _extract_reid_embeddings
+    are looked up via det_idx (column 7 of BoxMOT output) and attached to each
+    PlayerPosition so they flow through raw_positions → rawPositionsJson →
+    reresolveRallyGt.
+    """
+
+
+    def test_embedding_attached_when_det_idx_matches(self) -> None:
+        """Embedding from det_embeddings[det_idx] appears on PlayerPosition."""
+        import numpy as np
+        from rallycut.tracking.player_tracker import PlayerTracker
+
+        tracker = PlayerTracker.__new__(PlayerTracker)
+        emb = np.random.randn(128).astype(np.float32)
+        emb /= np.linalg.norm(emb)  # L2-normalize as OSNet would
+        det_embeddings = np.stack([emb])  # shape (1, 128)
+
+        tracks = np.array([[10.0, 20.0, 110.0, 220.0, 1.0, 0.85, 0.0, 0.0]])
+        positions = tracker._decode_boxmot_results(
+            tracks, frame_number=5,
+            video_width=640, video_height=480,
+            det_embeddings=det_embeddings,
+        )
+
+        assert len(positions) == 1
+        pos = positions[0]
+        assert pos.embedding is not None
+        assert len(pos.embedding) == 128
+        # Values should match original embedding
+        assert all(abs(a - b) < 1e-5 for a, b in zip(pos.embedding, emb.tolist()))
+
+    def test_no_embedding_when_det_embeddings_none(self) -> None:
+        """When det_embeddings is not provided, embedding field is None."""
+        import numpy as np
+        from rallycut.tracking.player_tracker import PlayerTracker
+
+        tracker = PlayerTracker.__new__(PlayerTracker)
+        tracks = np.array([[10.0, 20.0, 110.0, 220.0, 1.0, 0.85, 0.0, 0.0]])
+        positions = tracker._decode_boxmot_results(
+            tracks, frame_number=0,
+            video_width=640, video_height=480,
+            det_embeddings=None,
+        )
+
+        assert len(positions) == 1
+        assert positions[0].embedding is None
+
+    def test_no_embedding_when_det_idx_out_of_bounds(self) -> None:
+        """Out-of-bounds det_idx leaves embedding as None (lost/recovered track)."""
+        import numpy as np
+        from rallycut.tracking.player_tracker import PlayerTracker
+
+        tracker = PlayerTracker.__new__(PlayerTracker)
+        emb = np.ones((1, 128), dtype=np.float32)
+        # det_idx=5 but only 1 embedding available
+        tracks = np.array([[10.0, 20.0, 110.0, 220.0, 1.0, 0.85, 0.0, 5.0]])
+        positions = tracker._decode_boxmot_results(
+            tracks, frame_number=0,
+            video_width=640, video_height=480,
+            det_embeddings=emb,
+        )
+
+        assert len(positions) == 1
+        assert positions[0].embedding is None
+
+    def test_embedding_in_to_dict(self) -> None:
+        """to_dict includes 'embedding' key when embedding is set."""
+        from rallycut.tracking.player_tracker import PlayerPosition
+
+        emb = [float(i) for i in range(128)]
+        pos = PlayerPosition(
+            frame_number=1, track_id=2, x=0.5, y=0.5,
+            width=0.1, height=0.2, confidence=0.9,
+            embedding=emb,
+        )
+        d = pos.to_dict()
+        assert "embedding" in d
+        assert d["embedding"] == emb
+
+    def test_no_embedding_key_in_to_dict_when_none(self) -> None:
+        """to_dict omits 'embedding' key when embedding is None (backward compat)."""
+        from rallycut.tracking.player_tracker import PlayerPosition
+
+        pos = PlayerPosition(
+            frame_number=1, track_id=2, x=0.5, y=0.5,
+            width=0.1, height=0.2, confidence=0.9,
+        )
+        d = pos.to_dict()
+        assert "embedding" not in d

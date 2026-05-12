@@ -40,6 +40,9 @@ interface PlayerPosition {
   width: number;
   height: number;
   confidence: number;
+  /** OSNet ReID embedding (128 floats, L2-normalized) from the boxmot-botsort path.
+   *  Absent on the ultralytics path and for tracks without a det_idx match. */
+  embedding?: number[] | null;
 }
 
 // Ball position for trajectory overlay
@@ -442,7 +445,9 @@ async function runPlayerTracker(
           confidence: bp.confidence,
         }));
 
-        // Raw positions before filtering (for parameter tuning)
+        // Raw positions before filtering (for parameter tuning).
+        // embedding is passed through when present (boxmot-botsort path only) so
+        // it flows into rawPositionsJson and on to reresolveRallyGt for ReID matching.
         const rawPositions: PlayerPosition[] | undefined = result.rawPositions?.map((p: PlayerPosition) => ({
           frameNumber: p.frameNumber,
           trackId: p.trackId,
@@ -451,6 +456,7 @@ async function runPlayerTracker(
           width: p.width,
           height: p.height,
           confidence: p.confidence,
+          ...(p.embedding != null ? { embedding: p.embedding } : {}),
         }));
 
         // Contact detection and action classification (from --actions flag)
