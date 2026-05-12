@@ -137,7 +137,7 @@ Each contributes a log-likelihood for "contact t was performed by entity i":
 | Source | Contribution to φ(X_t = Pi) | Contribution to φ(X_t = ABSENT_TEAM_X) |
 |---|---|---|
 | `playerCandidates` proximity rank | `log(1 / (rank_i + 1)) * w_proximity` (rank 1 best). If Pi not in candidates, `-LARGE` | `0` (absent doesn't claim proximity) |
-| `playerCandidates` distance | `-distance_i * w_dist` (closer → less penalty) | `-best_team_X_distance * w_dist_team` (penalty proportional to team's nearest tracked player; far → less penalty for absent) |
+| `playerCandidates` distance | `-distance_i * w_dist` (closer → less penalty) | `+best_team_X_distance * w_dist_team` (positive bonus proportional to team's nearest-tracked-player distance; far team → larger bonus for absent state, i.e., absent is more plausible when team's tracked players are far) |
 | Visual similarity (cross-rally PID profile) | `cosine_sim(crop_i, profile_Pi) * w_visual` (only when crop available) | `0` |
 | Pose endorsement | `log(P_pose_touching_i) * w_pose` (when pose model loads) | `0` |
 | `action_classifier` prior PID | `log(0.6) * w_prior` if Pi == initial PID, else `log(0.1) * w_prior` (soft, low weight) | `log(0.05) * w_prior` (very small mass on absent unless evidence strong) |

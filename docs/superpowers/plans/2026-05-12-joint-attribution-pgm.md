@@ -414,7 +414,9 @@ def unary_distance(
         if not team_distances:
             return 0.0  # team has no tracked players in candidates; absent is "free"
         nearest = min(team_distances)
-        return -nearest * weights.w_dist_team
+        # +nearest (positive bonus): far team's nearest → higher absent score
+        # → absent state more plausible. Confirmed by test_unary_distance_absent_uses_team_distance.
+        return nearest * weights.w_dist_team
     # Tracked player
     pid = int(state[1:])
     raw_id = pid_to_raw_id.get(pid)
