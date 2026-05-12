@@ -14,11 +14,10 @@ import { fileURLToPath } from 'url';
 import { env } from '../config/env.js';
 import { generateDownloadUrl } from '../lib/s3.js';
 import { Prisma, PlayerTrack } from '@prisma/client';
-import { prisma } from '../lib/prisma.js';
+import { prisma, type PrismaTransaction } from '../lib/prisma.js';
 import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
 import { remapSingleRally } from './matchAnalysisService.js';
-
-type PrismaTransaction = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+import { reresolveRallyGt } from './actionGroundTruthService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -725,6 +724,19 @@ export async function saveTrackingResult(
         error: null,
       },
     });
+
+    await reresolveRallyGt(
+      tx,
+      rallyId,
+      trackerResult.rawPositions as unknown as Array<{
+        frameNumber: number;
+        trackId: number;
+        x: number;
+        y: number;
+        width: number;
+        height: number;
+      }>,
+    );
 
     await invalidateMatcherCachesForRally(tx, rallyId, videoId);
   });
