@@ -773,17 +773,32 @@ async function applyRemapToRally(
   // for any reason. Translate raw → canonical here so display reads
   // resolved_track_id directly.
   //
+  // CRITICAL: must be a single atomic UPDATE keyed on the row's ORIGINAL
+  // resolved_track_id, not a loop of per-pair UPDATEs. A loop has a swap-chain
+  // hazard when the mapping flips IDs (e.g., {1→2, 2→1}): the second pass
+  // would re-update rows that the first pass already changed. The VALUES
+  // join evaluates each row against its current value exactly once.
+  //
   // Skips MANUAL pins (labeler intent should never be overwritten by an
-  // automatic remap pass).
-  for (const [raw, canonical] of mapping) {
-    if (raw === canonical) continue;
-    await prisma.$executeRaw`
-      UPDATE rally_action_ground_truth
-         SET resolved_track_id = ${canonical}, updated_at = NOW()
-       WHERE rally_id::text = ${rallyId}
-         AND resolved_track_id = ${raw}
-         AND resolved_source <> 'MANUAL'
-    `;
+  // automatic remap pass) and entries where raw == canonical (no-op).
+  const remapEntries = [...mapping.entries()].filter(([raw, canonical]) => raw !== canonical);
+  if (remapEntries.length > 0) {
+    // Build VALUES clause as a raw SQL fragment so we can interpolate a
+    // variable-length list of (raw, canonical) pairs. The values come from
+    // the canonical-pid mapping we computed above (integers), so this is
+    // injection-safe.
+    const valuesFragment = remapEntries
+      .map(([raw, canonical]) => `(${raw}, ${canonical})`)
+      .join(', ');
+    await prisma.$executeRawUnsafe(
+      `UPDATE rally_action_ground_truth
+          SET resolved_track_id = m.new_pid, updated_at = NOW()
+         FROM (VALUES ${valuesFragment}) AS m(raw_id, new_pid)
+        WHERE rally_action_ground_truth.rally_id::text = $1
+          AND rally_action_ground_truth.resolved_track_id = m.raw_id
+          AND rally_action_ground_truth.resolved_source <> 'MANUAL'`,
+      rallyId,
+    );
   }
 
   // Update matchAnalysisJson: store appliedFullMapping + set trackToPlayer to identity
