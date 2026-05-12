@@ -89,4 +89,52 @@ describe('mergeRallies', () => {
     await prisma.rally.update({ where: { id: rallyB }, data: { startMs: 3000 } });
     await expect(mergeRallies([rallyA, rallyB], userId)).rejects.toBeInstanceOf(RalliesOverlapError);
   });
+
+  it('no-gap merge: concatenates GT rows with B shifted by A.frameCount', async () => {
+    await setup({ gap: false });
+
+    await prisma.rallyActionGroundTruth.createMany({
+      data: [
+        { rallyId: rallyA, frame: 30, action: 'SERVE', snapshotTrackId: 1, resolvedTrackId: 1, resolvedSource: 'SNAPSHOT_EXACT', resolvedAt: new Date() },
+        { rallyId: rallyB, frame: 30, action: 'ATTACK', snapshotTrackId: 2, resolvedTrackId: 2, resolvedSource: 'SNAPSHOT_EXACT', resolvedAt: new Date() },
+      ],
+    });
+
+    const { rally } = await mergeRallies([rallyA, rallyB], userId);
+
+    const rows = await prisma.rallyActionGroundTruth.findMany({
+      where: { rallyId: rally.id },
+      orderBy: { frame: 'asc' },
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ frame: 30, action: 'SERVE' });
+    // B's frame 30 + offset of (5000 - 0) * 30 / 1000 = 150 → 180
+    expect(rows[1]).toMatchObject({ frame: 180, action: 'ATTACK' });
+
+    // Parents' GT rows cascade-deleted.
+    expect(await prisma.rallyActionGroundTruth.count({ where: { rallyId: rallyA } })).toBe(0);
+    expect(await prisma.rallyActionGroundTruth.count({ where: { rallyId: rallyB } })).toBe(0);
+  });
+
+  it('with-gap merge: preserves GT rows from both parents, frame-shifted', async () => {
+    await setup({ gap: true });
+
+    await prisma.rallyActionGroundTruth.createMany({
+      data: [
+        { rallyId: rallyA, frame: 30, action: 'SERVE', snapshotTrackId: 1, resolvedTrackId: 1, resolvedSource: 'SNAPSHOT_EXACT', resolvedAt: new Date() },
+        { rallyId: rallyB, frame: 60, action: 'ATTACK', snapshotTrackId: 2, resolvedTrackId: 2, resolvedSource: 'SNAPSHOT_EXACT', resolvedAt: new Date() },
+      ],
+    });
+
+    const { rally } = await mergeRallies([rallyA, rallyB], userId);
+
+    const rows = await prisma.rallyActionGroundTruth.findMany({
+      where: { rallyId: rally.id },
+      orderBy: { frame: 'asc' },
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ frame: 30, action: 'SERVE' });
+    // B's frame 60 + offset of (6000 - 0) * 30 / 1000 = 180 → 240
+    expect(rows[1]).toMatchObject({ frame: 240, action: 'ATTACK' });
+  });
 });

@@ -339,7 +339,36 @@ export async function mergeRallies(
     });
     await tx.video.update({ where: { id: a.videoId }, data: { matchAnalysisJson: json } });
 
-    // Delete parents (cascades their PlayerTracks)
+    // Copy action GT rows from both parents into the merged rally. Frame offset for
+    // each parent = (parent.startMs - merged.startMs) / 1000 * fps. A's offset is 0
+    // (A is the earlier parent and shares merged.startMs); B's offset accounts for
+    // both the duration of A and any inter-parent gap.
+    const fps = a.playerTrack?.fps ?? b.playerTrack?.fps ?? 30;
+    const aOffset = 0;
+    const bOffset = Math.round((b.startMs - merged.startMs) / 1000 * fps);
+    for (const { parentId, offset } of [
+      { parentId: a.id, offset: aOffset },
+      { parentId: b.id, offset: bOffset },
+    ]) {
+      await tx.$executeRaw`
+        INSERT INTO rally_action_ground_truth (
+          id, rally_id, frame, action,
+          snapshot_bbox_x1, snapshot_bbox_y1, snapshot_bbox_x2, snapshot_bbox_y2,
+          snapshot_ball_x, snapshot_ball_y, snapshot_team, snapshot_track_id,
+          resolved_track_id, resolved_at, resolved_source,
+          created_at, updated_at, created_by)
+        SELECT
+          gen_random_uuid(), ${Prisma.raw(`'${merged.id}'::uuid`)}, frame + ${offset}, action,
+          snapshot_bbox_x1, snapshot_bbox_y1, snapshot_bbox_x2, snapshot_bbox_y2,
+          snapshot_ball_x, snapshot_ball_y, snapshot_team, snapshot_track_id,
+          resolved_track_id, resolved_at, resolved_source,
+          created_at, NOW(), created_by
+        FROM rally_action_ground_truth
+        WHERE rally_id::text = ${parentId}
+      `;
+    }
+
+    // Delete parents (cascades their PlayerTracks and GT rows)
     await tx.rally.deleteMany({ where: { id: { in: [a.id, b.id] } } });
 
     // Record edit
