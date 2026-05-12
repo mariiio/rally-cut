@@ -46,4 +46,9 @@ describe('resolveGtRow', () => {
     const row = { snapshotBboxX1: null, snapshotBboxY1: null, snapshotBboxX2: null, snapshotBboxY2: null, snapshotTrackId: 7 };
     expect(resolveGtRow(row, [])).toEqual({ resolvedTrackId: null, resolvedSource: 'UNRESOLVED' });
   });
+
+  it('returns UNRESOLVED when positions are empty and bbox is present', () => {
+    const row = { snapshotBboxX1: 0.1, snapshotBboxY1: 0.1, snapshotBboxX2: 0.2, snapshotBboxY2: 0.3, snapshotTrackId: 7 };
+    expect(resolveGtRow(row, [])).toEqual({ resolvedTrackId: null, resolvedSource: 'UNRESOLVED' });
+  });
 });

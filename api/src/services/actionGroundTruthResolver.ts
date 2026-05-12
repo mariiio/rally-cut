@@ -57,7 +57,7 @@ export function resolveGtRow(row: GtRowInput, positions: Candidate[]): ResolveRe
   if (positions.length === 0) return { resolvedTrackId: null, resolvedSource: 'UNRESOLVED' };
 
   const ranked = positions
-    .map(p => ({ trackId: p.trackId, iouVal: iou(snapshot, p.bbox), pos: p }))
+    .map(p => ({ trackId: p.trackId, iouVal: iou(snapshot, p.bbox) }))
     .sort((a, b) => b.iouVal - a.iouVal);
   if (ranked[0].iouVal >= IOU_THRESHOLD) {
     return { resolvedTrackId: ranked[0].trackId, resolvedSource: 'IOU_MATCH' };
