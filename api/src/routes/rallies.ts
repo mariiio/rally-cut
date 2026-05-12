@@ -12,7 +12,8 @@ import {
   splitRally,
   updateRally,
 } from "../services/rallyService.js";
-import { trackPlayersForRally, getPlayerTrack, swapPlayerTracks, promoteRawTrack, getActionGroundTruth, saveActionGroundTruth, saveScoreGroundTruth, getScoreGroundTruthForVideo } from "../services/playerTrackingService.js";
+import { trackPlayersForRally, getPlayerTrack, swapPlayerTracks, promoteRawTrack, saveScoreGroundTruth, getScoreGroundTruthForVideo } from "../services/playerTrackingService.js";
+import { getActionGroundTruth, saveActionGroundTruth, reattachActionGroundTruth } from "../services/actionGroundTruthService.js";
 import {
   exportToLabelStudio,
   importFromLabelStudio,
@@ -267,6 +268,23 @@ router.put(
     try {
       const result = await saveActionGroundTruth(req.params.id, req.userId!, req.body.labels);
       res.json(result);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.post(
+  "/v1/rallies/:rallyId/action-ground-truth/:rowId/reattach",
+  requireUser,
+  validateRequest({
+    params: z.object({ rallyId: uuidSchema, rowId: uuidSchema }),
+    body: z.object({ resolvedTrackId: z.number().int().min(0) }),
+  }),
+  async (req, res, next) => {
+    try {
+      await reattachActionGroundTruth(req.params.rowId, req.userId!, req.body.resolvedTrackId);
+      res.json({ ok: true });
     } catch (error) {
       next(error);
     }
