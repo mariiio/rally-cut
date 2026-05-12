@@ -2492,7 +2492,7 @@ def detect_contacts(
         extract_attribution_features,
     )
 
-    cfg = config or ContactDetectionConfig()
+    cfg = _resolve_effective_config(config or ContactDetectionConfig())
 
     # Auto-load attribution models
     pose_attributor = (
