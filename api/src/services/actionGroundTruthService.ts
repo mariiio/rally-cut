@@ -298,10 +298,38 @@ export async function saveActionGroundTruth(
 // getActionGroundTruth
 // ---------------------------------------------------------------------------
 
+const ACTION_TO_LOWERCASE: Record<ActionLabel, string> = {
+  SERVE: 'serve',
+  RECEIVE: 'receive',
+  SET: 'set',
+  ATTACK: 'attack',
+  BLOCK: 'block',
+  DIG: 'dig',
+};
+
+export interface ActionGroundTruthResponse {
+  id: string;
+  frame: number;
+  action: string;
+  snapshotBboxX1: number | null;
+  snapshotBboxY1: number | null;
+  snapshotBboxX2: number | null;
+  snapshotBboxY2: number | null;
+  snapshotBallX: number | null;
+  snapshotBallY: number | null;
+  snapshotTeam: string | null;
+  snapshotTrackId: number | null;
+  resolvedTrackId: number | null;
+  resolvedSource: string | null;
+  resolvedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export async function getActionGroundTruth(
   rallyId: string,
   userId: string,
-): Promise<{ labels: Awaited<ReturnType<typeof prisma.rallyActionGroundTruth.findMany>> }> {
+): Promise<{ labels: ActionGroundTruthResponse[] }> {
   const rally = await prisma.rally.findUnique({
     where: { id: rallyId },
     include: { video: { select: { userId: true } } },
@@ -315,10 +343,31 @@ export async function getActionGroundTruth(
     throw new ForbiddenError('You do not have permission to view labels for this rally');
   }
 
-  const labels = await prisma.rallyActionGroundTruth.findMany({
+  const rows = await prisma.rallyActionGroundTruth.findMany({
     where: { rallyId },
     orderBy: { frame: 'asc' },
   });
+
+  // Wire format: lowercase action for the legacy web contract; omit the
+  // OSNet embedding (server-only — the web has no use for the raw bytes).
+  const labels: ActionGroundTruthResponse[] = rows.map((r) => ({
+    id: r.id,
+    frame: r.frame,
+    action: ACTION_TO_LOWERCASE[r.action],
+    snapshotBboxX1: r.snapshotBboxX1,
+    snapshotBboxY1: r.snapshotBboxY1,
+    snapshotBboxX2: r.snapshotBboxX2,
+    snapshotBboxY2: r.snapshotBboxY2,
+    snapshotBallX: r.snapshotBallX,
+    snapshotBallY: r.snapshotBallY,
+    snapshotTeam: r.snapshotTeam,
+    snapshotTrackId: r.snapshotTrackId,
+    resolvedTrackId: r.resolvedTrackId,
+    resolvedSource: r.resolvedSource,
+    resolvedAt: r.resolvedAt ? r.resolvedAt.toISOString() : null,
+    createdAt: r.createdAt.toISOString(),
+    updatedAt: r.updatedAt.toISOString(),
+  }));
 
   return { labels };
 }
