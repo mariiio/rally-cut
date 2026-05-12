@@ -17,6 +17,7 @@ import {
   saveActionGroundTruth,
   getActionGroundTruth,
   reattachActionGroundTruth,
+  reresolveRallyGt,
 } from '../src/services/actionGroundTruthService';
 
 const videoId  = 'agt00000-0000-0000-0000-000000000001';
@@ -68,8 +69,11 @@ describe('actionGroundTruthService', () => {
         positionsJson: [
           makePosition(1, 10, 0.25, 0.30, 0.08, 0.18),
           makePosition(2, 10, 0.75, 0.70, 0.08, 0.18),
+          makePosition(7, 50, 0.1, 0.1, 0.1, 0.2),
         ],
-        rawPositionsJson: [],
+        rawPositionsJson: [
+          makePosition(7, 50, 0.1, 0.1, 0.1, 0.2),
+        ],
         ballPositionsJson: [makeBall(10, 0.50, 0.45)],
         actionsJson: {
           rallyId,
@@ -218,5 +222,44 @@ describe('actionGroundTruthService', () => {
         { frame: 10, action: 'serve', trackId: 1 },
       ])
     ).rejects.toThrow(/permission/i);
+  });
+
+  // ------------------------------------------------------------------
+  // Test 7: reresolveRallyGt re-resolves a non-MANUAL row via IoU
+  // ------------------------------------------------------------------
+  it('reresolveRallyGt re-resolves a non-MANUAL row via IoU when positions change', async () => {
+    // Save a label that snapshots a bbox at trackId 7.
+    await saveActionGroundTruth(rallyId, userId, [{ frame: 50, action: 'serve', trackId: 7 }]);
+
+    // Call reresolveRallyGt directly inside a transaction with NEW positions
+    // where trackId 11 has a near-identical bbox at frame 50.
+    await prisma.$transaction(async (tx) => {
+      await reresolveRallyGt(tx, rallyId, [
+        { frameNumber: 50, trackId: 11, x: 0.11, y: 0.11, width: 0.10, height: 0.20, confidence: 0.9 },
+      ]);
+    });
+
+    const row = await prisma.rallyActionGroundTruth.findFirstOrThrow({ where: { rallyId } });
+    expect(row.resolvedTrackId).toBe(11);
+    expect(row.resolvedSource).toBe('IOU_MATCH');
+    expect(row.snapshotTrackId).toBe(7); // snapshot unchanged
+  });
+
+  // ------------------------------------------------------------------
+  // Test 8: reresolveRallyGt preserves MANUAL pins
+  // ------------------------------------------------------------------
+  it('reresolveRallyGt preserves MANUAL pins', async () => {
+    const { labels } = await saveActionGroundTruth(rallyId, userId, [{ frame: 50, action: 'serve', trackId: 7 }]);
+    await reattachActionGroundTruth(labels[0].id, userId, 99);
+
+    await prisma.$transaction(async (tx) => {
+      await reresolveRallyGt(tx, rallyId, [
+        { frameNumber: 50, trackId: 11, x: 0.11, y: 0.11, width: 0.10, height: 0.20, confidence: 0.9 },
+      ]);
+    });
+
+    const row = await prisma.rallyActionGroundTruth.findFirstOrThrow({ where: { rallyId } });
+    expect(row.resolvedTrackId).toBe(99);
+    expect(row.resolvedSource).toBe('MANUAL');
   });
 });

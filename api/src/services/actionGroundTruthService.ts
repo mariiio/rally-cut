@@ -16,16 +16,10 @@
  * Permissions: only the owner of the Video can save / get / reattach. Throw ForbiddenError.
  */
 
-import { Prisma, ActionLabel, ResolveSource, ServingTeam } from '@prisma/client';
-import { prisma } from '../lib/prisma.js';
+import { ActionLabel, ServingTeam } from '@prisma/client';
+import { prisma, type PrismaTransaction } from '../lib/prisma.js';
 import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
-import { resolveGtRow, type Candidate } from './actionGroundTruthResolver.js';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-type PrismaTransaction = Parameters<Parameters<typeof prisma.$transaction>[0]>[0];
+import { resolveGtRow, type Candidate, type ResolveSource } from './actionGroundTruthResolver.js';
 
 /** One label entry as provided by the caller (lowercase action string). */
 export interface ActionGtLabel {
@@ -71,7 +65,7 @@ const ACTION_MAP: Record<string, ActionLabel> = {
 
 function toActionLabel(action: string): ActionLabel {
   const label = ACTION_MAP[action.toLowerCase()];
-  if (!label) {
+  if (label === undefined) {
     throw new ValidationError(`Unknown action label: '${action}'`);
   }
   return label;
@@ -82,7 +76,7 @@ function toActionLabel(action: string): ActionLabel {
  * Returns null if the field is absent or malformed.
  */
 function readTeamAssignments(actionsJson: unknown): Record<string, 'A' | 'B'> | null {
-  if (!actionsJson || typeof actionsJson !== 'object') return null;
+  if (actionsJson == null || typeof actionsJson !== 'object') return null;
   const ta = (actionsJson as { teamAssignments?: Record<string, string> }).teamAssignments;
   if (!ta) return null;
   const out: Record<string, 'A' | 'B'> = {};
@@ -144,106 +138,110 @@ export async function saveActionGroundTruth(
   const ballPositions = (pt?.ballPositionsJson ?? []) as unknown as BallPosition[];
   const teamAssignments = readTeamAssignments(pt?.actionsJson);
 
-  const savedLabels: Array<{ id: string }> = [];
+  const savedLabels = await prisma.$transaction(async (tx) => {
+    const results: Array<{ id: string }> = [];
 
-  for (const label of labels) {
-    const actionEnum = toActionLabel(label.action);
+    for (const label of labels) {
+      const actionEnum = toActionLabel(label.action);
 
-    // Frame bounds validation (only when PlayerTrack exists)
-    if (frameCount !== null) {
-      if (label.frame < 0 || label.frame >= frameCount) {
-        throw new ValidationError(
-          `Frame ${label.frame} out of bounds [0, ${frameCount}) for rally ${rallyId}`,
-        );
+      // Frame bounds validation (only when PlayerTrack exists)
+      if (frameCount !== null) {
+        if (label.frame < 0 || label.frame >= frameCount) {
+          throw new ValidationError(
+            `Frame ${label.frame} out of bounds [0, ${frameCount}) for rally ${rallyId}`,
+          );
+        }
       }
-    }
 
-    const trackId = label.trackId ?? null;
+      const trackId = label.trackId ?? null;
 
-    // Find the position for this trackId at this frame
-    const posAtFrame = trackId !== null
-      ? positions.find(p => p.trackId === trackId && p.frameNumber === label.frame)
-      : undefined;
+      // Find the position for this trackId at this frame
+      const posAtFrame = trackId !== null
+        ? positions.find(p => p.trackId === trackId && p.frameNumber === label.frame)
+        : undefined;
 
-    // Find ball at this frame
-    const ballAtFrame = ballPositions.find(b => b.frameNumber === label.frame);
+      // Find ball at this frame
+      const ballAtFrame = ballPositions.find(b => b.frameNumber === label.frame);
 
-    let snapshotBboxX1: number | null = null;
-    let snapshotBboxY1: number | null = null;
-    let snapshotBboxX2: number | null = null;
-    let snapshotBboxY2: number | null = null;
-    let snapshotBallX: number | null = null;
-    let snapshotBallY: number | null = null;
-    let snapshotTeam: ServingTeam | null = null;
-    let resolvedSource: ResolveSource;
-    let resolvedTrackId: number | null = null;
+      let snapshotBboxX1: number | null = null;
+      let snapshotBboxY1: number | null = null;
+      let snapshotBboxX2: number | null = null;
+      let snapshotBboxY2: number | null = null;
+      let snapshotBallX: number | null = null;
+      let snapshotBallY: number | null = null;
+      let snapshotTeam: ServingTeam | null = null;
+      let resolvedSource: ResolveSource;
+      let resolvedTrackId: number | null = null;
 
-    if (pt && posAtFrame) {
-      // SNAPSHOT_EXACT: PlayerTrack present AND trackId has a position at frame
-      const bbox = positionToBbox(posAtFrame);
-      snapshotBboxX1 = bbox.x1;
-      snapshotBboxY1 = bbox.y1;
-      snapshotBboxX2 = bbox.x2;
-      snapshotBboxY2 = bbox.y2;
-      snapshotBallX = ballAtFrame?.x ?? (label.ballX ?? null);
-      snapshotBallY = ballAtFrame?.y ?? (label.ballY ?? null);
-      const teamChar = teamAssignments?.[String(trackId)];
-      snapshotTeam = (teamChar === 'A' ? 'A' : teamChar === 'B' ? 'B' : null) as ServingTeam | null;
-      resolvedSource = 'SNAPSHOT_EXACT';
-      resolvedTrackId = trackId;
-    } else {
-      // UNRESOLVED: PlayerTrack absent OR trackId not present at frame
-      // Still record ball if available
-      snapshotBallX = ballAtFrame?.x ?? (label.ballX ?? null);
-      snapshotBallY = ballAtFrame?.y ?? (label.ballY ?? null);
-      resolvedSource = 'UNRESOLVED';
-      resolvedTrackId = null;
-    }
+      if (pt && posAtFrame) {
+        // SNAPSHOT_EXACT: PlayerTrack present AND trackId has a position at frame
+        const bbox = positionToBbox(posAtFrame);
+        snapshotBboxX1 = bbox.x1;
+        snapshotBboxY1 = bbox.y1;
+        snapshotBboxX2 = bbox.x2;
+        snapshotBboxY2 = bbox.y2;
+        snapshotBallX = ballAtFrame?.x ?? (label.ballX ?? null);
+        snapshotBallY = ballAtFrame?.y ?? (label.ballY ?? null);
+        const teamChar = teamAssignments?.[String(trackId)];
+        snapshotTeam = (teamChar === 'A' ? 'A' : teamChar === 'B' ? 'B' : null) as ServingTeam | null;
+        resolvedSource = 'SNAPSHOT_EXACT';
+        resolvedTrackId = trackId;
+      } else {
+        // UNRESOLVED: PlayerTrack absent OR trackId not present at frame
+        // Still record ball if available
+        snapshotBallX = ballAtFrame?.x ?? (label.ballX ?? null);
+        snapshotBallY = ballAtFrame?.y ?? (label.ballY ?? null);
+        resolvedSource = 'UNRESOLVED';
+        resolvedTrackId = null;
+      }
 
-    // Upsert by (rallyId, frame, action)
-    const upserted = await prisma.rallyActionGroundTruth.upsert({
-      where: {
-        rallyId_frame_action: {
+      // Upsert by (rallyId, frame, action)
+      const upserted = await tx.rallyActionGroundTruth.upsert({
+        where: {
+          rallyId_frame_action: {
+            rallyId,
+            frame: label.frame,
+            action: actionEnum,
+          },
+        },
+        create: {
           rallyId,
           frame: label.frame,
           action: actionEnum,
+          snapshotBboxX1,
+          snapshotBboxY1,
+          snapshotBboxX2,
+          snapshotBboxY2,
+          snapshotBallX,
+          snapshotBallY,
+          snapshotTeam,
+          snapshotTrackId: trackId,
+          resolvedSource,
+          resolvedTrackId,
+          resolvedAt: resolvedSource !== 'UNRESOLVED' ? new Date() : null,
+          createdBy: userId,
         },
-      },
-      create: {
-        rallyId,
-        frame: label.frame,
-        action: actionEnum,
-        snapshotBboxX1,
-        snapshotBboxY1,
-        snapshotBboxX2,
-        snapshotBboxY2,
-        snapshotBallX,
-        snapshotBallY,
-        snapshotTeam,
-        snapshotTrackId: trackId,
-        resolvedSource,
-        resolvedTrackId,
-        resolvedAt: resolvedSource !== 'UNRESOLVED' ? new Date() : null,
-        createdBy: userId,
-      },
-      update: {
-        snapshotBboxX1,
-        snapshotBboxY1,
-        snapshotBboxX2,
-        snapshotBboxY2,
-        snapshotBallX,
-        snapshotBallY,
-        snapshotTeam,
-        snapshotTrackId: trackId,
-        resolvedSource,
-        resolvedTrackId,
-        resolvedAt: resolvedSource !== 'UNRESOLVED' ? new Date() : null,
-      },
-      select: { id: true },
-    });
+        update: {
+          snapshotBboxX1,
+          snapshotBboxY1,
+          snapshotBboxX2,
+          snapshotBboxY2,
+          snapshotBallX,
+          snapshotBallY,
+          snapshotTeam,
+          snapshotTrackId: trackId,
+          resolvedSource,
+          resolvedTrackId,
+          resolvedAt: resolvedSource !== 'UNRESOLVED' ? new Date() : null,
+        },
+        select: { id: true },
+      });
 
-    savedLabels.push({ id: upserted.id });
-  }
+      results.push({ id: upserted.id });
+    }
+
+    return results;
+  });
 
   return { savedCount: savedLabels.length, labels: savedLabels };
 }
@@ -387,7 +385,7 @@ export async function reresolveRallyGt(
       where: { id: row.id },
       data: {
         resolvedTrackId,
-        resolvedSource: resolvedSource as ResolveSource,
+        resolvedSource,
         resolvedAt: resolvedTrackId !== null ? new Date() : row.resolvedAt,
       },
     });

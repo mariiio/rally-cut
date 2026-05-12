@@ -1,7 +1,8 @@
+import type { ResolveSource } from '@prisma/client';
+export type { ResolveSource };
+
 export const IOU_THRESHOLD = 0.5;
 export const CENTER_DIST_THRESHOLD = 0.10;
-
-export type ResolveSource = 'SNAPSHOT_EXACT' | 'IOU_MATCH' | 'NEAREST_CENTER' | 'MANUAL' | 'UNRESOLVED';
 
 export interface GtRowInput {
   snapshotBboxX1: number | null;
