@@ -2,7 +2,7 @@
 # Usage: make dev (starts everything with local services)
 
 .PHONY: dev dev-db dev-minio dev-api dev-web dev-runner dev-prod setup install migrate help
-.PHONY: stop logs clean minio-console reset-storage backup-db
+.PHONY: stop logs clean minio-console reset-storage backup-db check-action-gt-cleanup
 
 # Default target
 help:
@@ -160,6 +160,35 @@ reset-storage:
 	@docker volume rm api_minio_data 2>/dev/null || true
 	@make dev-minio
 	@echo "Storage reset complete"
+
+# Pre-cutover guard for action-GT decoupling (2026-05-12).
+# Verifies that no application code (outside the documented migration/export
+# paths) references the soon-to-be-dropped player_tracks.action_ground_truth_json
+# column. Exits non-zero if stale references remain — run before the column
+# drop migration ships to production.
+#
+# Allowed paths (each contains a comment explaining why the reference stays):
+#   analysis/rallycut/cli/commands/migrate_action_gt.py — backfill reads old col
+#   analysis/rallycut/training/restore.py               — restore reads file-key
+#   analysis/rallycut/cli/commands/train.py             — export writes file-key
+#   analysis/reports/archived-scripts/                  — frozen historical scripts
+check-action-gt-cleanup:
+	@echo "Scanning for stale references to action_ground_truth_json..."
+	@hits=$$(grep -rn "actionGroundTruthJson\|action_ground_truth_json" \
+		api/src web/src analysis/rallycut analysis/scripts analysis/tests \
+		--include="*.ts" --include="*.tsx" --include="*.py" 2>/dev/null \
+		| grep -v "archived-scripts" \
+		| grep -v "migrate_action_gt.py" \
+		| grep -v "rallycut/training/restore.py" \
+		| grep -v "rallycut/cli/commands/train.py"); \
+	if [ -n "$$hits" ]; then \
+		echo "ERROR: stale references to action_ground_truth_json remain:"; \
+		echo "$$hits"; \
+		echo ""; \
+		echo "Either migrate the file to rally_action_ground_truth or add it to the allow-list in this Makefile target."; \
+		exit 1; \
+	fi
+	@echo "✓ No stale references to action_ground_truth_json"
 
 # Database backup
 backup-db:
