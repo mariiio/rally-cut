@@ -4,6 +4,7 @@ import typer
 from rich.console import Console
 
 from rallycut.cli.commands.analyze import app as analyze_app
+from rallycut.cli.commands.audit_action_gt import audit_action_gt_cmd
 from rallycut.cli.commands.audit_coherence_invariants import audit_coherence_invariants_cmd
 from rallycut.cli.commands.audit_pid_invariants import audit_pid_invariants_cmd
 from rallycut.cli.commands.migrate_action_gt import migrate_action_gt_cmd
@@ -54,6 +55,7 @@ app.command(name="reattribute-actions")(reattribute_actions_cmd)
 app.command(name="reinterpolate-primary")(reinterpolate_primary_cmd)
 app.command(name="remap-track-ids")(remap_track_ids_cmd)
 app.command(name="repair-identities")(repair_identities_cmd)
+app.command(name="audit-action-gt")(audit_action_gt_cmd)
 app.command(name="audit-coherence-invariants")(audit_coherence_invariants_cmd)
 app.command(name="audit-pid-invariants")(audit_pid_invariants_cmd)
 app.command(name="migrate-action-gt")(migrate_action_gt_cmd)
