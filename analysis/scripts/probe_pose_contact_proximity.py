@@ -67,6 +67,7 @@ from rallycut.evaluation.db import get_connection
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.contact_detector import ContactDetectionConfig, detect_contacts
 from rallycut.tracking.player_tracker import PlayerPosition
+from rallycut.training.action_gt_query import load_for_rallies
 
 COURT_CORNERS: list[tuple[float, float]] = [
     (0.0, 0.0),
@@ -177,7 +178,7 @@ def _parse_players(pos_json: Any) -> list[PlayerPosition]:
 
 def load_rallies(audit_only: bool) -> list[RallyRow]:
     where = """
-        WHERE pt.action_ground_truth_json IS NOT NULL
+        WHERE EXISTS (SELECT 1 FROM rally_action_ground_truth gt WHERE gt.rally_id = r.id)
           AND pt.ball_positions_json IS NOT NULL
           AND v.court_calibration_json IS NOT NULL
     """
@@ -187,24 +188,28 @@ def load_rallies(audit_only: bool) -> list[RallyRow]:
     else:
         audit_ids = None
 
-    with get_connection() as conn, conn.cursor() as cur:
-        cur.execute(f"""
-            SELECT r.id, r.video_id, pt.fps,
-                   pt.ball_positions_json, pt.positions_json, pt.action_ground_truth_json,
-                   v.court_calibration_json, v.width, v.height
-            FROM rallies r
-            JOIN player_tracks pt ON pt.rally_id = r.id
-            JOIN videos v ON v.id = r.video_id
-            {where}
-        """)
-        rows = cur.fetchall()
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(f"""
+                SELECT r.id, r.video_id, pt.fps,
+                       pt.ball_positions_json, pt.positions_json,
+                       v.court_calibration_json, v.width, v.height
+                FROM rallies r
+                JOIN player_tracks pt ON pt.rally_id = r.id
+                JOIN videos v ON v.id = r.video_id
+                {where}
+            """)
+            rows = cur.fetchall()
+
+        rally_ids_fetched = [str(row[0]) for row in rows]
+        gt_by_rally = load_for_rallies(conn, rally_ids_fetched)
 
     out: list[RallyRow] = []
     for row in rows:
         rid = str(row[0])
         if audit_ids is not None and rid not in audit_ids:
             continue
-        cal = row[6]
+        cal = row[5]
         if not isinstance(cal, list) or len(cal) != 4:
             continue
         out.append(RallyRow(
@@ -213,11 +218,11 @@ def load_rallies(audit_only: bool) -> list[RallyRow]:
             fps=float(row[2] or 30.0),
             ball_positions=_parse_ball(row[3]),
             player_positions=_parse_players(row[4]),
-            action_gt=row[5] or [],
+            action_gt=gt_by_rally.get(rid, []),
             video_cal=(
                 [(c["x"], c["y"]) for c in cal],
-                int(row[7] or 1920),
-                int(row[8] or 1080),
+                int(row[6] or 1920),
+                int(row[7] or 1080),
             ),
         ))
     return out

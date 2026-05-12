@@ -37,6 +37,7 @@ from rallycut.evaluation.split import add_split_argument, apply_split
 from rallycut.evaluation.tracking.db import load_court_calibration
 from rallycut.tracking.action_classifier import classify_rally_actions
 from rallycut.tracking.contact_detector import ContactDetectionConfig, detect_contacts
+from rallycut.training.action_gt_query import load_for_rallies
 
 console = Console()
 
@@ -121,20 +122,27 @@ def load_rallies_with_action_gt(
     rally_id: str | None = None,
 ) -> list[RallyData]:
     """Load rallies that have action ground truth labels."""
-    where_clauses = ["pt.action_ground_truth_json IS NOT NULL"]
     params: list[str] = []
 
     if rally_id:
-        where_clauses.append("r.id = %s")
+        rally_filter = "AND r.id = %s"
         params.append(rally_id)
+    else:
+        rally_filter = ""
 
-    where_sql = " AND ".join(where_clauses)
+    # Find rallies with rows in rally_action_ground_truth.
+    filter_query = f"""
+        SELECT DISTINCT gt.rally_id
+          FROM rally_action_ground_truth gt
+          JOIN rallies r ON r.id = gt.rally_id
+         WHERE gt.resolved_track_id IS NOT NULL
+         {rally_filter}
+    """
 
     query = f"""
         SELECT
             r.id as rally_id,
             r.video_id,
-            pt.action_ground_truth_json,
             pt.ball_positions_json,
             pt.positions_json,
             pt.contacts_json,
@@ -147,7 +155,7 @@ def load_rallies_with_action_gt(
             r.gt_point_winner
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
-        WHERE {where_sql}
+        WHERE r.id IN ({filter_query})
         ORDER BY r.video_id, r.start_ms
     """
 
@@ -158,51 +166,55 @@ def load_rallies_with_action_gt(
             cur.execute(query, params)
             rows = cur.fetchall()
 
-            for row in rows:
-                (
-                    rally_id_val,
-                    video_id_val,
-                    action_gt_json,
-                    ball_positions_json,
-                    positions_json,
-                    contacts_json,
-                    actions_json,
-                    frame_count,
-                    fps,
-                    court_split_y,
-                    start_ms_val,
-                    gt_serving_team_val,
-                    gt_point_winner_val,
-                ) = row
+        rally_ids_loaded = [str(row[0]) for row in rows]
+        gt_by_rally = load_for_rallies(conn, rally_ids_loaded)
 
-                gt_labels = []
-                if action_gt_json:
-                    for label in action_gt_json:
-                        track_id_raw = label.get("trackId")
-                        gt_labels.append(GtLabel(
-                            frame=label["frame"],
-                            action=label["action"],
-                            player_track_id=label.get("playerTrackId", -1),
-                            ball_x=label.get("ballX"),
-                            ball_y=label.get("ballY"),
-                            track_id=int(track_id_raw) if track_id_raw is not None else None,
-                        ))
+        for row in rows:
+            (
+                rally_id_val,
+                video_id_val,
+                ball_positions_json,
+                positions_json,
+                contacts_json,
+                actions_json,
+                frame_count,
+                fps,
+                court_split_y,
+                start_ms_val,
+                gt_serving_team_val,
+                gt_point_winner_val,
+            ) = row
 
-                results.append(RallyData(
-                    rally_id=rally_id_val,
-                    video_id=video_id_val,
-                    gt_labels=gt_labels,
-                    ball_positions_json=ball_positions_json,
-                    positions_json=positions_json,
-                    contacts_json=contacts_json,
-                    actions_json=actions_json,
-                    frame_count=frame_count or 0,
-                    fps=fps or 30.0,
-                    court_split_y=court_split_y,
-                    start_ms=start_ms_val or 0,
-                    gt_serving_team=gt_serving_team_val,
-                    gt_point_winner=gt_point_winner_val,
+            gt_labels = []
+            for label in gt_by_rally.get(str(rally_id_val), []):
+                track_id_raw = label.get("trackId")
+                gt_labels.append(GtLabel(
+                    frame=label["frame"],
+                    action=label["action"],
+                    player_track_id=label.get("playerTrackId", -1),
+                    ball_x=label.get("ballX"),
+                    ball_y=label.get("ballY"),
+                    track_id=int(track_id_raw) if track_id_raw is not None else None,
                 ))
+
+            if not gt_labels:
+                continue
+
+            results.append(RallyData(
+                rally_id=rally_id_val,
+                video_id=video_id_val,
+                gt_labels=gt_labels,
+                ball_positions_json=ball_positions_json,
+                positions_json=positions_json,
+                contacts_json=contacts_json,
+                actions_json=actions_json,
+                frame_count=frame_count or 0,
+                fps=fps or 30.0,
+                court_split_y=court_split_y,
+                start_ms=start_ms_val or 0,
+                gt_serving_team=gt_serving_team_val,
+                gt_point_winner=gt_point_winner_val,
+            ))
 
     return results
 

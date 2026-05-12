@@ -1,13 +1,13 @@
 """Audit action-sequence anomalies across GT rallies.
 
 Diagnostic script for the 2026-04-14 action-detection review. Loads every
-rally with an action_ground_truth_json, classifies each predicted sequence
-against a volleyball-grammar checklist, tags each anomaly with the stage
-most likely responsible, and separates low-quality inputs (bad angle /
+rally with action GT in rally_action_ground_truth, classifies each predicted
+sequence against a volleyball-grammar checklist, tags each anomaly with the
+stage most likely responsible, and separates low-quality inputs (bad angle /
 crowded scene / ball-tracking dropout) from genuine pipeline errors.
 
 No pipeline re-run. We read the stored `actions_json` and
-`action_ground_truth_json` columns and compare them. The goal is to
+`rally_action_ground_truth` rows and compare them. The goal is to
 quantify *how often* each failure mode fires and *which stage* produced
 it — not to re-measure F1. For F1-style evaluation use
 `scripts/eval_action_detection.py`.
@@ -36,6 +36,7 @@ from rich.console import Console
 from rich.table import Table
 
 from rallycut.evaluation.db import get_connection
+from rallycut.training.action_gt_query import load_for_rallies
 
 console = Console()
 
@@ -93,7 +94,7 @@ def _load_rallies(
     (e.g. "poor" — videos with known-bad tracking where action anomalies
     reflect input quality rather than pipeline logic).
     """
-    where = ["pt.action_ground_truth_json IS NOT NULL"]
+    where = ["EXISTS (SELECT 1 FROM rally_action_ground_truth gt WHERE gt.rally_id = r.id)"]
     params: list[object] = []
     if video_id:
         where.append("r.video_id = %s")
@@ -108,7 +109,7 @@ def _load_rallies(
     query = f"""
         SELECT
             r.id, r.video_id, r."order", r.start_ms, r.end_ms,
-            pt.actions_json, pt.action_ground_truth_json,
+            pt.actions_json,
             pt.detection_rate, pt.avg_player_count,
             pt.ball_positions_json,
             pt.frame_count, pt.fps, pt.court_split_y
@@ -119,32 +120,35 @@ def _load_rallies(
     """
 
     out: list[RallyRow] = []
-    with get_connection() as conn, conn.cursor() as cur:
-        cur.execute(query, params)
-        for row in cur.fetchall():
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            rows = cur.fetchall()
+
+        rally_ids = [str(row[0]) for row in rows]
+        gt_by_rally = load_for_rallies(conn, rally_ids, include_unresolved=True)
+
+        for row in rows:
             rid = cast(str, row[0])
             vid = cast(str, row[1])
             order = cast("int | None", row[2])
             start_ms = cast("int | None", row[3])
             end_ms = cast("int | None", row[4])
             actions_json: Any = row[5]
-            gt_json: Any = row[6]
-            det_rate = cast("float | None", row[7])
-            avg_pc = cast("float | None", row[8])
-            ball_json: Any = row[9]
-            frame_count = cast("int | None", row[10])
-            fps = cast("float | None", row[11])
-            court_split_y = cast("float | None", row[12])
+            det_rate = cast("float | None", row[6])
+            avg_pc = cast("float | None", row[7])
+            ball_json: Any = row[8]
+            frame_count = cast("int | None", row[9])
+            fps = cast("float | None", row[10])
+            court_split_y = cast("float | None", row[11])
 
             if isinstance(actions_json, str):
                 actions_json = json.loads(actions_json)
-            if isinstance(gt_json, str):
-                gt_json = json.loads(gt_json)
             if isinstance(ball_json, str):
                 ball_json = json.loads(ball_json)
 
             pred = (actions_json or {}).get("actions") or []
-            gt = gt_json or []
+            gt = gt_by_rally.get(rid, [])
 
             ball_conf = _median_ball_conf(ball_json)
 

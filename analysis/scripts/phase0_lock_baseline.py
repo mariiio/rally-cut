@@ -24,6 +24,7 @@ from rallycut.evaluation.attribution_bench import (
     score_rally,
 )
 from rallycut.evaluation.db import get_connection
+from rallycut.training.action_gt_query import load_for_rallies
 
 FIXTURE_MAP_PATH = (
     Path(__file__).resolve().parent.parent
@@ -44,22 +45,24 @@ def main() -> int:
 
     rallies: list[dict[str, Any]] = []
 
-    with get_connection() as conn, conn.cursor() as cur:
+    with get_connection() as conn:
+      with conn.cursor() as cur:
         for fixture_name, finfo in fixture_map.items():
             video_id = finfo["video_id"]
             cur.execute(
                 """
                 SELECT
                     r.id, r.start_ms, r.end_ms,
-                    pt.action_ground_truth_json,
                     pt.actions_json,
                     pt.contacts_json,
                     pt.primary_track_ids
                 FROM rallies r
                 JOIN player_tracks pt ON pt.rally_id = r.id
                 WHERE r.video_id = %s
-                  AND pt.action_ground_truth_json IS NOT NULL
-                  AND jsonb_array_length(pt.action_ground_truth_json::jsonb) > 0
+                  AND EXISTS (
+                      SELECT 1 FROM rally_action_ground_truth gt
+                      WHERE gt.rally_id = r.id
+                  )
                 ORDER BY r.start_ms
                 """,
                 (video_id,),
@@ -67,11 +70,16 @@ def main() -> int:
             rows = cur.fetchall()
             print(f"[{fixture_name}] {len(rows)} GT rallies")
 
-            for rid, start_ms, end_ms, gt, actions_json, contacts_json, ptids in rows:
+            rally_ids_batch = [str(row[0]) for row in rows]
+            gt_by_rally = load_for_rallies(conn, rally_ids_batch)
+
+            for rid, start_ms, end_ms, actions_json, contacts_json, ptids in rows:
+                rid_str = str(rid)
                 pipeline_actions = actions_json.get("actions", []) if actions_json else []
                 team_assignments = actions_json.get("teamAssignments", {}) if actions_json else {}
                 serving_team = actions_json.get("servingTeam") if actions_json else None
                 contacts = contacts_json.get("contacts", []) if contacts_json else []
+                gt = gt_by_rally.get(rid_str, [])
 
                 rally = {
                     "rally_id": rid,
@@ -96,7 +104,7 @@ def main() -> int:
         "generated_at": "2026-04-24",
         "match_tolerance_frames": MATCH_TOLERANCE_FRAMES,
         "source": (
-            "DB read from player_tracks.{action_ground_truth_json, actions_json, "
+            "DB read from rally_action_ground_truth + player_tracks.{actions_json, "
             "contacts_json, primary_track_ids} — off-gate stage-3 production state "
             "after stage-2/3 refresh (match-players + reattribute-actions)."
         ),

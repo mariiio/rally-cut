@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from rallycut.evaluation.tracking.db import get_connection
+from rallycut.training.action_gt_query import load_for_rallies
 
 GT_PATH = Path("training_datasets/beach_v11/action_ground_truth.json")
 HIT_TOLERANCE = 15
@@ -70,20 +71,21 @@ def main() -> None:
                     name = meta[vid][1]
                     with conn.cursor() as cur:
                         cur.execute(
-                            """SELECT pt.actions_json, pt.court_split_y
+                            """SELECT rr.id, pt.actions_json, pt.court_split_y
                                FROM rallies rr JOIN player_tracks pt
                                ON pt.rally_id = rr.id
                                WHERE rr.video_id = %s AND rr.start_ms = %s""",
                             [vid, r["rally_start_ms"]],
                         )
                         row = cur.fetchone()
-                    if not row or not row[0]:
+                    if not row or not row[1]:
                         continue
-                    aj = cast(dict[str, Any], row[0])
-                    net_y = row[1] or 0.5
+                    rid_str = str(row[0])
+                    aj = cast(dict[str, Any], row[1])
+                    net_y = row[2] or 0.5
                     actions = sorted(aj.get("actions") or [],
                                      key=lambda a: a.get("frame", 0))
-                    gt_actions = r.get("action_ground_truth_json", []) or []
+                    gt_actions = load_for_rallies(conn, [rid_str]).get(rid_str, [])
                     gt_blocks = {int(a.get("frame", 0))
                                  for a in gt_actions
                                  if a.get("action") == "block"}

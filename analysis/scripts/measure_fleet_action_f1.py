@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from rallycut.evaluation.tracking.db import get_connection
+from rallycut.training.action_gt_query import load_for_rallies
 
 GT_PATH = Path("training_datasets/beach_v11/action_ground_truth.json")
 HIT_TOLERANCE = 15
@@ -100,9 +101,10 @@ def main() -> None:
                 row = cur.fetchone()
             if row is None or not row[1]:
                 continue
+            rid = str(row[0])
             aj = cast(dict[str, Any] | None, row[1]) or {}
             pred_actions = list(aj.get("actions") or [])
-            gt_actions = gt_rally["action_ground_truth_json"]
+            gt_actions = load_for_rallies(conn, [rid]).get(rid, [])
             matched, fn, fp, fn_records, fp_records = _match_actions(
                 gt_actions, pred_actions,
             )

@@ -1,7 +1,7 @@
 """Phase 0.0 — resolve 9 fixture shortnames → video_ids.
 
 For each shortname in FIXTURES, find matching video by Video.filename LIKE '%{name}%'.
-Report: video_id, filename, #rallies, #rallies with action_ground_truth_json populated.
+Report: video_id, filename, #rallies, #rallies with rally_action_ground_truth rows.
 
 Output: reports/attribution_rebuild/fixture_video_ids_2026_04_24.json
 
@@ -62,8 +62,10 @@ def main() -> int:
                 SELECT
                     COUNT(*) AS n_rallies,
                     COUNT(*) FILTER (
-                        WHERE pt.action_ground_truth_json IS NOT NULL
-                        AND jsonb_array_length(pt.action_ground_truth_json::jsonb) > 0
+                        WHERE EXISTS (
+                            SELECT 1 FROM rally_action_ground_truth gt2
+                            WHERE gt2.rally_id = r.id
+                        )
                     ) AS n_with_gt
                 FROM rallies r
                 LEFT JOIN player_tracks pt ON pt.rally_id = r.id

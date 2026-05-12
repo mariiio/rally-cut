@@ -23,6 +23,7 @@ from rallycut.evaluation.attribution_bench import (
     score_rally,
 )
 from rallycut.evaluation.db import get_connection
+from rallycut.training.action_gt_query import load_for_videos
 from rallycut.tracking.action_classifier import (
     ClassifiedAction,
     reattribute_players,
@@ -160,32 +161,38 @@ def _score(rallies_data: list[dict[str, Any]], team_chain_on: bool) -> dict[str,
 
 def main() -> int:
     rallies_data: list[dict[str, Any]] = []
-    with get_connection() as conn, conn.cursor() as cur:
+    with get_connection() as conn:
         match_analyses: dict[str, dict] = {}
+        with conn.cursor() as cur:
+            for fixture, vid in FRESH_GT_VIDEOS.items():
+                cur.execute("SELECT match_analysis_json FROM videos WHERE id = %s", (vid,))
+                ma = cur.fetchone()
+                match_analyses[vid] = ma[0] if ma and ma[0] else {}
+
+        gt_by_rally = load_for_videos(conn, list(FRESH_GT_VIDEOS.values()))
+
         for fixture, vid in FRESH_GT_VIDEOS.items():
-            cur.execute("SELECT match_analysis_json FROM videos WHERE id = %s", (vid,))
-            ma = cur.fetchone()
-            match_analyses[vid] = ma[0] if ma and ma[0] else {}
-        for fixture, vid in FRESH_GT_VIDEOS.items():
-            cur.execute(
-                """SELECT r.id, pt.action_ground_truth_json,
-                          pt.actions_json, pt.contacts_json
-                   FROM rallies r JOIN player_tracks pt ON pt.rally_id = r.id
-                   WHERE r.video_id = %s
-                     AND pt.action_ground_truth_json IS NOT NULL
-                     AND jsonb_array_length(pt.action_ground_truth_json::jsonb) > 0
-                   ORDER BY r.start_ms""",
-                (vid,),
-            )
-            for rid, gt, aj, cj in cur.fetchall():
-                rallies_data.append({
-                    "rally_id": str(rid),
-                    "fixture": fixture,
-                    "gt": gt or [],
-                    "actions_json": aj,
-                    "contacts_json": cj,
-                    "remap": _build_rally_remap(match_analyses[vid], str(rid)),
-                })
+            with conn.cursor() as cur:
+                cur.execute(
+                    """SELECT r.id, pt.actions_json, pt.contacts_json
+                       FROM rallies r JOIN player_tracks pt ON pt.rally_id = r.id
+                       WHERE r.video_id = %s
+                         AND EXISTS (
+                             SELECT 1 FROM rally_action_ground_truth gt
+                             WHERE gt.rally_id = r.id
+                         )
+                       ORDER BY r.start_ms""",
+                    (vid,),
+                )
+                for rid, aj, cj in cur.fetchall():
+                    rallies_data.append({
+                        "rally_id": str(rid),
+                        "fixture": fixture,
+                        "gt": gt_by_rally.get(str(rid), []),
+                        "actions_json": aj,
+                        "contacts_json": cj,
+                        "remap": _build_rally_remap(match_analyses[vid], str(rid)),
+                    })
     print(f"Loaded {len(rallies_data)} rallies across {len(FRESH_GT_VIDEOS)} videos",
           flush=True)
 

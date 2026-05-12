@@ -27,6 +27,7 @@ from rallycut.evaluation.db import get_connection
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.contact_detector import detect_contacts
 from rallycut.tracking.player_tracker import PlayerPosition
+from rallycut.training.action_gt_query import load_for_rallies
 
 console = Console()
 
@@ -37,7 +38,6 @@ def _load_data() -> list[dict[str, Any]]:
         SELECT
             r.id as rally_id,
             r.video_id,
-            pt.action_ground_truth_json,
             pt.ball_positions_json,
             pt.positions_json,
             pt.fps,
@@ -46,47 +46,59 @@ def _load_data() -> list[dict[str, Any]]:
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         JOIN videos v ON v.id = r.video_id
-        WHERE pt.action_ground_truth_json IS NOT NULL
+        WHERE EXISTS (SELECT 1 FROM rally_action_ground_truth gt WHERE gt.rally_id = r.id)
           AND pt.ball_positions_json IS NOT NULL
         ORDER BY r.video_id, r.start_ms
     """
     results: list[dict[str, Any]] = []
     with get_connection() as conn:
+        rally_ids_for_gt: list[str] = []
+        rows_buf = []
         with conn.cursor() as cur:
             cur.execute(query)
             for row in cur.fetchall():
-                (rally_id, video_id, gt_json, ball_json, pos_json,
+                (rally_id, video_id, ball_json, pos_json,
                  fps, court_split_y, ma_json) = row
-
-                if not gt_json or not ball_json:
+                if not ball_json:
                     continue
+                rally_ids_for_gt.append(str(rally_id))
+                rows_buf.append(row)
 
-                # Get team assignments from match analysis
-                team_assignments: dict[int, int] = {}
-                if ma_json and isinstance(ma_json, dict):
-                    for rally_entry in ma_json.get("rallies", []):
-                        rid = rally_entry.get("rallyId") or rally_entry.get("rally_id", "")
-                        if rid == rally_id:
-                            t2p = rally_entry.get("trackToPlayer") or rally_entry.get("track_to_player", {})
-                            profiles = ma_json.get("playerProfiles", {})
-                            for tid_str, pid in t2p.items():
-                                pid_str = str(pid)
-                                if pid_str in profiles:
-                                    team = profiles[pid_str].get("team")
-                                    if team is not None:
-                                        team_assignments[int(tid_str)] = int(team)
-                            break
+        gt_by_rally = load_for_rallies(conn, rally_ids_for_gt)
 
-                results.append({
-                    "rally_id": rally_id,
-                    "video_id": video_id,
-                    "gt_labels": gt_json,
-                    "ball_positions_json": ball_json,
-                    "positions_json": pos_json,
-                    "fps": fps or 30.0,
-                    "court_split_y": court_split_y,
-                    "team_assignments": team_assignments,
-                })
+        for row in rows_buf:
+            (rally_id, video_id, ball_json, pos_json,
+             fps, court_split_y, ma_json) = row
+            gt_json = gt_by_rally.get(str(rally_id), [])
+            if not gt_json:
+                continue
+
+            # Get team assignments from match analysis
+            team_assignments: dict[int, int] = {}
+            if ma_json and isinstance(ma_json, dict):
+                for rally_entry in ma_json.get("rallies", []):
+                    rid = rally_entry.get("rallyId") or rally_entry.get("rally_id", "")
+                    if rid == rally_id:
+                        t2p = rally_entry.get("trackToPlayer") or rally_entry.get("track_to_player", {})
+                        profiles = ma_json.get("playerProfiles", {})
+                        for tid_str, pid in t2p.items():
+                            pid_str = str(pid)
+                            if pid_str in profiles:
+                                team = profiles[pid_str].get("team")
+                                if team is not None:
+                                    team_assignments[int(tid_str)] = int(team)
+                        break
+
+            results.append({
+                "rally_id": rally_id,
+                "video_id": video_id,
+                "gt_labels": gt_json,
+                "ball_positions_json": ball_json,
+                "positions_json": pos_json,
+                "fps": fps or 30.0,
+                "court_split_y": court_split_y,
+                "team_assignments": team_assignments,
+            })
 
     return results
 

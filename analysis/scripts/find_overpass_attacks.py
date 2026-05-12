@@ -16,6 +16,7 @@ from rich.console import Console
 from rich.table import Table
 
 from rallycut.evaluation.db import get_connection
+from rallycut.training.action_gt_query import load_for_rallies
 
 console = Console()
 
@@ -26,14 +27,13 @@ def main() -> None:
             r.id as rally_id,
             r.video_id,
             v.filename,
-            pt.action_ground_truth_json,
             pt.court_split_y,
             r.start_ms,
             pt.fps
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         JOIN videos v ON v.id = r.video_id
-        WHERE pt.action_ground_truth_json IS NOT NULL
+        WHERE EXISTS (SELECT 1 FROM rally_action_ground_truth gt WHERE gt.rally_id = r.id)
         ORDER BY v.filename, r.start_ms
     """
 
@@ -44,11 +44,15 @@ def main() -> None:
             cur.execute(query)
             rows = cur.fetchall()
 
+        rally_ids_for_gt = [str(row[0]) for row in rows]
+        gt_by_rally = load_for_rallies(conn, rally_ids_for_gt)
+
     # Track rally number per video
     video_rally_counts: dict[str, int] = {}
 
     for row in rows:
-        rally_id, video_id, filename, gt_json, court_split_y, start_ms, fps = row
+        rally_id, video_id, filename, court_split_y, start_ms, fps = row
+        gt_json = gt_by_rally.get(str(rally_id), [])
         if not gt_json or not court_split_y:
             continue
 

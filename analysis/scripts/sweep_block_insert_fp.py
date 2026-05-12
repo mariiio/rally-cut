@@ -16,6 +16,7 @@ import numpy as np
 
 from rallycut.actions.trajectory_features import ACTION_TYPES
 from rallycut.evaluation.tracking.db import get_connection
+from rallycut.training.action_gt_query import load_for_rallies
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.player_tracker import PlayerPosition
 from rallycut.tracking.sequence_action_runtime import get_sequence_probs
@@ -82,7 +83,7 @@ def main() -> None:
             vid = hash_to_id[chash]
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT pt.frame_count, pt.court_split_y,
+                    """SELECT rr.id, pt.frame_count, pt.court_split_y,
                               pt.ball_positions_json, pt.positions_json,
                               pt.actions_json
                        FROM rallies rr JOIN player_tracks pt
@@ -93,7 +94,8 @@ def main() -> None:
                 row = cur.fetchone()
             if not row:
                 continue
-            fcount, csy, bp_json, pp_json, aj = row
+            rid_str = str(row[0])
+            fcount, csy, bp_json, pp_json, aj = row[1], row[2], row[3], row[4], row[5]
             if not aj:
                 continue
             actions = sorted(aj.get("actions") or [],
@@ -108,8 +110,9 @@ def main() -> None:
             )
             if seq is None:
                 continue
+            gt_labels_r = load_for_rallies(conn, [rid_str]).get(rid_str, [])
             gt_blocks = sorted([int(a.get("frame", 0))
-                                for a in r.get("action_ground_truth_json", []) or []
+                                for a in gt_labels_r
                                 if a.get("action") == "block"])
             rally_cache.append({
                 "video": meta[vid][1],

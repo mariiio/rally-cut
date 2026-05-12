@@ -27,7 +27,7 @@ def get_videos_needing_match() -> list[tuple[str, str, int]]:
                 FROM rallies r
                 JOIN player_tracks pt ON pt.rally_id = r.id
                 JOIN videos v ON v.id = r.video_id
-                WHERE pt.action_ground_truth_json IS NOT NULL
+                WHERE EXISTS (SELECT 1 FROM rally_action_ground_truth gt WHERE gt.rally_id = r.id)
                   AND v.match_analysis_json IS NULL
                 GROUP BY r.video_id, v.filename
                 ORDER BY COUNT(r.id) DESC

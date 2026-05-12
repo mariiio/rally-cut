@@ -23,6 +23,7 @@ from rich.table import Table
 
 from rallycut.evaluation.db import get_connection
 from rallycut.evaluation.split import add_split_argument, apply_split
+from rallycut.training.action_gt_query import load_for_rallies
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.player_tracker import PlayerPosition
 from rallycut.tracking.temporal_attribution.features import (
@@ -40,7 +41,9 @@ def load_rallies_with_action_gt(
     rally_id: str | None = None,
 ) -> list[dict]:
     """Load rallies that have action ground truth labels."""
-    where_clauses = ["pt.action_ground_truth_json IS NOT NULL"]
+    where_clauses = [
+        "EXISTS (SELECT 1 FROM rally_action_ground_truth gt WHERE gt.rally_id = r.id)"
+    ]
     params: list[str] = []
 
     if rally_id:
@@ -53,7 +56,6 @@ def load_rallies_with_action_gt(
         SELECT
             r.id as rally_id,
             r.video_id,
-            pt.action_ground_truth_json,
             pt.ball_positions_json,
             pt.positions_json,
             pt.contacts_json
@@ -69,24 +71,26 @@ def load_rallies_with_action_gt(
             cur.execute(query, params)
             rows = cur.fetchall()
 
-            for row in rows:
-                (
-                    rally_id_val,
-                    video_id_val,
-                    action_gt_json,
-                    ball_positions_json,
-                    positions_json,
-                    contacts_json,
-                ) = row
+        rally_ids_fetched = [str(row[0]) for row in rows]
+        gt_by_rally = load_for_rallies(conn, rally_ids_fetched)
 
-                results.append({
-                    "rally_id": rally_id_val,
-                    "video_id": video_id_val,
-                    "action_gt_json": action_gt_json or [],
-                    "ball_positions_json": ball_positions_json or [],
-                    "positions_json": positions_json or [],
-                    "contacts_json": contacts_json,
-                })
+        for row in rows:
+            (
+                rally_id_val,
+                video_id_val,
+                ball_positions_json,
+                positions_json,
+                contacts_json,
+            ) = row
+
+            results.append({
+                "rally_id": rally_id_val,
+                "video_id": video_id_val,
+                "action_gt_json": gt_by_rally.get(str(rally_id_val), []),
+                "ball_positions_json": ball_positions_json or [],
+                "positions_json": positions_json or [],
+                "contacts_json": contacts_json,
+            })
 
     return results
 

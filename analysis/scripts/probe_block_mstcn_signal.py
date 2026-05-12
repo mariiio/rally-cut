@@ -13,6 +13,7 @@ from typing import Any
 
 from rallycut.actions.trajectory_features import ACTION_TYPES
 from rallycut.evaluation.tracking.db import get_connection
+from rallycut.training.action_gt_query import load_for_rallies
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.player_tracker import PlayerPosition
 from rallycut.tracking.sequence_action_runtime import get_sequence_probs
@@ -84,10 +85,6 @@ def main() -> None:
             chash = gt_rally["video_content_hash"]
             if chash not in hash_to_id:
                 continue
-            actions = gt_rally.get("action_ground_truth_json", [])
-            blocks = [a for a in actions if a.get("action") == "block"]
-            if not blocks:
-                continue
             vid = hash_to_id[chash]
             name = meta[vid][1]
             with conn.cursor() as cur:
@@ -101,6 +98,11 @@ def main() -> None:
                 )
                 row = cur.fetchone()
             if not row:
+                continue
+            rid_str = str(row[0])
+            actions = load_for_rallies(conn, [rid_str]).get(rid_str, [])
+            blocks = [a for a in actions if a.get("action") == "block"]
+            if not blocks:
                 continue
             rid, fcount, csy, bp_json, pp_json, aj = row
             bp = _bp_from_json(bp_json)

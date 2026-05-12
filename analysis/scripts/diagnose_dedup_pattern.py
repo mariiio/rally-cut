@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from rallycut.evaluation.tracking.db import get_connection
+from rallycut.training.action_gt_query import load_for_rallies
 
 GT_PATH = Path("training_datasets/beach_v11/action_ground_truth.json")
 HIT_TOLERANCE = 15
@@ -84,8 +85,9 @@ def main() -> None:
             if not row or not row[1]:
                 continue
             rid, aj = row
+            rid_str = str(rid)
             pred = sorted(aj.get("actions") or [], key=lambda a: a.get("frame", 0))
-            gt_actions = r.get("action_ground_truth_json", []) or []
+            gt_actions = load_for_rallies(conn, [rid_str]).get(rid_str, [])
             used_pred, _ = _match(gt_actions, pred)
             pred_frames = [int(p.get("frame", 0)) for p in pred]
 

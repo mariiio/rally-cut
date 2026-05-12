@@ -1,8 +1,7 @@
 """Attribution baseline on the 3 fresh-GT videos (cece/gigi/wawa).
 
-These are the only videos with current, retrack-aligned GT as of 2026-05-11
-(action_ground_truth_json gets wiped on retrack — see redetect_all_actions
-memory entry).
+These are the only videos with current, retrack-aligned GT as of 2026-05-11.
+GT is read from rally_action_ground_truth.
 
 Reports:
 - Per-video: correct / wrong_cross_team / wrong_same_team / wrong_unknown / missing / abstained
@@ -22,6 +21,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+from rallycut.training.action_gt_query import load_for_videos
 from rallycut.evaluation.attribution_bench import (
     CATEGORIES,
     MATCH_TOLERANCE_FRAMES,
@@ -79,40 +79,46 @@ def main() -> int:
     n_rows_per_video: dict[str, int] = {}
     n_gt_unmappable_per_video: dict[str, int] = {}
 
-    with get_connection() as conn, conn.cursor() as cur:
+    with get_connection() as conn:
         # Load match_analysis once per video for the per-rally remap
         match_analyses: dict[str, dict[str, Any]] = {}
-        for fixture, video_id in FRESH_GT_VIDEOS.items():
-            cur.execute(
-                "SELECT match_analysis_json FROM videos WHERE id = %s",
-                (video_id,),
-            )
-            ma_row = cur.fetchone()
-            match_analyses[video_id] = ma_row[0] if ma_row and ma_row[0] else {}
+        with conn.cursor() as cur:
+            for fixture, video_id in FRESH_GT_VIDEOS.items():
+                cur.execute(
+                    "SELECT match_analysis_json FROM videos WHERE id = %s",
+                    (video_id,),
+                )
+                ma_row = cur.fetchone()
+                match_analyses[video_id] = ma_row[0] if ma_row and ma_row[0] else {}
+
+        # Load all GT labels from the new table.
+        gt_by_rally = load_for_videos(conn, list(FRESH_GT_VIDEOS.values()))
 
         for fixture, video_id in FRESH_GT_VIDEOS.items():
-            cur.execute(
-                """
-                SELECT r.id, r.start_ms, r.end_ms,
-                       pt.action_ground_truth_json,
-                       pt.actions_json,
-                       pt.contacts_json,
-                       pt.primary_track_ids
-                FROM rallies r
-                JOIN player_tracks pt ON pt.rally_id = r.id
-                WHERE r.video_id = %s
-                  AND pt.action_ground_truth_json IS NOT NULL
-                  AND jsonb_array_length(pt.action_ground_truth_json::jsonb) > 0
-                ORDER BY r.start_ms
-                """,
-                (video_id,),
-            )
-            rows = cur.fetchall()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT r.id, r.start_ms, r.end_ms,
+                           pt.actions_json,
+                           pt.contacts_json,
+                           pt.primary_track_ids
+                    FROM rallies r
+                    JOIN player_tracks pt ON pt.rally_id = r.id
+                    WHERE r.video_id = %s
+                      AND EXISTS (
+                          SELECT 1 FROM rally_action_ground_truth gt
+                          WHERE gt.rally_id = r.id
+                      )
+                    ORDER BY r.start_ms
+                    """,
+                    (video_id,),
+                )
+                rows = cur.fetchall()
             n_rows_per_video[fixture] = len(rows)
             n_unmappable = 0
             print(f"[{fixture}] {len(rows)} GT rallies", flush=True)
 
-            for rid, start_ms, end_ms, gt, actions_json, contacts_json, ptids in rows:
+            for rid, start_ms, end_ms, actions_json, contacts_json, ptids in rows:
                 pipeline_actions = actions_json.get("actions", []) if actions_json else []
                 team_assignments = actions_json.get("teamAssignments", {}) if actions_json else {}
                 serving_team = actions_json.get("servingTeam") if actions_json else None
@@ -121,13 +127,14 @@ def main() -> int:
                 # Per-rally raw-track-id → canonical-PID map
                 remap = _build_rally_remap(match_analyses[video_id], str(rid))
 
-                # Normalise GT schema: action_ground_truth_json stores raw `trackId`;
-                # translate through appliedFullMapping to canonical PID. Mark
-                # untranslatable entries with playerTrackId=None so the bench
-                # categorises them as wrong_unknown_team (visible signal, not
-                # silent failure).
+                gt = gt_by_rally.get(str(rid), [])
+
+                # Normalise GT: translate raw trackId through appliedFullMapping to
+                # canonical PID. Mark untranslatable entries with playerTrackId=None
+                # so the bench categorises them as wrong_unknown_team (visible signal,
+                # not silent failure).
                 normalised_gt = []
-                for a in (gt or []):
+                for a in gt:
                     raw_tid = a.get("trackId", a.get("playerTrackId"))
                     try:
                         raw_int = int(raw_tid) if raw_tid is not None else None

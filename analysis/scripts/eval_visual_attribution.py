@@ -27,6 +27,7 @@ from rich.table import Table
 
 from rallycut.evaluation.db import get_connection
 from rallycut.tracking.match_tracker import build_match_team_assignments
+from rallycut.training.action_gt_query import load_for_rallies
 from rallycut.tracking.visual_attribution import (
     FRAME_WINDOW,
     VisualAttributionClassifier,
@@ -59,40 +60,49 @@ def load_gt_contacts_with_positions() -> list[dict[str, Any]]:
         SELECT
             r.id AS rally_id,
             r.video_id,
-            pt.action_ground_truth_json,
             pt.positions_json,
             pt.court_split_y,
             r.start_ms,
             pt.fps
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
-        WHERE pt.action_ground_truth_json IS NOT NULL
+        WHERE EXISTS (SELECT 1 FROM rally_action_ground_truth gt WHERE gt.rally_id = r.id)
           AND pt.positions_json IS NOT NULL
         ORDER BY r.video_id, r.start_ms
     """
     results: list[dict[str, Any]] = []
     with get_connection() as conn:
+        rally_ids_for_gt: list[str] = []
+        rows_buf = []
         with conn.cursor() as cur:
             cur.execute(query)
             for row in cur.fetchall():
-                rally_id, video_id, gt_json, pos_json, split_y, start_ms, fps = row
-                if not gt_json or not pos_json:
+                rally_id, video_id, pos_json, split_y, start_ms, fps = row
+                if not pos_json:
                     continue
-                for label in gt_json:
-                    tid = label.get("playerTrackId", -1)
-                    if tid < 0:
-                        continue
-                    results.append({
-                        "rally_id": rally_id,
-                        "video_id": video_id,
-                        "frame": label["frame"],
-                        "action": label["action"],
-                        "player_track_id": tid,
-                        "positions_json": pos_json,
-                        "court_split_y": split_y,
-                        "start_ms": start_ms or 0,
-                        "fps": fps or 30.0,
-                    })
+                rally_ids_for_gt.append(str(rally_id))
+                rows_buf.append(row)
+
+        gt_by_rally = load_for_rallies(conn, rally_ids_for_gt)
+
+        for row in rows_buf:
+            rally_id, video_id, pos_json, split_y, start_ms, fps = row
+            gt_labels = gt_by_rally.get(str(rally_id), [])
+            for label in gt_labels:
+                tid = label.get("playerTrackId", -1)
+                if tid < 0:
+                    continue
+                results.append({
+                    "rally_id": rally_id,
+                    "video_id": video_id,
+                    "frame": label["frame"],
+                    "action": label["action"],
+                    "player_track_id": tid,
+                    "positions_json": pos_json,
+                    "court_split_y": split_y,
+                    "start_ms": start_ms or 0,
+                    "fps": fps or 30.0,
+                })
     return results
 
 

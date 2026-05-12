@@ -25,6 +25,7 @@ import numpy as np
 
 from rallycut.evaluation.db import get_connection
 from rallycut.evaluation.video_resolver import VideoResolver
+from rallycut.training.action_gt_query import load_for_rallies
 
 OUTPUT_DIR = Path("outputs/ball_3d_rig/blur_crops")
 AUDIT_FILE = Path("outputs/ball_3d_rig/audit_rallies.json")
@@ -44,7 +45,7 @@ def main() -> None:
 
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""
-            SELECT r.id, pt.ground_truth_json, pt.action_ground_truth_json,
+            SELECT r.id, pt.ground_truth_json,
                    v.content_hash, pt.fps, r.video_id
             FROM rallies r
             JOIN player_tracks pt ON pt.rally_id = r.id
@@ -54,6 +55,9 @@ def main() -> None:
         """, (rally_ids,))
         rows = cur.fetchall()
 
+    with get_connection() as conn:
+        gt_by_rally = load_for_rallies(conn, rally_ids, include_unresolved=True)
+
     resolver = VideoResolver()
 
     # Pick 5 rallies: 2 low, 2 mid, 1 high (mix of camera heights).
@@ -61,7 +65,7 @@ def main() -> None:
     for row in rows:
         rid = str(row[0])
         m = meta[rid]
-        chash = row[3]
+        chash = row[2]
         if chash and resolver.is_cached(chash):
             by_tier[m["tier"]].append(row)
 
@@ -79,10 +83,10 @@ def main() -> None:
     for row in selected:
         rid = str(row[0])
         gt = row[1]
-        action_gt = row[2] or []
-        chash = row[3]
-        fps = float(row[4] or 30.0)
-        vid = str(row[5])
+        action_gt = gt_by_rally.get(rid, [])
+        chash = row[2]
+        fps = float(row[3] or 30.0)
+        vid = str(row[4])
         m = meta[rid]
 
         # Ball GT positions.

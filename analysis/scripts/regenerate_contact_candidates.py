@@ -105,7 +105,7 @@ def main() -> int:
     parser.add_argument(
         "--all-with-gt",
         action="store_true",
-        help="Regenerate for all videos with action_ground_truth_json (the 3 GT videos).",
+        help="Regenerate for all videos with rally_action_ground_truth rows (the GT videos).",
     )
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -119,7 +119,10 @@ def main() -> int:
                 """SELECT DISTINCT v.id, v.filename FROM videos v
                    JOIN rallies r ON r.video_id = v.id
                    JOIN player_tracks pt ON pt.rally_id = r.id
-                   WHERE pt.action_ground_truth_json IS NOT NULL
+                   WHERE EXISTS (
+                       SELECT 1 FROM rally_action_ground_truth gt
+                       WHERE gt.rally_id = r.id
+                   )
                    ORDER BY v.filename"""
             )
             video_rows = cur.fetchall()

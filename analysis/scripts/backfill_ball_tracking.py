@@ -31,7 +31,7 @@ def find_rallies_missing_ball_data() -> list[dict]:
                pt.frame_count, pt.fps
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
-        WHERE pt.action_ground_truth_json IS NOT NULL
+        WHERE EXISTS (SELECT 1 FROM rally_action_ground_truth gt WHERE gt.rally_id = r.id)
           AND pt.ball_positions_json IS NULL
         ORDER BY r.video_id, r.start_ms
     """

@@ -240,7 +240,7 @@ def load_bundles() -> list[dict[str, Any]]:
 
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""
-            SELECT r.id, pt.ground_truth_json, pt.action_ground_truth_json,
+            SELECT r.id, pt.ground_truth_json,
                    v.content_hash, pt.fps
             FROM rallies r
             JOIN player_tracks pt ON pt.rally_id = r.id
@@ -249,6 +249,10 @@ def load_bundles() -> list[dict[str, Any]]:
               AND pt.ground_truth_json IS NOT NULL
         """, (rally_ids,))
         rows = cur.fetchall()
+
+    from rallycut.training.action_gt_query import load_for_rallies  # noqa: E402
+    with get_connection() as conn:
+        gt_by_rally = load_for_rallies(conn, rally_ids, include_unresolved=True)
 
     bundles: list[dict[str, Any]] = []
     for row in rows:
@@ -269,9 +273,9 @@ def load_bundles() -> list[dict[str, Any]]:
             "tier": m["tier"],
             "camera_height_m": m.get("camera_height_m", 0.0),
             "ball_gt": ball_gt,
-            "action_gt": row[2] or [],
-            "content_hash": row[3],
-            "fps": float(row[4] or 30.0),
+            "action_gt": gt_by_rally.get(rid, []),
+            "content_hash": row[2],
+            "fps": float(row[3] or 30.0),
         })
     return bundles
 

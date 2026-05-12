@@ -1,4 +1,4 @@
-"""Audit ``action_ground_truth_json`` for a fixture and emit a review HTML.
+"""Audit action GT (rally_action_ground_truth) for a fixture and emit a review HTML.
 
 Phase 0 of the crop-guided attribution research plan. The reviewer's only
 job is **visual matching**: for each action moment, look at the full frame
@@ -39,6 +39,7 @@ from rich.console import Console
 
 from rallycut.evaluation.db import get_connection
 from rallycut.evaluation.tracking.db import get_video_path
+from rallycut.training.action_gt_query import load_for_rallies
 
 console = Console()
 
@@ -112,12 +113,11 @@ def load_fixture_rallies(video_id: str) -> list[RallyContext]:
     query = """
         SELECT
             r.id, r.start_ms, pt.fps,
-            pt.positions_json, pt.actions_json,
-            pt.action_ground_truth_json
+            pt.positions_json, pt.actions_json
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         WHERE r.video_id = %s
-          AND pt.action_ground_truth_json IS NOT NULL
+          AND EXISTS (SELECT 1 FROM rally_action_ground_truth gt WHERE gt.rally_id = r.id)
         ORDER BY r.start_ms
     """
     contexts: list[RallyContext] = []
@@ -137,7 +137,7 @@ def load_fixture_rallies(video_id: str) -> list[RallyContext]:
             }
 
     for row in rows:
-        rid, start_ms, fps, positions_json, actions_json, _gt_json = row
+        rid, start_ms, fps, positions_json, actions_json = row
         rid = str(rid)
         fps_f = float(fps or 60.0)
         rally_start_frame = int((start_ms or 0) / 1000.0 * fps_f)
@@ -163,60 +163,55 @@ def load_gt_actions(
     rally_index_by_id: dict[str, int],
 ) -> list[GtAction]:
     """Pair every GT action with the predicted canonical player at the same frame."""
-    query = """
-        SELECT r.id, pt.action_ground_truth_json
-        FROM rallies r
-        JOIN player_tracks pt ON pt.rally_id = r.id
-        WHERE r.video_id = %s
-          AND pt.action_ground_truth_json IS NOT NULL
-        ORDER BY r.start_ms
-    """
     gt_actions: list[GtAction] = []
     with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(query, [video_id])
-            for rid, gt_json in cur.fetchall():
-                rid = str(rid)
-                ctx = contexts_by_rally.get(rid)
-                if ctx is None:
-                    continue
-                pred_index: list[tuple[int, int]] = []
-                for a in ctx.actions_json:
-                    if not isinstance(a, dict):
-                        continue
-                    pred_index.append((
-                        int(a.get("frame", 0)),
-                        int(a.get("playerTrackId", -1)),
-                    ))
+        gt_by_rally = load_for_rallies(
+            conn,
+            list(contexts_by_rally.keys()),
+            include_unresolved=True,
+        )
 
-                for label in gt_json:
-                    if not isinstance(label, dict):
-                        continue
-                    gt_frame = int(label.get("frame", 0))
-                    gt_canonical = int(label.get("playerTrackId", -1))
-                    best_tid = None
-                    best_dist = 4
-                    for pred_frame, pred_tid in pred_index:
-                        dist = abs(pred_frame - gt_frame)
-                        if dist < best_dist:
-                            best_tid = pred_tid
-                            best_dist = dist
-                    pred_canonical = (
-                        ctx.track_to_player.get(best_tid)
-                        if best_tid is not None and best_tid >= 0
-                        else None
-                    )
-                    gt_actions.append(GtAction(
-                        rally_id=rid,
-                        rally_start_frame=ctx.rally_start_frame,
-                        rally_index=rally_index_by_id[rid],
-                        frame=gt_frame,
-                        action=str(label.get("action", "")),
-                        gt_canonical_pid=gt_canonical,
-                        pred_canonical_pid=pred_canonical,
-                        ball_x=float(label.get("ballX", 0.0)),
-                        ball_y=float(label.get("ballY", 0.0)),
-                    ))
+    for rid, gt_labels in gt_by_rally.items():
+        ctx = contexts_by_rally.get(rid)
+        if ctx is None:
+            continue
+        pred_index: list[tuple[int, int]] = []
+        for a in ctx.actions_json:
+            if not isinstance(a, dict):
+                continue
+            pred_index.append((
+                int(a.get("frame", 0)),
+                int(a.get("playerTrackId", -1)),
+            ))
+
+        for label in gt_labels:
+            if not isinstance(label, dict):
+                continue
+            gt_frame = int(label.get("frame", 0))
+            gt_canonical = int(label.get("playerTrackId", -1))
+            best_tid = None
+            best_dist = 4
+            for pred_frame, pred_tid in pred_index:
+                dist = abs(pred_frame - gt_frame)
+                if dist < best_dist:
+                    best_tid = pred_tid
+                    best_dist = dist
+            pred_canonical = (
+                ctx.track_to_player.get(best_tid)
+                if best_tid is not None and best_tid >= 0
+                else None
+            )
+            gt_actions.append(GtAction(
+                rally_id=rid,
+                rally_start_frame=ctx.rally_start_frame,
+                rally_index=rally_index_by_id[rid],
+                frame=gt_frame,
+                action=str(label.get("action", "")),
+                gt_canonical_pid=gt_canonical,
+                pred_canonical_pid=pred_canonical,
+                ball_x=float(label.get("ballX", 0.0)),
+                ball_y=float(label.get("ballY", 0.0)),
+            ))
     return gt_actions
 
 

@@ -19,6 +19,7 @@ from pathlib import Path
 from rallycut.evaluation.tracking.db import get_connection
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.contact_detector import compute_direction_change
+from rallycut.training.action_gt_query import load_for_rallies
 
 GT_PATH = Path("training_datasets/beach_v11/action_ground_truth.json")
 # Use every video that has action GT — frame and action-type labels are
@@ -86,6 +87,7 @@ def main() -> None:
             if row is None or not row[1]:
                 continue
             rid, bp_json, aj = row
+            rid_str = str(rid)
             bbf = _ball_by_frame(bp_json)
             actions = (aj or {}).get("actions") or []
             pred_serve = next(
@@ -94,8 +96,9 @@ def main() -> None:
             )
             if pred_serve is None or pred_serve.get("isSynthetic", False):
                 continue  # Only calibrate on REAL detected serves
+            gt_labels = load_for_rallies(conn, [rid_str]).get(rid_str, [])
             gt_serve_f = next(
-                (a["frame"] for a in r["action_ground_truth_json"]
+                (a["frame"] for a in gt_labels
                  if a.get("action") == "serve"),
                 None,
             )

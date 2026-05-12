@@ -20,6 +20,7 @@ import json
 from pathlib import Path
 from typing import Any
 from rallycut.evaluation.tracking.db import get_connection
+from rallycut.training.action_gt_query import load_for_rallies
 
 PANEL_IDS = [
     "b5fb0594-d64f-4a0d-bad9-de8fc36414d0",
@@ -124,7 +125,7 @@ def main() -> None:
                 continue
             rid = str(row[0])
             pred = list((row[1] or {}).get("actions") or [])
-            gt = gt_rally["action_ground_truth_json"]
+            gt = load_for_rallies(conn, [rid]).get(rid, [])
 
             base_match = _match_at_offset(gt, pred, 0)
             best_off, align_match = _best_offset(gt, pred)

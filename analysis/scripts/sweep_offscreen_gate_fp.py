@@ -28,6 +28,7 @@ import numpy as np
 
 from rallycut.actions.trajectory_features import ACTION_TYPES
 from rallycut.evaluation.tracking.db import get_connection
+from rallycut.training.action_gt_query import load_for_rallies
 from rallycut.tracking.action_classifier import classify_rally_actions
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.contact_detector import (
@@ -177,9 +178,11 @@ def main() -> None:
             if row is None or not row[1]:
                 continue
             rid, _fps, fcount, csy, bp_json, pp_json, aj, primary_raw = row
+            rid_str = str(rid)
+            gt_labels = load_for_rallies(conn, [rid_str]).get(rid_str, [])
 
             gt_serve_f = next(
-                (a["frame"] for a in r["action_ground_truth_json"]
+                (a["frame"] for a in gt_labels
                  if a.get("action") == "serve"),
                 None,
             )

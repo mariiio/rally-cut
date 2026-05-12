@@ -122,21 +122,25 @@ def main() -> None:
 
     from rallycut.evaluation.db import get_connection
     from rallycut.evaluation.tracking.db import get_video_path
+    from rallycut.training.action_gt_query import load_for_rallies
 
     # Load GT action labels
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute("""
                 SELECT r.video_id, r.id as rally_id, r.start_ms,
-                       pt.action_ground_truth_json, pt.contacts_json,
+                       pt.contacts_json,
                        pt.actions_json, pt.positions_json
                 FROM rallies r
                 JOIN player_tracks pt ON pt.rally_id = r.id
-                WHERE pt.action_ground_truth_json IS NOT NULL
+                WHERE EXISTS (SELECT 1 FROM rally_action_ground_truth gt WHERE gt.rally_id = r.id)
                   AND pt.contacts_json IS NOT NULL
                   AND pt.positions_json IS NOT NULL
             """)
             rows = cur.fetchall()
+
+        rally_ids_for_gt = [str(row[1]) for row in rows]
+        gt_by_rally = load_for_rallies(conn, rally_ids_for_gt)
 
     # Load match team assignments
     with get_connection() as conn:
@@ -161,11 +165,11 @@ def main() -> None:
 
     errors: list[dict[str, Any]] = []
 
-    for video_id, rally_id, start_ms, gt_json, contacts_json, actions_json, positions_json in rows:
+    for video_id, rally_id, start_ms, contacts_json, actions_json, positions_json in rows:
         video_id = str(video_id)
         rally_id = str(rally_id)
 
-        gt_actions = gt_json if isinstance(gt_json, list) else gt_json.get("actions", [])
+        gt_actions = gt_by_rally.get(rally_id, [])
         pred_contacts = contacts_json.get("contacts", []) if contacts_json else []
         pred_actions = actions_json.get("actions", []) if actions_json else []
 

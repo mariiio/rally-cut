@@ -31,6 +31,7 @@ from typing import Any, cast
 
 from rallycut.evaluation.tracking.db import get_connection
 from rallycut.tracking.ball_tracker import BallPosition
+from rallycut.training.action_gt_query import load_for_rallies
 from rallycut.tracking.contact_detector import (
     ContactDetectionConfig,
     detect_contacts,
@@ -138,25 +139,19 @@ def main() -> None:
             meta = {r[0]: (r[1], r[2]) for r in cur.fetchall()}
     hash_to_id = {h: vid for vid, (h, _) in meta.items()}
 
-    # Build per-rally GT lookup
+    # Build per-rally GT lookup (block frame only; GT actions loaded from DB below)
     block_cases: list[dict[str, Any]] = []
     for gt_rally in gt["rallies"]:
         chash = gt_rally["video_content_hash"]
         if chash not in hash_to_id:
             continue
-        actions = gt_rally.get("action_ground_truth_json", [])
-        blocks = [a for a in actions if a.get("action") == "block"]
-        if not blocks:
-            continue
-        for block in blocks:
-            block_cases.append({
-                "rally_hash": chash,
-                "video_id": hash_to_id[chash],
-                "video_name": meta[hash_to_id[chash]][1],
-                "rally_start_ms": gt_rally["rally_start_ms"],
-                "gt_actions": actions,
-                "block": block,
-            })
+        # We record only rally_start_ms for each block frame; gt_actions come from DB.
+        block_cases.append({
+            "rally_hash": chash,
+            "video_id": hash_to_id[chash],
+            "video_name": meta[hash_to_id[chash]][1],
+            "rally_start_ms": gt_rally["rally_start_ms"],
+        })
 
     print(f"Total GT blocks: {len(block_cases)}")
     print()
@@ -187,34 +182,15 @@ def main() -> None:
             if row is None or not row[1]:
                 continue
             rid, _fps, fcount, csy, bp_json, pp_json, aj, primary_raw = row
-            block_f = int(case["block"].get("frame", 0))
+            rid_str = str(rid)
+            gt_actions = load_for_rallies(conn, [rid_str]).get(rid_str, [])
+            blocks_in_rally = [a for a in gt_actions if a.get("action") == "block"]
+            if not blocks_in_rally:
+                continue
 
-            # Find prior action in GT (the action preceding this block)
-            gt_sorted = sorted(case["gt_actions"], key=lambda a: a.get("frame", 0))
-            prev_action_type = "none"
-            prev_attack_gap = -1
-            for a in gt_sorted:
-                af = int(a.get("frame", 0))
-                if af >= block_f:
-                    break
-                prev_action_type = a.get("action", "none")
-                if a.get("action") == "attack":
-                    prev_attack_gap = block_f - af
-
-            # Compute ball at block frame
+            # Pre-compute ball + player positions once per rally
             bp = _bp_from_json(bp_json)
             pp = _pp_from_json(pp_json)
-            ball_xy = _interpolate_ball(bp, block_f)
-            ball_y = ball_xy[1] if ball_xy else -1.0
-            by_minus_ny = ball_y - (csy or 0.5) if ball_y > 0 else -99.0
-
-            pdist = -1.0
-            p_top = -1.0
-            p_h = -1.0
-            if ball_xy:
-                pdist, p_top, p_h = _nearest_player(pp, ball_xy[0], ball_xy[1], block_f)
-
-            # Check if pipeline has a contact within ±HIT_TOL of block_f
             ta_str = (aj or {}).get("teamAssignments", {}) or {}
             ta_int = {
                 int(k): (0 if v == "A" else 1)
@@ -224,8 +200,6 @@ def main() -> None:
             seq = get_sequence_probs(
                 bp, pp, csy, fcount or 0, ta_int, calibrator=None,
             )
-
-            # Run the actual contact detector to see if a candidate exists
             contact_seq = detect_contacts(
                 ball_positions=bp,
                 player_positions=pp,
@@ -237,60 +211,87 @@ def main() -> None:
                 primary_track_ids=list(primary_raw or []) or None,
             )
 
-            # Pick nearest pipeline-detected contact to GT block frame
-            cand_status = "NO_CAND"
-            cand_frame = -1
-            pred_action = "-"
-            if contact_seq.contacts:
-                nearest = min(
-                    contact_seq.contacts,
-                    key=lambda c: abs(c.frame - block_f),
+            # Process each block in this rally
+            for block in blocks_in_rally:
+                block_f = int(block.get("frame", 0))
+
+                # Find prior action in GT (the action preceding this block)
+                gt_sorted = sorted(gt_actions, key=lambda a: a.get("frame", 0))
+                prev_action_type = "none"
+                prev_attack_gap = -1
+                for a in gt_sorted:
+                    af = int(a.get("frame", 0))
+                    if af >= block_f:
+                        break
+                    prev_action_type = a.get("action", "none")
+                    if a.get("action") == "attack":
+                        prev_attack_gap = block_f - af
+
+                # Compute ball at block frame
+                ball_xy = _interpolate_ball(bp, block_f)
+                ball_y = ball_xy[1] if ball_xy else -1.0
+                by_minus_ny = ball_y - (csy or 0.5) if ball_y > 0 else -99.0
+
+                pdist = -1.0
+                p_top = -1.0
+                p_h = -1.0
+                if ball_xy:
+                    pdist, p_top, p_h = _nearest_player(pp, ball_xy[0], ball_xy[1], block_f)
+
+                # Pick nearest pipeline-detected contact to GT block frame
+                cand_status = "NO_CAND"
+                cand_frame = -1
+                pred_action = "-"
+                if contact_seq.contacts:
+                    nearest = min(
+                        contact_seq.contacts,
+                        key=lambda c: abs(c.frame - block_f),
+                    )
+                    if abs(nearest.frame - block_f) <= HIT_TOLERANCE:
+                        cand_status = "VALIDATED" if nearest.is_validated else "REJECTED"
+                        cand_frame = nearest.frame
+
+                # If candidate exists, what does the pipeline classify it as?
+                if cand_status != "NO_CAND":
+                    stored_actions = (aj or {}).get("actions", []) or []
+                    pred = next(
+                        (a for a in stored_actions
+                         if abs(int(a.get("frame", 0)) - block_f) <= HIT_TOLERANCE),
+                        None,
+                    )
+                    if pred:
+                        pred_action = pred.get("action", "?")
+                        cand_frame = int(pred.get("frame", 0))
+
+                # Bucket
+                if cand_status == "NO_CAND":
+                    bucket = "no_candidate"
+                elif pred_action == "block":
+                    bucket = "correctly_classified"
+                elif pred_action != "-":
+                    bucket = f"misclassified_as_{pred_action}"
+                elif cand_status == "REJECTED":
+                    bucket = "candidate_rejected"
+                else:
+                    bucket = "other"
+                bucket_counts[bucket] += 1
+
+                print(
+                    f"{case['video_name'][:8]:<8} "
+                    f"{rid_str[:8]:<10} {block_f:>5} {cand_status:>6} "
+                    f"{pred_action:>10} {cand_frame:>6} "
+                    f"{prev_action_type[:10]:>10} {prev_attack_gap:>14} "
+                    f"{by_minus_ny:>7.3f} {pdist:>6.3f} {p_top:>6.3f} {p_h:>6.3f}"
                 )
-                if abs(nearest.frame - block_f) <= HIT_TOLERANCE:
-                    cand_status = "VALIDATED" if nearest.is_validated else "REJECTED"
-                    cand_frame = nearest.frame
-
-            # If candidate exists, what does the pipeline classify it as?
-            if cand_status != "NO_CAND":
-                stored_actions = (aj or {}).get("actions", []) or []
-                pred = next(
-                    (a for a in stored_actions
-                     if abs(int(a.get("frame", 0)) - block_f) <= HIT_TOLERANCE),
-                    None,
-                )
-                if pred:
-                    pred_action = pred.get("action", "?")
-                    cand_frame = int(pred.get("frame", 0))
-
-            # Bucket
-            if cand_status == "NO_CAND":
-                bucket = "no_candidate"
-            elif pred_action == "block":
-                bucket = "correctly_classified"
-            elif pred_action != "-":
-                bucket = f"misclassified_as_{pred_action}"
-            elif cand_status == "REJECTED":
-                bucket = "candidate_rejected"
-            else:
-                bucket = "other"
-            bucket_counts[bucket] += 1
-
-            print(
-                f"{case['video_name'][:8]:<8} "
-                f"{rid[:8]:<10} {block_f:>5} {cand_status:>6} "
-                f"{pred_action:>10} {cand_frame:>6} "
-                f"{prev_action_type[:10]:>10} {prev_attack_gap:>14} "
-                f"{by_minus_ny:>7.3f} {pdist:>6.3f} {p_top:>6.3f} {p_h:>6.3f}"
-            )
-            rows.append({
-                "video": case["video_name"], "rally_id": rid,
-                "block_frame": block_f, "cand_status": cand_status,
-                "pred_action": pred_action, "pred_frame": cand_frame,
-                "prev_action": prev_action_type, "prev_attack_gap": prev_attack_gap,
-                "ball_y_minus_net": by_minus_ny, "player_distance": pdist,
-                "player_bbox_top": p_top, "player_bbox_height": p_h,
-                "bucket": bucket,
-            })
+                rows.append({
+                    "video": case["video_name"], "rally_id": rid_str,
+                    "block_frame": block_f, "cand_status": cand_status,
+                    "pred_action": pred_action, "pred_frame": cand_frame,
+                    "prev_action": prev_action_type, "prev_attack_gap": prev_attack_gap,
+                    "ball_y_minus_net": by_minus_ny, "player_distance": pdist,
+                    "player_bbox_top": p_top, "player_bbox_height": p_h,
+                    "bucket": bucket,
+                })
 
     print()
     print("=== Bucket summary ===")

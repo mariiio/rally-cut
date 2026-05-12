@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from rallycut.evaluation.tracking.db import get_connection
+from rallycut.training.action_gt_query import load_for_rallies
 
 GT_PATH = Path("training_datasets/beach_v11/action_ground_truth.json")
 HIT_TOLERANCE = 15
@@ -109,8 +110,9 @@ def main() -> None:
             if not row or not row[2]:
                 continue
             rid, fps, aj = row
+            rid_str = str(rid)
             pred_actions = list((aj or {}).get("actions") or [])
-            gt_actions = gt_rally.get("action_ground_truth_json", []) or []
+            gt_actions = load_for_rallies(conn, [rid_str]).get(rid_str, [])
             matches, unmatched_pred = _match_actions(gt_actions, pred_actions)
 
             # 1. DIG FN: GT digs not matched

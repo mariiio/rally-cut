@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from rallycut.evaluation.db import get_connection
+from rallycut.training.action_gt_query import load_for_rallies
 
 FIXTURE_MAP_PATH = (
     Path(__file__).resolve().parent.parent
@@ -87,22 +88,29 @@ def main() -> None:
             perm = _compute_permutation(video_id)
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT pt.action_ground_truth_json, pt.actions_json
+                    """SELECT r.id, pt.actions_json
                        FROM rallies r JOIN player_tracks pt ON pt.rally_id = r.id
                        WHERE r.video_id = %s
-                         AND pt.action_ground_truth_json IS NOT NULL
-                         AND jsonb_array_length(pt.action_ground_truth_json::jsonb) > 0
+                         AND EXISTS (
+                             SELECT 1 FROM rally_action_ground_truth gt
+                             WHERE gt.rally_id = r.id
+                         )
                        ORDER BY r.start_ms""",
                     (video_id,),
                 )
                 rally_rows = cur.fetchall()
+
+            rally_ids = [str(row[0]) for row in rally_rows]
+            gt_by_rally = load_for_rallies(conn, rally_ids)
+
             fix_counts = defaultdict(int)
-            for gt_actions, aj in rally_rows:
+            for rally_id_val, aj in rally_rows:
+                gt_actions = gt_by_rally.get(str(rally_id_val), [])
                 pred_actions = (aj or {}).get("actions") or []
                 team_assignments = (aj or {}).get("teamAssignments") or {}
                 # Map each GT action to nearest pred within ±MATCH_TOLERANCE.
                 used: set[int] = set()
-                for g in gt_actions or []:
+                for g in gt_actions:
                     gf = int(g.get("frame", 0))
                     gt_pid = g.get("trackId")
                     fix_counts["n_gt"] += 1

@@ -79,7 +79,7 @@ def load_audit_data() -> list[dict[str, Any]]:
 
     with get_connection() as conn, conn.cursor() as cur:
         cur.execute("""
-            SELECT r.id, pt.ground_truth_json, pt.action_ground_truth_json,
+            SELECT r.id, pt.ground_truth_json,
                    v.width, v.height, pt.fps
             FROM rallies r
             JOIN player_tracks pt ON pt.rally_id = r.id
@@ -89,15 +89,19 @@ def load_audit_data() -> list[dict[str, Any]]:
         """, (rally_ids,))
         rows = cur.fetchall()
 
+    from rallycut.training.action_gt_query import load_for_rallies  # noqa: E402
+    with get_connection() as conn:
+        gt_by_rally = load_for_rallies(conn, rally_ids, include_unresolved=True)
+
     bundles: list[dict[str, Any]] = []
     for row in rows:
         rid = str(row[0])
         meta = meta_by_id[rid]
         gt = row[1]
-        action_gt = row[2] or []
-        width = int(row[3] or 1920)
-        height = int(row[4] or 1080)
-        fps = float(row[5] or 30.0)
+        action_gt = gt_by_rally.get(rid, [])
+        width = int(row[2] or 1920)
+        height = int(row[3] or 1080)
+        fps = float(row[4] or 30.0)
         ball_gt = [
             (int(p["frameNumber"]), float(p["x"]), float(p["y"]))
             for p in (gt.get("positions", []) if isinstance(gt, dict) else gt or [])

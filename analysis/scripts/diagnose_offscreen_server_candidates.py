@@ -62,6 +62,7 @@ from rallycut.tracking.contact_detector import (
 )
 from rallycut.tracking.player_tracker import PlayerPosition
 from rallycut.tracking.sequence_action_runtime import get_sequence_probs
+from rallycut.training.action_gt_query import load_for_rallies
 
 GT_PATH = Path("training_datasets/beach_v11/action_ground_truth.json")
 HIT_TOLERANCE = 15
@@ -212,7 +213,8 @@ def main() -> None:
                 continue
             rid, _fps, fcount, csy, bp_json, pp_json, aj, primary_raw = row
 
-            gt_actions = r.get("action_ground_truth_json", [])
+            gt_by_rally = load_for_rallies(conn, [str(rid)])
+            gt_actions = gt_by_rally.get(str(rid), [])
             if not gt_actions:
                 continue
             gt_first = min(gt_actions, key=lambda a: a.get("frame", 0))

@@ -36,6 +36,7 @@ from rallycut.tracking.visual_attribution import (
     build_positions_by_frame,
     get_same_side_track_ids,
 )
+from rallycut.training.action_gt_query import load_for_rallies
 
 console = Console()
 
@@ -70,7 +71,6 @@ def find_within_team_errors(
         SELECT
             r.id AS rally_id,
             r.video_id,
-            pt.action_ground_truth_json,
             pt.actions_json,
             pt.positions_json,
             pt.court_split_y,
@@ -78,7 +78,7 @@ def find_within_team_errors(
             pt.fps
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
-        WHERE pt.action_ground_truth_json IS NOT NULL
+        WHERE EXISTS (SELECT 1 FROM rally_action_ground_truth gt WHERE gt.rally_id = r.id)
           AND pt.actions_json IS NOT NULL
           AND pt.positions_json IS NOT NULL
         ORDER BY r.video_id, r.start_ms
@@ -102,60 +102,66 @@ def find_within_team_errors(
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(query)
-            for row in cur.fetchall():
-                (rally_id, video_id, gt_json, actions_json,
-                 pos_json, split_y, start_ms, fps) = row
+            rows = cur.fetchall()
 
-                if not gt_json or not actions_json or not pos_json:
+        rally_ids_for_gt = [str(row[0]) for row in rows]
+        gt_by_rally = load_for_rallies(conn, rally_ids_for_gt)
+
+        for row in rows:
+            (rally_id, video_id, actions_json,
+             pos_json, split_y, start_ms, fps) = row
+            gt_json = gt_by_rally.get(str(rally_id), [])
+
+            if not gt_json or not actions_json or not pos_json:
+                continue
+
+            # Build predicted action lookup by frame
+            pred_by_frame: dict[int, int] = {}
+            for a in actions_json.get("actions", []):
+                pred_by_frame[a.get("frame", -1)] = a.get("playerTrackId", -1)
+
+            teams = all_teams.get(rally_id)
+
+            for label in gt_json:
+                gt_tid = label.get("playerTrackId", -1)
+                if gt_tid < 0:
                     continue
 
-                # Build predicted action lookup by frame
-                pred_by_frame: dict[int, int] = {}
-                for a in actions_json.get("actions", []):
-                    pred_by_frame[a.get("frame", -1)] = a.get("playerTrackId", -1)
+                frame = label["frame"]
+                action = label["action"]
 
-                teams = all_teams.get(rally_id)
-
-                for label in gt_json:
-                    gt_tid = label.get("playerTrackId", -1)
-                    if gt_tid < 0:
-                        continue
-
-                    frame = label["frame"]
-                    action = label["action"]
-
-                    # Find closest predicted action
-                    pred_tid = -1
-                    for delta in range(4):
-                        for f in [frame + delta, frame - delta]:
-                            if f in pred_by_frame:
-                                pred_tid = pred_by_frame[f]
-                                break
-                        if pred_tid >= 0:
+                # Find closest predicted action
+                pred_tid = -1
+                for delta in range(4):
+                    for f in [frame + delta, frame - delta]:
+                        if f in pred_by_frame:
+                            pred_tid = pred_by_frame[f]
                             break
+                    if pred_tid >= 0:
+                        break
 
-                    if pred_tid < 0 or pred_tid == gt_tid:
-                        continue  # Correct or no prediction
+                if pred_tid < 0 or pred_tid == gt_tid:
+                    continue  # Correct or no prediction
 
-                    # Check if within-team error (same side)
-                    same_side = get_same_side_track_ids(
-                        pos_json, gt_tid, frame, teams, split_y,
-                    )
-                    if pred_tid not in same_side:
-                        continue  # Cross-team error, not within-team
+                # Check if within-team error (same side)
+                same_side = get_same_side_track_ids(
+                    pos_json, gt_tid, frame, teams, split_y,
+                )
+                if pred_tid not in same_side:
+                    continue  # Cross-team error, not within-team
 
-                    errors.append(WithinTeamError(
-                        rally_id=rally_id,
-                        video_id=video_id,
-                        frame=frame,
-                        action=action,
-                        gt_track_id=gt_tid,
-                        prox_track_id=pred_tid,
-                        positions_json=pos_json,
-                        court_split_y=split_y,
-                        start_ms=start_ms or 0,
-                        fps=fps or 30.0,
-                    ))
+                errors.append(WithinTeamError(
+                    rally_id=rally_id,
+                    video_id=video_id,
+                    frame=frame,
+                    action=action,
+                    gt_track_id=gt_tid,
+                    prox_track_id=pred_tid,
+                    positions_json=pos_json,
+                    court_split_y=split_y,
+                    start_ms=start_ms or 0,
+                    fps=fps or 30.0,
+                ))
 
     console.print(f"  Found {len(errors)} within-team attribution errors")
 

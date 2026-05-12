@@ -25,6 +25,7 @@ import numpy as np
 
 from rallycut.actions.trajectory_features import ACTION_TYPES
 from rallycut.evaluation.tracking.db import get_connection
+from rallycut.training.action_gt_query import load_for_rallies
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.player_tracker import PlayerPosition
 from rallycut.tracking.sequence_action_runtime import get_sequence_probs
@@ -122,7 +123,7 @@ def main() -> None:
             vid = h2v[ch]
             with conn.cursor() as cur:
                 cur.execute(
-                    """SELECT pt.frame_count, pt.court_split_y,
+                    """SELECT rr.id, pt.frame_count, pt.court_split_y,
                               pt.ball_positions_json, pt.positions_json, pt.actions_json
                        FROM rallies rr JOIN player_tracks pt ON pt.rally_id=rr.id
                        WHERE rr.video_id=%s AND rr.start_ms=%s""",
@@ -131,7 +132,8 @@ def main() -> None:
                 row = cur.fetchone()
             if not row:
                 continue
-            fc, csy, bp_j, pp_j, aj = row
+            rid_str = str(row[0])
+            fc, csy, bp_j, pp_j, aj = row[1], row[2], row[3], row[4], row[5]
             if not aj or csy is None:
                 continue
             actions = sorted(aj.get("actions") or [], key=lambda a: a.get("frame", 0))
@@ -140,8 +142,9 @@ def main() -> None:
                 continue
             bp_list = _bp(bp_j)
             pp_list = _pp(pp_j)
+            gt_labels_r = load_for_rallies(conn, [rid_str]).get(rid_str, [])
             gt_blocks = {int(a.get("frame", 0))
-                         for a in r.get("action_ground_truth_json", []) or []
+                         for a in gt_labels_r
                          if a.get("action") == "block"}
             ta_int = {int(k): (0 if v == "A" else 1) for k, v in ta.items() if v in ("A","B")}
             seq = get_sequence_probs(bp_list, pp_list, csy, fc or 0, ta_int, calibrator=None)

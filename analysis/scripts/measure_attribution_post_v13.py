@@ -19,6 +19,7 @@ from rallycut.evaluation.attribution_bench import (
     score_rally,
 )
 from rallycut.evaluation.db import get_connection
+from rallycut.training.action_gt_query import load_for_rallies
 
 FIXTURE_MAP_PATH = (
     Path(__file__).resolve().parent.parent
@@ -38,39 +39,39 @@ def main() -> int:
     fixture_map = json.loads(FIXTURE_MAP_PATH.read_text())["fixtures"]
     rallies: list[dict[str, Any]] = []
 
-    with get_connection() as conn, conn.cursor() as cur:
+    with get_connection() as conn:
         for fixture_name, finfo in fixture_map.items():
             video_id = finfo["video_id"]
-            cur.execute(
-                """
-                SELECT r.id, r.start_ms, r.end_ms,
-                       pt.action_ground_truth_json,
-                       pt.actions_json,
-                       pt.contacts_json,
-                       pt.primary_track_ids
-                FROM rallies r
-                JOIN player_tracks pt ON pt.rally_id = r.id
-                WHERE r.video_id = %s
-                  AND pt.action_ground_truth_json IS NOT NULL
-                  AND jsonb_array_length(pt.action_ground_truth_json::jsonb) > 0
-                ORDER BY r.start_ms
-                """,
-                (video_id,),
-            )
-            rows = cur.fetchall()
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT r.id, r.start_ms, r.end_ms,
+                           pt.actions_json,
+                           pt.contacts_json,
+                           pt.primary_track_ids
+                    FROM rallies r
+                    JOIN player_tracks pt ON pt.rally_id = r.id
+                    WHERE r.video_id = %s
+                      AND EXISTS (
+                          SELECT 1 FROM rally_action_ground_truth gt
+                          WHERE gt.rally_id = r.id
+                      )
+                    ORDER BY r.start_ms
+                    """,
+                    (video_id,),
+                )
+                rows = cur.fetchall()
+
+            rally_ids = [str(row[0]) for row in rows]
+            gt_by_rally = load_for_rallies(conn, rally_ids)
+
             print(f"[{fixture_name}] {len(rows)} GT rallies")
-            for rid, start_ms, end_ms, gt, actions_json, contacts_json, ptids in rows:
+            for rid, start_ms, end_ms, actions_json, contacts_json, ptids in rows:
                 pipeline_actions = actions_json.get("actions", []) if actions_json else []
                 team_assignments = actions_json.get("teamAssignments", {}) if actions_json else {}
                 serving_team = actions_json.get("servingTeam") if actions_json else None
                 contacts = contacts_json.get("contacts", []) if contacts_json else []
-                # Normalise GT schema: action_ground_truth_json now stores
-                # `trackId`; attribution_bench expects `playerTrackId`.
-                normalised_gt = [
-                    {**a,
-                     "playerTrackId": a.get("playerTrackId", a.get("trackId"))}
-                    for a in (gt or [])
-                ]
+                normalised_gt = gt_by_rally.get(str(rid), [])
                 rally = {
                     "rally_id": rid, "video_id": video_id,
                     "fixture": fixture_name,

@@ -2,8 +2,8 @@
 
 Captures hashes of all match-players-relevant DB columns (videos.match_analysis_json,
 videos.canonical_pid_map_json, player_tracks.{positions_json, raw_positions_json,
-primary_track_ids, contacts_json, actions_json, action_ground_truth_json,
-pre_remap_state_json, ball_positions_json, score_ground_truth_json}) and reports
+primary_track_ids, contacts_json, actions_json, pre_remap_state_json,
+ball_positions_json, score_ground_truth_json}) and reports
 which fields change between snapshots.
 
 Usage:
@@ -34,7 +34,6 @@ PLAYER_TRACK_FIELDS = [
     "pre_remap_state_json",
     "contacts_json",
     "actions_json",
-    "action_ground_truth_json",
     "ball_positions_json",
 ]
 

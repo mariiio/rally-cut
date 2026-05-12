@@ -75,11 +75,14 @@ def _select_rally_ids() -> list[str]:
     from rallycut.evaluation.tracking.db import get_connection
 
     query = """
-        SELECT r.id, jsonb_array_length(pt.action_ground_truth_json) AS n_gt
+        SELECT r.id
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
-        WHERE pt.action_ground_truth_json IS NOT NULL
-          AND jsonb_array_length(pt.action_ground_truth_json) >= 3
+        WHERE (
+            SELECT COUNT(*) FROM rally_action_ground_truth gt
+            WHERE gt.rally_id = r.id
+              AND gt.resolved_track_id IS NOT NULL
+        ) >= 3
           AND pt.positions_json IS NOT NULL
           AND pt.ball_positions_json IS NOT NULL
         ORDER BY r.id::text

@@ -65,6 +65,20 @@ See: `~/.claude/projects/-Users-mario-Personal-Projects-RallyCut/memory/class_a_
 | `diag_r10_court_sides.py` | Court-side breakdown for r10 |
 | `diag_r10_partitions.py` | Partition enumeration for r10 |
 
+## action_gt_legacy/
+
+Status: SUPERSEDED 2026-05-12. These scripts read from or wrote to
+`player_tracks.action_ground_truth_json` (the legacy JSON-array column). After the
+`rally_action_ground_truth` table was introduced and all analysis scripts migrated to
+`action_gt_query.load_for_rallies/load_for_videos`, these helpers became obsolete.
+
+| Script | Purpose |
+|---|---|
+| `backfill_action_gt_trackid.py` | Backfilled `trackId` field on legacy `action_ground_truth_json` labels |
+| `resave_ball_for_action_gt.py` | Re-saved ball positions for rallies with `action_ground_truth_json` |
+| `repair_orphaned_gt.py` | Read-modify-write repairs on `action_ground_truth_json` column (tangled with the column — superseded by the new table) |
+| `restore_canonical_drift_backups.py` | Restored `action_ground_truth_json` from backup JSON files (column-writer, no longer valid after table migration) |
+
 ## Follow-ups (not in this pass)
 
 The `analysis/scripts/` directory still has ~370 tracked + ~100 untracked scripts, many of which are likely candidates for archival (chimera-stitching probes, within-rally repair probes, ReID/DINOv2 archaeology, individual phase-investigation scripts, etc.). Triaging them needs per-script verification that they aren't referenced by some long-running cron / agent / skill, so they're deferred to a follow-up sweep — not because they're necessarily live, but because the cost of incorrectly archiving a canonical script is high.

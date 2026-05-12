@@ -20,6 +20,7 @@ from rallycut.evaluation.tracking.db import (
     get_connection,
     load_court_calibration,
 )
+from rallycut.training.action_gt_query import load_for_rallies
 
 GT_PATH = Path("training_datasets/beach_v11/action_ground_truth.json")
 HIT_TOLERANCE = 15
@@ -114,7 +115,7 @@ def measurement_1_panel_f1() -> None:
             rid = str(row[0])
             aj = cast(dict[str, Any] | None, row[1]) or {}
             pred_actions = list(aj.get("actions") or [])
-            gt_actions = gt_rally["action_ground_truth_json"]
+            gt_actions = load_for_rallies(conn, [rid]).get(rid, [])
             matched, fn, fp, _ = _match_actions(gt_actions, pred_actions)
             print(
                 f"{name:<6} {rid[:8]:<10} {len(gt_actions):>4} "
@@ -173,20 +174,21 @@ def measurement_2_fleet_census() -> None:
                 continue
             vid = hash_to_id[r["video_content_hash"]]
             cur.execute(
-                """SELECT pt.actions_json FROM rallies r
+                """SELECT r.id, pt.actions_json FROM rallies r
                    LEFT JOIN player_tracks pt ON pt.rally_id = r.id
                    WHERE r.video_id = %s AND r.start_ms = %s""",
                 [vid, r["rally_start_ms"]],
             )
             row = cur.fetchone()
-            if row is None or not row[0]:
+            if row is None or not row[1]:
                 continue
-            aj2 = cast(dict[str, Any] | None, row[0]) or {}
+            rid2 = str(row[0])
+            aj2 = cast(dict[str, Any] | None, row[1]) or {}
             actions = aj2.get("actions") or []
             pred_serve = next((a for a in actions if a.get("action") == "serve"), None)
+            gt_labels2 = load_for_rallies(conn, [rid2]).get(rid2, [])
             gt_serve_f = next(
-                (a["frame"] for a in r["action_ground_truth_json"]
-                 if a.get("action") == "serve"),
+                (a["frame"] for a in gt_labels2 if a.get("action") == "serve"),
                 None,
             )
             if gt_serve_f is None:
@@ -280,14 +282,14 @@ def measurement_3_panel_fn_candidate_pool() -> None:
                 row = cur.fetchone()
             if row is None or not row[1]:
                 continue
-            rid = cast(str, row[0])
+            rid = str(row[0])
             bp_json = cast(list[dict[str, Any]] | None, row[1])
             pp_json = cast(list[dict[str, Any]] | None, row[2])
             fc = cast(int | None, row[3])
             csy = cast(float | None, row[4])
             aj = cast(dict[str, Any] | None, row[5])
             pred_actions = list((aj or {}).get("actions") or [])
-            gt_actions = gt_rally["action_ground_truth_json"]
+            gt_actions = load_for_rallies(conn, [rid]).get(rid, [])
 
             _, fn, _, fn_frames = _match_actions(gt_actions, pred_actions)
             if not fn_frames:

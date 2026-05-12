@@ -372,7 +372,7 @@ def main() -> None:
                         help="Abort after N consecutive failures (default 2)")
     parser.add_argument("--all-videos", action="store_true",
                         help="Extract all GT videos (default: only videos with "
-                             "action_ground_truth_json — 68 of 69)")
+                             "action GT labels — 68 of 69)")
     args = parser.parse_args()
 
     if args.parallel < 1:
