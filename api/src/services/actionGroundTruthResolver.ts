@@ -3,6 +3,7 @@ export type { ResolveSource };
 
 export const IOU_THRESHOLD = 0.5;
 export const CENTER_DIST_THRESHOLD = 0.10;
+export const REID_COSINE_THRESHOLD = 0.5;
 
 export interface GtRowInput {
   snapshotBboxX1: number | null;
@@ -10,16 +11,32 @@ export interface GtRowInput {
   snapshotBboxX2: number | null;
   snapshotBboxY2: number | null;
   snapshotTrackId: number | null;
+  snapshotReidEmbedding: Float32Array | null;  // 128-dim, null when not yet captured
 }
 
 export interface Candidate {
   trackId: number;
   bbox: { x1: number; y1: number; x2: number; y2: number };
+  embedding: Float32Array | null;  // optional appearance vector from tracker
 }
 
 export interface ResolveResult {
   resolvedTrackId: number | null;
   resolvedSource: ResolveSource;
+}
+
+function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+  if (a.length !== b.length) return 0;
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i++) {
+    dot += a[i] * b[i];
+    na += a[i] * a[i];
+    nb += b[i] * b[i];
+  }
+  if (na === 0 || nb === 0) return 0;
+  return dot / Math.sqrt(na * nb);
 }
 
 function iou(a: Candidate['bbox'], b: Candidate['bbox']): number {
@@ -62,6 +79,16 @@ export function resolveGtRow(row: GtRowInput, positions: Candidate[]): ResolveRe
     .sort((a, b) => b.iouVal - a.iouVal);
   if (ranked[0].iouVal >= IOU_THRESHOLD) {
     return { resolvedTrackId: ranked[0].trackId, resolvedSource: 'IOU_MATCH' };
+  }
+
+  if (row.snapshotReidEmbedding !== null) {
+    const reidRanked = positions
+      .filter(p => p.embedding !== null)
+      .map(p => ({ trackId: p.trackId, sim: cosineSimilarity(row.snapshotReidEmbedding!, p.embedding!) }))
+      .sort((a, b) => b.sim - a.sim);
+    if (reidRanked.length > 0 && reidRanked[0].sim >= REID_COSINE_THRESHOLD) {
+      return { resolvedTrackId: reidRanked[0].trackId, resolvedSource: 'REID_MATCH' };
+    }
   }
 
   const [sx, sy] = center(snapshot);

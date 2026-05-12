@@ -21,6 +21,22 @@ import { prisma, type PrismaTransaction } from '../lib/prisma.js';
 import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
 import { resolveGtRow, type Candidate, type ResolveSource } from './actionGroundTruthResolver.js';
 
+function bufferToFloat32(buf: Buffer | null): Float32Array | null {
+  if (!buf) return null;
+  // Prisma returns bytea as Buffer; reinterpret raw bytes as 128 × float32 LE.
+  const ab = buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength);
+  return new Float32Array(ab);
+}
+
+function float32ToBuffer(arr: Float32Array | null): Buffer | null {
+  if (!arr) return null;
+  return Buffer.from(arr.buffer, arr.byteOffset, arr.byteLength);
+}
+
+// Suppress unused warning for float32ToBuffer — it is the write-side helper
+// used by R4 when embedding capture is wired.
+void float32ToBuffer;
+
 /** One label entry as provided by the caller (lowercase action string). */
 export interface ActionGtLabel {
   frame: number;
@@ -341,6 +357,7 @@ export async function reresolveRallyGt(
     width: number;
     height: number;
     confidence?: number;
+    embedding?: number[] | null;     // 128 floats from the tracker, if available
   }>,
 ): Promise<void> {
   const rows = await tx.rallyActionGroundTruth.findMany({
@@ -353,7 +370,7 @@ export async function reresolveRallyGt(
   const byFrame = new Map<number, Candidate[]>();
   for (const p of rawPositions) {
     const list = byFrame.get(p.frameNumber) ?? [];
-    list.push({
+    const candidate: Candidate = {
       trackId: p.trackId,
       bbox: {
         x1: p.x,
@@ -361,7 +378,9 @@ export async function reresolveRallyGt(
         x2: p.x + p.width,
         y2: p.y + p.height,
       },
-    });
+      embedding: p.embedding ? new Float32Array(p.embedding) : null,
+    };
+    list.push(candidate);
     byFrame.set(p.frameNumber, list);
   }
 
@@ -377,6 +396,7 @@ export async function reresolveRallyGt(
         snapshotBboxX2: row.snapshotBboxX2,
         snapshotBboxY2: row.snapshotBboxY2,
         snapshotTrackId: row.snapshotTrackId,
+        snapshotReidEmbedding: bufferToFloat32(row.snapshotReidEmbedding as Buffer | null),
       },
       candidates,
     );
