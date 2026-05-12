@@ -143,3 +143,67 @@ def pairwise_alternation(
     if not net_crossed and not same_team:
         return -weights.w_team_consistency
     return 0.0
+
+
+_ABSENT_SERVER_SMALL_PENALTY = -0.5  # spec: small penalty when first is ABSENT_TEAM_<serving_team>
+
+
+def pairwise_absent_pair(
+    state_t: State,
+    state_t1: State,
+    weights: FactorWeights,
+) -> float:
+    """Penalty for two consecutive ABSENT_* states."""
+    if is_absent(state_t) and is_absent(state_t1):
+        return -weights.w_absent_pair
+    return 0.0
+
+
+def higher_3_contact_per_side(
+    states: tuple[State, ...],
+    net_crossings: tuple[bool, ...],
+    team_assignments: dict[int, str],
+    weights: FactorWeights,
+) -> float:
+    """Penalty per same-team contact beyond the 3rd in a row without a crossing.
+
+    `net_crossings[i]` is True iff a net crossing occurred between states[i]
+    and states[i+1]. Length is len(states) - 1.
+    """
+    assert len(net_crossings) == len(states) - 1
+    penalty = 0.0
+    streak = 1
+    streak_team: str | None = _state_team(states[0], team_assignments)
+    for i in range(1, len(states)):
+        team_i = _state_team(states[i], team_assignments)
+        if net_crossings[i - 1] or team_i != streak_team:
+            streak = 1
+            streak_team = team_i
+            continue
+        streak += 1
+        if streak > 3:
+            penalty -= weights.w_3_contact
+    return penalty
+
+
+def higher_serve_first(
+    first_state: State,
+    serving_team: str | None,
+    team_assignments: dict[int, str],
+    weights: FactorWeights,
+) -> float:
+    """Penalty if first contact's team doesn't match serving_team.
+
+    Special case: if first_state is ABSENT_TEAM_<serving_team>, small penalty
+    (off-screen server matches the serving team but isn't tracked).
+    """
+    if serving_team is None:
+        return 0.0
+    if first_state == f"ABSENT_TEAM_{serving_team}":
+        return _ABSENT_SERVER_SMALL_PENALTY
+    first_team = _state_team(first_state, team_assignments)
+    if first_team is None:
+        return 0.0
+    if first_team == serving_team:
+        return 0.0
+    return -weights.w_serve_first

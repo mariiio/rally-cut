@@ -10,6 +10,9 @@ from __future__ import annotations
 import math
 
 from rallycut.tracking.joint_attribution_factors import (
+    higher_3_contact_per_side,
+    higher_serve_first,
+    pairwise_absent_pair,
     pairwise_alternation,
     pairwise_no_back_to_back,
     unary_action_prior,
@@ -173,3 +176,119 @@ def test_pairwise_alternation_absent_states_neutral() -> None:
     )
     # ABSENT_TEAM_A is on team A; P2 is on team A; net crossed -> rule fires
     assert score == -DEFAULT_WEIGHTS.w_alternation
+
+
+# ---- pairwise_absent_pair ----
+
+def test_pairwise_absent_pair_two_absents_penalized() -> None:
+    score = pairwise_absent_pair(
+        "ABSENT_TEAM_A", "ABSENT_TEAM_B", weights=DEFAULT_WEIGHTS,
+    )
+    assert score == -DEFAULT_WEIGHTS.w_absent_pair
+
+
+def test_pairwise_absent_pair_one_absent_zero() -> None:
+    score = pairwise_absent_pair(
+        "ABSENT_TEAM_A", "P2", weights=DEFAULT_WEIGHTS,
+    )
+    assert score == 0.0
+
+
+def test_pairwise_absent_pair_no_absent_zero() -> None:
+    score = pairwise_absent_pair("P1", "P2", weights=DEFAULT_WEIGHTS)
+    assert score == 0.0
+
+
+# ---- higher_3_contact_per_side ----
+
+def test_higher_3_contact_no_violation_returns_zero() -> None:
+    """Three contacts same team without crossing -> no penalty (allowed)."""
+    states = ("P1", "P2", "P1")
+    net_crossings = (False, False)  # crossings between t and t+1
+    team_assignments = {1: "A", 2: "A", 3: "B", 4: "B"}
+    score = higher_3_contact_per_side(
+        states, net_crossings, team_assignments, weights=DEFAULT_WEIGHTS,
+    )
+    assert score == 0.0
+
+
+def test_higher_3_contact_4_contacts_no_crossing_penalty() -> None:
+    """4+ same-team contacts without a net crossing -> penalty."""
+    states = ("P1", "P2", "P1", "P2")
+    net_crossings = (False, False, False)
+    team_assignments = {1: "A", 2: "A", 3: "B", 4: "B"}
+    score = higher_3_contact_per_side(
+        states, net_crossings, team_assignments, weights=DEFAULT_WEIGHTS,
+    )
+    assert score == -DEFAULT_WEIGHTS.w_3_contact
+
+
+def test_higher_3_contact_5_contacts_no_crossing_double_penalty() -> None:
+    """Each extra contact beyond 3 same-team adds a penalty."""
+    states = ("P1", "P2", "P1", "P2", "P1")
+    net_crossings = (False, False, False, False)
+    team_assignments = {1: "A", 2: "A", 3: "B", 4: "B"}
+    score = higher_3_contact_per_side(
+        states, net_crossings, team_assignments, weights=DEFAULT_WEIGHTS,
+    )
+    assert score == -2 * DEFAULT_WEIGHTS.w_3_contact
+
+
+def test_higher_3_contact_crossing_resets_count() -> None:
+    """A net crossing resets the same-team contact counter."""
+    states = ("P1", "P2", "P1", "P3")  # 3 team-A then crossing then 1 team-B
+    net_crossings = (False, False, True)
+    team_assignments = {1: "A", 2: "A", 3: "B", 4: "B"}
+    score = higher_3_contact_per_side(
+        states, net_crossings, team_assignments, weights=DEFAULT_WEIGHTS,
+    )
+    assert score == 0.0
+
+
+# ---- higher_serve_first ----
+
+def test_higher_serve_first_correct_team_no_penalty() -> None:
+    team_assignments = {1: "A", 2: "A", 3: "B", 4: "B"}
+    score = higher_serve_first(
+        first_state="P1", serving_team="A",
+        team_assignments=team_assignments, weights=DEFAULT_WEIGHTS,
+    )
+    assert score == 0.0
+
+
+def test_higher_serve_first_wrong_team_penalty() -> None:
+    team_assignments = {1: "A", 2: "A", 3: "B", 4: "B"}
+    score = higher_serve_first(
+        first_state="P3", serving_team="A",
+        team_assignments=team_assignments, weights=DEFAULT_WEIGHTS,
+    )
+    assert score == -DEFAULT_WEIGHTS.w_serve_first
+
+
+def test_higher_serve_first_absent_serving_team_small_penalty() -> None:
+    """If first is ABSENT_TEAM_<serving_team>, small penalty (off-screen server)."""
+    team_assignments = {1: "A", 2: "A", 3: "B", 4: "B"}
+    score = higher_serve_first(
+        first_state="ABSENT_TEAM_A", serving_team="A",
+        team_assignments=team_assignments, weights=DEFAULT_WEIGHTS,
+    )
+    assert score == -0.5  # documented small constant
+
+
+def test_higher_serve_first_absent_wrong_team_penalty() -> None:
+    team_assignments = {1: "A", 2: "A", 3: "B", 4: "B"}
+    score = higher_serve_first(
+        first_state="ABSENT_TEAM_B", serving_team="A",
+        team_assignments=team_assignments, weights=DEFAULT_WEIGHTS,
+    )
+    assert score == -DEFAULT_WEIGHTS.w_serve_first
+
+
+def test_higher_serve_first_no_serving_team_zero() -> None:
+    """If serving_team is None, no penalty (no information)."""
+    team_assignments = {1: "A", 2: "A", 3: "B", 4: "B"}
+    score = higher_serve_first(
+        first_state="P3", serving_team=None,
+        team_assignments=team_assignments, weights=DEFAULT_WEIGHTS,
+    )
+    assert score == 0.0
