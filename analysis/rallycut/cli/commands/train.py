@@ -1634,9 +1634,15 @@ def _export_action_ground_truth(
 ) -> dict[str, Any] | None:
     """Export action ground truth (serve/receive/set/attack/dig/block labels) from DB.
 
-    Queries player_tracks where action_ground_truth_json IS NOT NULL, filtered to
-    videos in the current dataset. Returns a JSON-serializable dict or None
-    if no action GT exists.
+    Queries `rally_action_ground_truth` for rallies whose video is in the
+    current dataset. Returns a JSON-serializable dict or None if no action GT
+    exists.
+
+    Per-label fields written into `action_ground_truth_json`:
+      frame, action (lowercase), trackId (snapshot id hint), playerTrackId
+      (resolved track id, may be null for UNRESOLVED rows), ballX, ballY,
+      snapshotBbox (list of 4 floats or null), snapshotTeam ('A'|'B'|null),
+      resolvedSource (enum).
 
     Args:
         video_content_hashes: Content hashes of videos in the dataset.
@@ -1646,6 +1652,11 @@ def _export_action_ground_truth(
     """
     from rallycut.evaluation.db import get_connection
 
+    action_reverse = {
+        "SERVE": "serve", "RECEIVE": "receive", "SET": "set",
+        "ATTACK": "attack", "BLOCK": "block", "DIG": "dig",
+    }
+
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -1653,16 +1664,22 @@ def _export_action_ground_truth(
                 """
                 SELECT
                     v.content_hash,
+                    r.id          AS rally_id,
                     r.start_ms,
                     r.end_ms,
-                    pt.action_ground_truth_json,
-                    v.id as video_id
-                FROM player_tracks pt
-                JOIN rallies r ON r.id = pt.rally_id
+                    v.id          AS video_id,
+                    gt.frame,
+                    gt.action,
+                    gt.snapshot_bbox_x1, gt.snapshot_bbox_y1,
+                    gt.snapshot_bbox_x2, gt.snapshot_bbox_y2,
+                    gt.snapshot_ball_x, gt.snapshot_ball_y,
+                    gt.snapshot_team, gt.snapshot_track_id,
+                    gt.resolved_track_id, gt.resolved_source
+                FROM rally_action_ground_truth gt
+                JOIN rallies r ON r.id = gt.rally_id
                 JOIN videos v ON v.id = r.video_id
-                WHERE pt.action_ground_truth_json IS NOT NULL
-                  AND v.deleted_at IS NULL
-                ORDER BY v.content_hash, r.start_ms
+                WHERE v.deleted_at IS NULL
+                ORDER BY v.content_hash, r.start_ms, gt.frame
                 """
             )
             rows = cur.fetchall()
@@ -1672,38 +1689,63 @@ def _export_action_ground_truth(
     if not rows:
         return None
 
-    rallies: list[dict[str, Any]] = []
+    # Group labels per rally.
+    by_rally: dict[str, dict[str, Any]] = {}
     video_ids_seen: set[str] = set()
 
-    for row in rows:
-        content_hash = str(row[0])
-        start_ms = row[1]
-        end_ms = row[2]
-        gt_json = row[3]
-        video_id = str(row[4])
+    for _row in rows:
+        row_any: tuple[Any, ...] = tuple(_row)
+        content_hash_s = str(row_any[0])
+        rally_id_s = str(row_any[1])
+        start_ms = row_any[2]
+        end_ms = row_any[3]
+        video_id_s = str(row_any[4])
+        frame = cast(int, row_any[5])
+        action_enum_s = str(row_any[6])
+        bx1, by1, bx2, by2 = row_any[7], row_any[8], row_any[9], row_any[10]
+        ball_x, ball_y = row_any[11], row_any[12]
+        team = row_any[13]
+        snap_tid = row_any[14]
+        resolved_tid = row_any[15]
+        resolved_source = row_any[16]
 
-        if content_hash not in video_content_hashes:
+        if content_hash_s not in video_content_hashes:
             continue
 
-        # gt_json may already be a list (psycopg auto-parses JSON)
-        gt_data = gt_json if isinstance(gt_json, (dict, list)) else json.loads(str(gt_json))
-
-        rallies.append({
-            "video_content_hash": content_hash,
+        bundle = by_rally.setdefault(rally_id_s, {
+            "video_content_hash": content_hash_s,
             "rally_start_ms": start_ms,
             "rally_end_ms": end_ms,
-            "action_ground_truth_json": gt_data,
+            "action_ground_truth_json": [],
         })
+        video_ids_seen.add(video_id_s)
 
-        video_ids_seen.add(video_id)
+        bbox: list[float] | None
+        if bx1 is not None and by1 is not None and bx2 is not None and by2 is not None:
+            bbox = [float(bx1), float(by1), float(bx2), float(by2)]
+        else:
+            bbox = None
 
-    if not rallies:
+        label: dict[str, Any] = {
+            "frame": frame,
+            "action": action_reverse[action_enum_s] if action_enum_s in action_reverse else action_enum_s.lower(),
+            "trackId": cast(int, snap_tid) if snap_tid is not None else None,
+            "playerTrackId": cast(int, resolved_tid) if resolved_tid is not None else None,
+            "ballX": float(ball_x) if ball_x is not None else None,
+            "ballY": float(ball_y) if ball_y is not None else None,
+            "snapshotBbox": bbox,
+            "snapshotTeam": team,
+            "resolvedSource": resolved_source,
+        }
+        bundle["action_ground_truth_json"].append(label)
+
+    if not by_rally:
         return None
 
     return {
-        "rallies": rallies,
+        "rallies": list(by_rally.values()),
         "stats": {
-            "total_rallies_with_action_gt": len(rallies),
+            "total_rallies_with_action_gt": len(by_rally),
             "total_videos": len(video_ids_seen),
         },
     }
