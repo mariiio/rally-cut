@@ -292,10 +292,11 @@ model Rally {
   order            Int               @default(0)
   createdAt        DateTime          @default(now()) @map("created_at")
   updatedAt        DateTime          @updatedAt @map("updated_at")
-  highlightRallies HighlightRally[]
-  playerTrack      PlayerTrack?
-  video            Video             @relation(fields: [videoId], references: [id], onDelete: Cascade)
-  cameraEdits      RallyCameraEdit[]
+  highlightRallies  HighlightRally[]
+  playerTrack       PlayerTrack?
+  actionGroundTruth RallyActionGroundTruth[]
+  video             Video             @relation(fields: [videoId], references: [id], onDelete: Cascade)
+  cameraEdits       RallyCameraEdit[]
 
   @@index([videoId])
   @@index([videoId, startMs])
@@ -342,6 +343,59 @@ model PlayerTrack {
   @@index([rallyId])
   @@index([status])
   @@map("player_tracks")
+}
+
+enum ActionLabel {
+  SERVE
+  RECEIVE
+  SET
+  ATTACK
+  BLOCK
+  DIG
+}
+
+enum ResolveSource {
+  SNAPSHOT_EXACT
+  IOU_MATCH
+  NEAREST_CENTER
+  MANUAL
+  UNRESOLVED
+}
+
+enum GtTeam {
+  A
+  B
+}
+
+model RallyActionGroundTruth {
+  id              String         @id @default(uuid())
+  rallyId         String         @map("rally_id")
+  frame           Int
+  action          ActionLabel
+
+  snapshotBboxX1  Float?         @map("snapshot_bbox_x1")
+  snapshotBboxY1  Float?         @map("snapshot_bbox_y1")
+  snapshotBboxX2  Float?         @map("snapshot_bbox_x2")
+  snapshotBboxY2  Float?         @map("snapshot_bbox_y2")
+  snapshotBallX   Float?         @map("snapshot_ball_x")
+  snapshotBallY   Float?         @map("snapshot_ball_y")
+  snapshotTeam    GtTeam?        @map("snapshot_team")
+  snapshotTrackId Int?           @map("snapshot_track_id")
+
+  resolvedTrackId Int?           @map("resolved_track_id")
+  resolvedAt      DateTime?      @map("resolved_at") @db.Timestamptz(6)
+  resolvedSource  ResolveSource? @map("resolved_source")
+
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+  createdBy       String?        @map("created_by")
+
+  rally           Rally          @relation(fields: [rallyId], references: [id], onDelete: Cascade)
+
+  @@unique([rallyId, frame, action])
+  @@index([rallyId])
+  @@index([rallyId, frame])
+  @@map("rally_action_ground_truth")
 }
 
 model RallyCameraEdit {
