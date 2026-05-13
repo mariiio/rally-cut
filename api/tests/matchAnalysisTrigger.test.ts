@@ -35,9 +35,15 @@ vi.mock('../src/services/matchAnalysisService.js', async (importOriginal) => {
 // ---------------------------------------------------------------------------
 vi.mock('../src/lib/prisma.js', () => ({
   prisma: {
-    video: { findUnique: vi.fn() },
+    // runMatchAnalysis writes matchAnalysisStartedAt/Ran/Error around the
+    // run and calls consumePendingEdits (a $transaction). Stub both so the
+    // guard-unit test's real runMatchAnalysis path can fail quietly past
+    // those rather than spewing TypeError stack traces.
+    video: { findUnique: vi.fn(), update: vi.fn().mockResolvedValue({}) },
+    rally: { findMany: vi.fn().mockResolvedValue([]) },
     user: { findFirst: vi.fn(), create: vi.fn(), upsert: vi.fn() },
     anonymousIdentity: { findUnique: vi.fn(), upsert: vi.fn() },
+    $transaction: vi.fn().mockResolvedValue([]),
   },
 }));
 

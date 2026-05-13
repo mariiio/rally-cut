@@ -46,7 +46,7 @@ import {
 } from "../services/videoService.js";
 import { queueVideoProcessing } from "../services/processingService.js";
 import { trackAllRallies, getBatchTrackingStatus } from "../services/batchTrackingService.js";
-import { getMatchAnalysis, getMatchStats, runMatchAnalysis, triggerMatchAnalysis, type ProgressCallback } from "../services/matchAnalysisService.js";
+import { getMatchAnalysis, getMatchAnalysisStatus, getMatchStats, runMatchAnalysis, triggerMatchAnalysis, withMatchAnalysisLock, type ProgressCallback } from "../services/matchAnalysisService.js";
 import { runPreflightChecks, runPreviewChecks, getAnalysisPipelineStatus, savePlayerMatchingGt, getPlayerMatchingGt } from "../services/qualityService.js";
 import multer from "multer";
 
@@ -745,23 +745,36 @@ router.post(
   }),
   async (req, res, next) => {
     try {
-      const video = await prisma.video.findUnique({ where: { id: req.params.id } });
-      if (!video) { res.status(404).json({ error: 'Video not found' }); return; }
-      if (video.userId !== req.userId) { res.status(403).json({ error: 'Forbidden' }); return; }
+      const videoId = req.params.id;
+      const video = await prisma.video.findUnique({ where: { id: videoId } });
+      if (!video) throw new NotFoundError('Video', videoId);
+      if (video.userId !== req.userId) throw new ForbiddenError('You do not have access to this video');
 
-      // Stream progress via SSE
-      res.setHeader('Content-Type', 'text/event-stream');
-      res.setHeader('Cache-Control', 'no-cache');
-      res.setHeader('Connection', 'keep-alive');
-      res.flushHeaders();
+      // Acquire the lock BEFORE flushing SSE headers so a 409 can still be
+      // returned as a normal JSON response. Multi-tab race: second tab gets
+      // 409 with reason=MATCH_ANALYSIS_IN_PROGRESS and falls back to polling
+      // the status endpoint.
+      const ran = await withMatchAnalysisLock(videoId, async () => {
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders();
 
-      const onProgress: ProgressCallback = (step, index, total) => {
-        res.write(`data: ${JSON.stringify({ step, index, total })}\n\n`);
-      };
+        const onProgress: ProgressCallback = (step, index, total) => {
+          res.write(`data: ${JSON.stringify({ step, index, total })}\n\n`);
+        };
 
-      const result = await runMatchAnalysis(req.params.id, onProgress);
-      res.write(`data: ${JSON.stringify({ step: 'done', index: 6, total: 6, result })}\n\n`);
-      res.end();
+        const result = await runMatchAnalysis(videoId, onProgress);
+        res.write(`data: ${JSON.stringify({ step: 'done', index: 6, total: 6, result })}\n\n`);
+        res.end();
+        return true;
+      });
+
+      if (ran === null) {
+        throw new ConflictError('Match analysis is already running for this video', {
+          reason: 'MATCH_ANALYSIS_IN_PROGRESS',
+        });
+      }
     } catch (error) {
       next(error);
     }
@@ -782,6 +795,30 @@ router.get(
     try {
       const stats = await getMatchStats(req.params.id, req.userId!);
       res.json(stats ?? { status: 'not_available' });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /v1/videos/:id/match-analysis-status
+ * Lifecycle of the match-analysis pipeline for this video.
+ * Returns { status, startedAt, ranAt, error } — see MatchAnalysisStatus.
+ * Used by the editor to detect true completion (instead of inferring from
+ * matchStatsJson presence, which is stale across re-analyses) and to resume
+ * after page reload during a long-running run.
+ */
+router.get(
+  "/v1/videos/:id/match-analysis-status",
+  requireUser,
+  validateRequest({
+    params: z.object({ id: uuidSchema }),
+  }),
+  async (req, res, next) => {
+    try {
+      const status = await getMatchAnalysisStatus(req.params.id, req.userId!);
+      res.json(status);
     } catch (error) {
       next(error);
     }

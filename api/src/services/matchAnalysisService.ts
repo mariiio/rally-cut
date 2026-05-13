@@ -10,6 +10,7 @@
  */
 
 import { spawn } from 'child_process';
+import { randomUUID } from 'crypto';
 import fs from 'fs/promises';
 import os from 'os';
 import path from 'path';
@@ -191,6 +192,25 @@ export function isMatchAnalysisRunning(videoId: string): boolean {
 }
 
 /**
+ * Run `fn` while holding the per-video match-analysis lock. Returns null
+ * when the lock is already held (caller should respond 409 / fall back to
+ * status polling). The lock is process-local — see triggerMatchAnalysis for
+ * the multi-pod caveat.
+ */
+export async function withMatchAnalysisLock<T>(
+  videoId: string,
+  fn: () => Promise<T>,
+): Promise<T | null> {
+  if (runningVideos.has(videoId)) return null;
+  runningVideos.add(videoId);
+  try {
+    return await fn();
+  } finally {
+    runningVideos.delete(videoId);
+  }
+}
+
+/**
  * Fire-and-forget trigger. Returns true if scheduling succeeded, false if
  * a run is already in flight for this videoId (caller should respond 409).
  *
@@ -230,136 +250,167 @@ export async function runMatchAnalysis(
   const started = Date.now();
   const timings: Record<string, number> = {};
 
-  const edits = await consumePendingEdits(videoId);
-  const plan = planStages(edits);
-
-  const report = onProgress ?? (() => {});
-
-  const timed = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
-    const t0 = Date.now();
-    try { return await fn(); } finally { timings[label] = Date.now() - t0; }
-  };
-
-  // Stage 1: Validate tracked rallies — demote ball-pass false positives (always runs)
-  report('Validating tracked rallies...', 1, 6);
-  try {
-    await timed('stage1_validate', () => validateTrackedRallies(videoId));
-  } catch (valError) {
-    console.error(`[MATCH_ANALYSIS] Rally validation failed (non-fatal):`, valError);
-  }
-
   let result: MatchAnalysisResult | null = null;
+  let fatalError: string | null = null;
+  let plan: ReturnType<typeof planStages> | null = null;
 
-  if (plan.fullRerun) {
-    // Check that video has tracked rallies (required for match-players CLI)
-    const trackedRallies = await prisma.rally.findMany({
-      where: {
-        videoId,
-        status: 'CONFIRMED',
-        playerTrack: { status: 'COMPLETED' },
-      },
-      orderBy: { startMs: 'asc' },
+  try {
+    // Mark this run as in-flight. The paired matchAnalysisRanAt write in
+    // the finally block below is what flips the UI status from `processing`
+    // to `completed` / `failed`. Kept inside the try so a transient DB
+    // failure here is recorded by the finally rather than thrown to callers
+    // (the SSE route can't return a proper error after flushing headers).
+    await prisma.video.update({
+      where: { id: videoId },
+      data: { matchAnalysisStartedAt: new Date(), matchAnalysisError: null },
     });
 
-    if (trackedRallies.length < 2) {
-      console.log(`[MATCH_ANALYSIS] Skipping video ${videoId}: only ${trackedRallies.length} tracked rallies (need 2+)`);
-      return null;
+    const edits = await consumePendingEdits(videoId);
+    plan = planStages(edits);
+
+    const report = onProgress ?? (() => {});
+
+    const timed = async <T>(label: string, fn: () => Promise<T>): Promise<T> => {
+      const t0 = Date.now();
+      try { return await fn(); } finally { timings[label] = Date.now() - t0; }
+    };
+
+    // Stage 1: Validate tracked rallies — demote ball-pass false positives (always runs)
+    report('Validating tracked rallies...', 1, 6);
+    try {
+      await timed('stage1_validate', () => validateTrackedRallies(videoId));
+    } catch (valError) {
+      console.error(`[MATCH_ANALYSIS] Rally validation failed (non-fatal):`, valError);
     }
 
-    console.log(`[MATCH_ANALYSIS] Running cross-rally matching for video ${videoId} (${trackedRallies.length} rallies)`);
+    if (plan.fullRerun) {
+      // Check that video has tracked rallies (required for match-players CLI)
+      const trackedRallies = await prisma.rally.findMany({
+        where: {
+          videoId,
+          status: 'CONFIRMED',
+          playerTrack: { status: 'COMPLETED' },
+        },
+        orderBy: { startMs: 'asc' },
+      });
 
-    await fs.mkdir(TEMP_DIR, { recursive: true });
-    const outputPath = path.join(TEMP_DIR, `match_${videoId}.json`);
+      if (trackedRallies.length < 2) {
+        console.log(`[MATCH_ANALYSIS] Skipping video ${videoId}: only ${trackedRallies.length} tracked rallies (need 2+)`);
+        return null;
+      }
 
+      console.log(`[MATCH_ANALYSIS] Running cross-rally matching for video ${videoId} (${trackedRallies.length} rallies)`);
+
+      await fs.mkdir(TEMP_DIR, { recursive: true });
+      // UUID suffix so concurrent runs (multi-tab race) don't trample the same file.
+      const outputPath = path.join(TEMP_DIR, `match_${videoId}_${randomUUID()}.json`);
+
+      try {
+        // Stage 2: Match players across rallies
+        report('Matching players across rallies...', 2, 6);
+        result = await timed(
+          'stage2_match',
+          () => runMatchPlayersCli(videoId, outputPath),
+        );
+
+        // Persist to database
+        await prisma.video.update({
+          where: { id: videoId },
+          data: {
+            matchAnalysisJson: result as unknown as Prisma.InputJsonValue,
+          },
+        });
+
+        console.log(`[MATCH_ANALYSIS] Saved match analysis for video ${videoId}: ${result.numRallies} rallies matched`);
+
+        // Stage 3: Repair within-rally identity switches using match-level profiles
+        // (best-effort — don't fail the whole pipeline)
+        report('Repairing identity switches...', 3, 6);
+        try {
+          await timed('stage3_repair', () => repairIdentities(videoId));
+        } catch (repairError) {
+          console.error(`[MATCH_ANALYSIS] Identity repair failed (non-fatal):`, repairError);
+        }
+
+        // Stage 4: Remap per-rally track IDs to consistent player IDs (1-4)
+        // (best-effort — don't fail the whole pipeline)
+        report('Remapping track IDs...', 4, 6);
+        try {
+          await timed('stage4_remap', () => remapTrackIds(videoId));
+        } catch (remapError) {
+          console.error(`[MATCH_ANALYSIS] Track ID remapping failed (non-fatal):`, remapError);
+        }
+
+        // Stage 5: Re-attribute player actions using match-level team identity
+        // (best-effort — don't fail the whole pipeline)
+        report('Classifying actions...', 5, 6);
+        try {
+          await timed('stage5_reattribute', () => reattributeActions(videoId));
+        } catch (reattribError) {
+          console.error(`[MATCH_ANALYSIS] Action re-attribution failed (non-fatal):`, reattribError);
+        }
+      } catch (error) {
+        fatalError = error instanceof Error ? error.message : String(error);
+        console.error(`[MATCH_ANALYSIS] Failed for video ${videoId}:`, error);
+      } finally {
+        await fs.unlink(outputPath).catch(() => {});
+      }
+    } else {
+      // Partial rerun: only re-process changed rallies (stages 4 + 5).
+      // Pin changedRallyIds locally so the closures below don't trip the
+      // "plan is possibly null" narrowing loss.
+      const changedRallyIds = plan.changedRallyIds;
+      if (changedRallyIds.length > 0) {
+        report('Remapping changed rallies...', 4, 6);
+        try {
+          await timed('stage4_remap', () => remapTrackIds(videoId, { rallyIds: changedRallyIds }));
+        } catch (remapError) {
+          console.error(`[MATCH_ANALYSIS] Track ID remapping failed (non-fatal):`, remapError);
+        }
+
+        report('Reattributing changed rallies...', 5, 6);
+        try {
+          await timed('stage5_reattribute', () => reattributeActions(videoId, { rallyIds: changedRallyIds }));
+        } catch (reattribError) {
+          console.error(`[MATCH_ANALYSIS] Action re-attribution failed (non-fatal):`, reattribError);
+        }
+      }
+    }
+
+    // Stage 6: Compute match stats (best-effort — don't fail the whole pipeline)
+    report('Computing match stats...', 6, 6);
     try {
-      // Stage 2: Match players across rallies
-      report('Matching players across rallies...', 2, 6);
-      result = await timed(
-        'stage2_match',
-        () => runMatchPlayersCli(videoId, outputPath),
-      );
-
-      // Persist to database
+      await timed('stage6_stats', () => computeAndSaveMatchStats(videoId));
+    } catch (statsError) {
+      console.error(`[MATCH_ANALYSIS] Stats computation failed (non-fatal):`, statsError);
+    }
+  } catch (err) {
+    fatalError = err instanceof Error ? err.message : String(err);
+    console.error(`[MATCH_ANALYSIS] Unexpected failure for video ${videoId}:`, err);
+  } finally {
+    // Wrapped so a failing write here (e.g., video row deleted mid-run)
+    // doesn't mask the original error or leave the lock dangling.
+    try {
       await prisma.video.update({
         where: { id: videoId },
         data: {
-          matchAnalysisJson: result as unknown as Prisma.InputJsonValue,
+          matchAnalysisRanAt: new Date(),
+          matchAnalysisError: fatalError,
         },
       });
-
-      console.log(`[MATCH_ANALYSIS] Saved match analysis for video ${videoId}: ${result.numRallies} rallies matched`);
-
-      // Stage 3: Repair within-rally identity switches using match-level profiles
-      // (best-effort — don't fail the whole pipeline)
-      report('Repairing identity switches...', 3, 6);
-      try {
-        await timed('stage3_repair', () => repairIdentities(videoId));
-      } catch (repairError) {
-        console.error(`[MATCH_ANALYSIS] Identity repair failed (non-fatal):`, repairError);
-      }
-
-      // Stage 4: Remap per-rally track IDs to consistent player IDs (1-4)
-      // (best-effort — don't fail the whole pipeline)
-      report('Remapping track IDs...', 4, 6);
-      try {
-        await timed('stage4_remap', () => remapTrackIds(videoId));
-      } catch (remapError) {
-        console.error(`[MATCH_ANALYSIS] Track ID remapping failed (non-fatal):`, remapError);
-      }
-
-      // Stage 5: Re-attribute player actions using match-level team identity
-      // (best-effort — don't fail the whole pipeline)
-      report('Classifying actions...', 5, 6);
-      try {
-        await timed('stage5_reattribute', () => reattributeActions(videoId));
-      } catch (reattribError) {
-        console.error(`[MATCH_ANALYSIS] Action re-attribution failed (non-fatal):`, reattribError);
-      }
-    } catch (error) {
-      console.error(`[MATCH_ANALYSIS] Failed for video ${videoId}:`, error);
-      return null;
-    } finally {
-      await fs.unlink(outputPath).catch(() => {});
+    } catch (cleanupErr) {
+      console.error(`[MATCH_ANALYSIS] Failed to record completion for video ${videoId}:`, cleanupErr);
     }
-  } else {
-    // Partial rerun: only re-process changed rallies (stages 4 + 5)
-    if (plan.changedRallyIds.length > 0) {
-      report('Remapping changed rallies...', 4, 6);
-      try {
-        await timed('stage4_remap', () => remapTrackIds(videoId, { rallyIds: plan.changedRallyIds }));
-      } catch (remapError) {
-        console.error(`[MATCH_ANALYSIS] Track ID remapping failed (non-fatal):`, remapError);
-      }
 
-      report('Reattributing changed rallies...', 5, 6);
-      try {
-        await timed('stage5_reattribute', () => reattributeActions(videoId, { rallyIds: plan.changedRallyIds }));
-      } catch (reattribError) {
-        console.error(`[MATCH_ANALYSIS] Action re-attribution failed (non-fatal):`, reattribError);
-      }
-    }
+    console.log(JSON.stringify({
+      event: 'match_analysis.stage_timings',
+      videoId,
+      plan,
+      timingsMs: timings,
+      totalMs: Date.now() - started,
+      error: fatalError,
+    }));
   }
-
-  // Stage 6: Compute match stats (best-effort — don't fail the whole pipeline)
-  report('Computing match stats...', 6, 6);
-  try {
-    await timed('stage6_stats', () => computeAndSaveMatchStats(videoId));
-  } catch (statsError) {
-    console.error(`[MATCH_ANALYSIS] Stats computation failed (non-fatal):`, statsError);
-  }
-
-  await prisma.video.update({
-    where: { id: videoId },
-    data: { matchAnalysisRanAt: new Date() },
-  });
-
-  console.log(JSON.stringify({
-    event: 'match_analysis.stage_timings',
-    videoId,
-    plan,
-    timingsMs: timings,
-    totalMs: Date.now() - started,
-  }));
 
   return result;
 }
@@ -1032,6 +1083,66 @@ export async function getMatchAnalysis(
   }
 
   return (video.matchAnalysisJson as unknown as MatchAnalysisResult) ?? null;
+}
+
+/**
+ * Lifecycle status for the match-analysis pipeline, used by the editor to
+ * decide whether to keep the spinner up or show the "Analysis complete!" toast.
+ *
+ * - idle      → no run has ever been recorded
+ * - processing → matchAnalysisStartedAt > matchAnalysisRanAt (or ranAt is null)
+ * - failed    → ran ≥ started AND matchAnalysisError is set
+ * - completed → ran ≥ started AND no error
+ */
+export type MatchAnalysisStatus = 'idle' | 'processing' | 'completed' | 'failed';
+
+export interface MatchAnalysisStatusResponse {
+  status: MatchAnalysisStatus;
+  startedAt: string | null;
+  ranAt: string | null;
+  error: string | null;
+}
+
+export async function getMatchAnalysisStatus(
+  videoId: string,
+  userId: string,
+): Promise<MatchAnalysisStatusResponse> {
+  const video = await prisma.video.findUnique({
+    where: { id: videoId },
+    select: {
+      userId: true,
+      matchAnalysisStartedAt: true,
+      matchAnalysisRanAt: true,
+      matchAnalysisError: true,
+    },
+  });
+
+  if (!video) {
+    throw new NotFoundError('Video', videoId);
+  }
+  if (video.userId !== userId) {
+    throw new ForbiddenError('You do not have permission to view match analysis status for this video');
+  }
+
+  const { matchAnalysisStartedAt: startedAt, matchAnalysisRanAt: ranAt, matchAnalysisError: error } = video;
+
+  let status: MatchAnalysisStatus;
+  if (!startedAt && !ranAt) {
+    status = 'idle';
+  } else if (startedAt && (!ranAt || ranAt < startedAt)) {
+    status = 'processing';
+  } else if (error) {
+    status = 'failed';
+  } else {
+    status = 'completed';
+  }
+
+  return {
+    status,
+    startedAt: startedAt ? startedAt.toISOString() : null,
+    ranAt: ranAt ? ranAt.toISOString() : null,
+    error,
+  };
 }
 
 /**

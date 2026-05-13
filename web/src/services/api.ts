@@ -2435,17 +2435,15 @@ export async function getBatchTrackingStatus(videoId: string): Promise<BatchTrac
 }
 
 /**
- * Trigger match analysis for a video.
- * 409 means analysis is already running — treat as a no-op.
+ * Thrown by runMatchAnalysis when the server returns 409
+ * (MATCH_ANALYSIS_IN_PROGRESS — another tab/process is mid-run).
+ * Callers can catch this and fall back to polling getMatchAnalysisStatus
+ * instead of erroring the UI.
  */
-export async function triggerMatchAnalysis(videoId: string): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/trigger-match-analysis`, {
-    method: 'POST',
-    headers: getHeaders(),
-  });
-  if (!res.ok && res.status !== 409) {
-    // 409 = already running, treat as no-op (another tab or rapid re-click)
-    throw new Error(`trigger-match-analysis failed: ${res.status}`);
+export class MatchAnalysisInProgressError extends Error {
+  constructor() {
+    super('Match analysis is already running for this video');
+    this.name = 'MatchAnalysisInProgressError';
   }
 }
 
@@ -2523,6 +2521,9 @@ export async function runMatchAnalysis(
     headers: getHeaders(),
   });
 
+  if (response.status === 409) {
+    throw new MatchAnalysisInProgressError();
+  }
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
     throw new Error(error.error?.message || error.error || `Failed to run match analysis: ${response.status}`);
@@ -2551,6 +2552,30 @@ export async function runMatchAnalysis(
       }
     }
   }
+}
+
+/**
+ * Lifecycle status of the match-analysis pipeline. Used by the editor to
+ * detect true completion (instead of inferring from stats presence) and to
+ * resume after page reload while a run is still in flight.
+ */
+export interface MatchAnalysisStatus {
+  status: 'idle' | 'processing' | 'completed' | 'failed';
+  startedAt: string | null;
+  ranAt: string | null;
+  error: string | null;
+}
+
+export async function getMatchAnalysisStatus(videoId: string): Promise<MatchAnalysisStatus> {
+  const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/match-analysis-status`, {
+    method: 'GET',
+    headers: getHeaders(),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.error?.message || `Failed to get match-analysis status: ${response.status}`);
+  }
+  return response.json();
 }
 
 // ============================================================================

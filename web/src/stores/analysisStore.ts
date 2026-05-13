@@ -10,6 +10,8 @@ import {
   trackAllRallies,
   getBatchTrackingStatus,
   getMatchStatsApi,
+  getMatchAnalysisStatus,
+  MatchAnalysisInProgressError,
   type QualityAssessmentResult,
 } from '@/services/api';
 
@@ -128,7 +130,8 @@ if (staleTimers) {
 const pollTimers: Record<string, ReturnType<typeof setInterval>> = {};
 (globalThis as Record<string, unknown>)[HMR_KEY] = pollTimers;
 
-// Guard against concurrent completeAnalysis calls
+// Guard against concurrent resumeMatchAnalyzing calls (resumeIfNeeded +
+// pollTracking can race on reload).
 const completingLock = new Set<string>();
 
 // Stale-poll escape hatch: if N consecutive polls return an unrecognized status,
@@ -253,21 +256,171 @@ function armMatchAnalysisDebounce(videoId: string, set: SetFn, get: GetFn) {
     }
 
     // Staleness re-check after any catch-up work — user may have cancelled.
-    const stillCurrent = get().pipelines[videoId];
-    if (!stillCurrent || stillCurrent.phase !== 'match_analyzing') return;
+    const generation = get().pipelines[videoId]?.startedAt;
+    const isStale = () => {
+      const c = get().pipelines[videoId];
+      return !c || c.startedAt !== generation || c.phase !== 'match_analyzing';
+    };
+    if (isStale()) return;
 
-    // Match-analysis step — real failures DO error the pipeline.
-    try {
-      const { triggerMatchAnalysis } = await import('@/services/api');
-      updatePipeline({ progress: 92, stepMessage: 'Generating match stats...' });
-      await triggerMatchAnalysis(videoId);
-      await refreshMatchAnalysisCache(videoId);
-      await completeAnalysis(videoId, set, get);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Match analysis failed';
-      updatePipeline({ phase: 'error', error: message, stepMessage: 'Match analysis failed' });
-    }
+    await runMatchAnalysisWithStatusFallback(videoId, updatePipeline, isStale);
   }, MATCH_ANALYSIS_DEBOUNCE_MS);
+}
+
+/**
+ * Drive the match-analysis pipeline via the SSE endpoint (live progress +
+ * deterministic completion). On 409 (another tab already running) fall back
+ * to polling the status endpoint. On real errors, surface to the pipeline.
+ *
+ * This replaces the old triggerMatchAnalysis + stats-poll flow, which fired
+ * "done" prematurely whenever a prior run's matchStatsJson was still in the
+ * DB or whenever the 60s poll timeout expired before stage 6 finished.
+ */
+async function runMatchAnalysisWithStatusFallback(
+  videoId: string,
+  updatePipeline: PipelineUpdater,
+  isStale: () => boolean,
+): Promise<void> {
+  updatePipeline({ progress: 92, stepMessage: 'Generating match stats...' });
+
+  try {
+    const { runMatchAnalysis } = await import('@/services/api');
+    await runMatchAnalysis(videoId, (progress) => {
+      if (isStale()) return;
+      if (progress.step && progress.step !== 'done') {
+        updatePipeline({ stepMessage: progress.step });
+      }
+    });
+    if (isStale()) return;
+    await finishMatchAnalysis(videoId, updatePipeline, isStale);
+  } catch (err) {
+    if (err instanceof MatchAnalysisInProgressError) {
+      // Another tab is in-flight — poll the status endpoint for completion.
+      await pollMatchAnalysisUntilDone(videoId, updatePipeline, isStale);
+      return;
+    }
+    if (isStale()) return;
+    const message = err instanceof Error ? err.message : 'Match analysis failed';
+    updatePipeline({ phase: 'error', error: message, stepMessage: 'Match analysis failed' });
+  }
+}
+
+/**
+ * Final step after the SSE stream closes (or after the status poll reports
+ * completion): refresh caches, query final stats, surface a `done` or `error`
+ * state. Separated so the SSE-success path and the status-poll path share
+ * one finish sequence.
+ */
+async function finishMatchAnalysis(
+  videoId: string,
+  updatePipeline: PipelineUpdater,
+  isStale: () => boolean,
+): Promise<void> {
+  await refreshMatchAnalysisCache(videoId);
+  if (isStale()) return;
+
+  // Surface server-side failure (the SSE stream still closes "normally" on
+  // best-effort stage failures, so we have to ask the status endpoint).
+  try {
+    const status = await getMatchAnalysisStatus(videoId);
+    if (isStale()) return;
+    if (status.status === 'failed') {
+      updatePipeline({
+        phase: 'error',
+        error: status.error ?? 'Match analysis failed',
+        stepMessage: 'Match analysis failed',
+      });
+      return;
+    }
+  } catch (err) {
+    console.warn('[ANALYSIS] Failed to read match-analysis status post-run:', err);
+    // Non-fatal — fall through to "done" with whatever stats we have.
+  }
+
+  const pipelineStatus = await getAnalysisPipelineStatus(videoId);
+  if (isStale()) return;
+  const stats = await getMatchStatsApi(videoId);
+  if (isStale()) return;
+  const playerCount = stats?.playerStats?.length ?? 0;
+  const ralliesFound = pipelineStatus.detection.ralliesFound;
+  updatePipeline({
+    phase: 'done',
+    progress: 100,
+    stepMessage: `Analysis complete! ${ralliesFound} rallies, ${playerCount} players`,
+    ralliesFound,
+    playerCount,
+  });
+}
+
+/**
+ * Poll the match-analysis status endpoint until the server reports
+ * `completed` or `failed`. Used by:
+ *   - 409 fallback in armMatchAnalysisDebounce (another tab is running)
+ *   - resumeIfNeeded when reload lands in the persisted `match_analyzing`
+ *     phase (the original SSE stream is gone but the work continues)
+ */
+const STATUS_POLL_INTERVAL_MS = 2_000;
+const STATUS_POLL_TIMEOUT_MS = 5 * 60 * 1000;
+
+/**
+ * Wait for the server to report match-analysis completion without updating
+ * any pipeline state. Used by `runReanalysis` when it gets 409 (another flow
+ * is running) — we just need to wait for that other flow to finish before
+ * refreshing local caches.
+ */
+async function waitForMatchAnalysisCompletion(videoId: string): Promise<void> {
+  const start = Date.now();
+  while (Date.now() - start < STATUS_POLL_TIMEOUT_MS) {
+    await new Promise((r) => setTimeout(r, STATUS_POLL_INTERVAL_MS));
+    try {
+      const status = await getMatchAnalysisStatus(videoId);
+      if (status.status === 'completed') return;
+      if (status.status === 'failed') {
+        throw new Error(status.error ?? 'Match analysis failed');
+      }
+    } catch (err) {
+      if (err instanceof Error && /Match analysis failed/.test(err.message)) throw err;
+      // Network blip — keep polling.
+    }
+  }
+  throw new Error('Match analysis timed out');
+}
+
+async function pollMatchAnalysisUntilDone(
+  videoId: string,
+  updatePipeline: PipelineUpdater,
+  isStale: () => boolean,
+): Promise<void> {
+  updatePipeline({ stepMessage: 'Waiting for match analysis to finish...' });
+  const start = Date.now();
+  while (Date.now() - start < STATUS_POLL_TIMEOUT_MS) {
+    await new Promise((r) => setTimeout(r, STATUS_POLL_INTERVAL_MS));
+    if (isStale()) return;
+    try {
+      const status = await getMatchAnalysisStatus(videoId);
+      if (isStale()) return;
+      if (status.status === 'completed') {
+        await finishMatchAnalysis(videoId, updatePipeline, isStale);
+        return;
+      }
+      if (status.status === 'failed') {
+        updatePipeline({
+          phase: 'error',
+          error: status.error ?? 'Match analysis failed',
+          stepMessage: 'Match analysis failed',
+        });
+        return;
+      }
+    } catch (err) {
+      console.warn('[ANALYSIS] match-analysis-status poll failed:', err);
+      // Retry on next tick
+    }
+  }
+  updatePipeline({
+    phase: 'error',
+    error: 'Match analysis timed out',
+    stepMessage: 'Match analysis timed out',
+  });
 }
 
 /**
@@ -276,7 +429,7 @@ function armMatchAnalysisDebounce(videoId: string, set: SetFn, get: GetFn) {
  * pre-rerun cache, then dispatch `match-analysis-updated` so
  * any other component-local caches (e.g. `matchStats` in VideoPlayer /
  * MatchStatsPanel, confidence badges in RallyList) also refresh. Without
- * this, every successful triggerMatchAnalysis silently leaves the UI
+ * this, every successful match-analysis run silently leaves the UI
  * showing the previous run's data — the symptom that flipped GT badges
  * across re-runs.
  */
@@ -393,7 +546,7 @@ export const useAnalysisStore = create<AnalysisState>()(
         // Delegate the API call + UI batch-status + per-rally auto-load to
         // playerTrackingStore so the Timeline's `isBatchActive` chip stays
         // driven by the same source as the existing flow. analysisStore
-        // owns the post-tracking debounce → catch-up → triggerMatchAnalysis
+        // owns the post-tracking debounce → catch-up → SSE match-analysis
         // → refreshMatchAnalysisCache chain, kicked off by pollTracking.
         clearPollTimer(videoId);
         clearMatchAnalysisDebounce(videoId);
@@ -423,9 +576,20 @@ export const useAnalysisStore = create<AnalysisState>()(
         // Light path — match-analysis only, then refresh caches. Streams
         // progress via the existing /run-match-analysis SSE endpoint.
         const { runMatchAnalysis } = await import('@/services/api');
-        await runMatchAnalysis(videoId, (progress) => {
-          if (progress.step && progress.step !== 'done') onProgress?.(progress.step);
-        });
+        try {
+          await runMatchAnalysis(videoId, (progress) => {
+            if (progress.step && progress.step !== 'done') onProgress?.(progress.step);
+          });
+        } catch (err) {
+          if (err instanceof MatchAnalysisInProgressError) {
+            // Another flow (auto-trigger after tracking, or another tab) is
+            // running. Wait for it instead of erroring the Re-analyze action.
+            onProgress?.('Waiting for in-flight analysis to finish...');
+            await waitForMatchAnalysisCompletion(videoId);
+          } else {
+            throw err;
+          }
+        }
         await refreshMatchAnalysisCache(videoId);
       },
 
@@ -493,7 +657,7 @@ export const useAnalysisStore = create<AnalysisState>()(
           } else if (phase === 'ready_tracking') {
             await resumeTracking(videoId, set, get, updatePipeline, isStale);
           } else if (phase === 'match_analyzing') {
-            if (!isStale()) await completeAnalysis(videoId, set, get);
+            if (!isStale()) await resumeMatchAnalyzing(videoId, set, get);
           }
           return;
         }
@@ -707,12 +871,16 @@ function pollTracking(videoId: string, set: SetFn, get: GetFn) {
   }, POLL_INTERVAL_MS);
 }
 
-async function completeAnalysis(videoId: string, set: SetFn, get: GetFn) {
+/**
+ * Drive a match-analyzing pipeline to its terminal state on page reload.
+ * The original SSE stream is gone (browser navigation killed it) but the
+ * server-side work continues; poll the status endpoint until done.
+ */
+async function resumeMatchAnalyzing(videoId: string, set: SetFn, get: GetFn) {
   // Prevent concurrent calls (resumeIfNeeded + pollTracking can race)
   if (completingLock.has(videoId)) return;
   completingLock.add(videoId);
 
-  // Capture generation to detect pipeline restarts during async work
   const generation = get().pipelines[videoId]?.startedAt;
   const isStale = () => {
     const current = get().pipelines[videoId];
@@ -724,53 +892,7 @@ async function completeAnalysis(videoId: string, set: SetFn, get: GetFn) {
   };
 
   try {
-    // Match analysis is now fire-and-forget on the server (Task 3 removed the
-    // synchronous webhook call). Poll until stats appear or we time out.
-    const MATCH_ANALYSIS_TIMEOUT_MS = 60_000;
-    const STATS_POLL_INTERVAL_MS = 2_000;
-    const start = Date.now();
-
-    while (Date.now() - start < MATCH_ANALYSIS_TIMEOUT_MS) {
-      await new Promise((r) => setTimeout(r, STATS_POLL_INTERVAL_MS));
-      if (isStale()) return;
-
-      const stats = await getMatchStatsApi(videoId);
-      if (isStale()) return;
-
-      const playerCount = stats?.playerStats?.length ?? 0;
-      if (playerCount > 0) {
-        const status = await getAnalysisPipelineStatus(videoId);
-        if (isStale()) return;
-        const ralliesFound = status.detection.ralliesFound;
-        updatePipeline({
-          phase: 'done',
-          progress: 100,
-          stepMessage: `Analysis complete! ${ralliesFound} rallies, ${playerCount} players`,
-          ralliesFound,
-          playerCount,
-        });
-        return;
-      }
-    }
-
-    // Timed out — stats never materialized. Fall back to "done" with whatever we have.
-    const status = await getAnalysisPipelineStatus(videoId);
-    if (isStale()) return;
-    const stats = await getMatchStatsApi(videoId);
-    if (isStale()) return;
-    const playerCount = stats?.playerStats?.length ?? 0;
-    const ralliesFound = status.detection.ralliesFound;
-    updatePipeline({
-      phase: 'done',
-      progress: 100,
-      stepMessage: `Analysis complete! ${ralliesFound} rallies, ${playerCount} players`,
-      ralliesFound,
-      playerCount,
-    });
-
-  } catch {
-    // Stats failed but tracking is done — still mark as done
-    updatePipeline({ phase: 'done', progress: 100, stepMessage: 'Analysis complete!' });
+    await pollMatchAnalysisUntilDone(videoId, updatePipeline, isStale);
   } finally {
     completingLock.delete(videoId);
   }

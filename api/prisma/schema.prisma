@@ -236,7 +236,9 @@ model Video {
   /// canonical pid display when present.
   canonicalPidMapJson   Json?                 @map("canonical_pid_map_json")
   pendingAnalysisEditsJson Json?             @map("pending_analysis_edits_json")
+  matchAnalysisStartedAt   DateTime?         @map("match_analysis_started_at")
   matchAnalysisRanAt       DateTime?         @map("match_analysis_ran_at")
+  matchAnalysisError       String?           @map("match_analysis_error")
   matchStatsJson        Json?                 @map("match_stats_json")
   playerMatchingGtJson  Json?                 @map("player_matching_gt_json")
   rallies               Rally[]
