@@ -43,6 +43,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# ACTION_PIPELINE_VERSION:
+#  - v0: 2026-05-13 — sentinel for backfilled rows (never written by code).
+#  - v1: 2026-05-13 — initial release of pipeline-version stamping. Bump
+#          on any change that affects RallyActions output: classify_rally,
+#          repair_action_sequence, viterbi_decode_actions, reattribute_players,
+#          assign_court_side_from_teams, propagate_court_side, the
+#          synthetic-serve placement helpers, or any classifier dependency
+#          that materially changes the serialized output.
+ACTION_PIPELINE_VERSION = "v1"
+
 # Cached default action type classifier (loaded once from disk on first use)
 _default_action_classifier_cache: dict[str, ActionTypeClassifier | None] = {}
 

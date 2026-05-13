@@ -35,6 +35,15 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# CONTACT_PIPELINE_VERSION:
+#  - v0: 2026-05-13 — sentinel for backfilled rows (never written by code).
+#  - v1: 2026-05-13 — initial release. Bump on any change that affects
+#          ContactSequence output: detect_contacts, the candidate gates,
+#          seq-anchored rescue, deduplication, _resolve_court_side, the
+#          GBM classifier wiring, or any helper that changes the
+#          serialized output.
+CONTACT_PIPELINE_VERSION = "v1"
+
 # Minimum confidence to treat a ball position as a real detection.
 # Ball detector confidence is bimodal: either 0.0 (no detection) or >=0.3 (confident).
 _CONFIDENCE_THRESHOLD = 0.3
