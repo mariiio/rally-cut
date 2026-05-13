@@ -3714,6 +3714,7 @@ def classify_rally_actions(
                 sequence_probs=sequence_probs,
                 first_action_frame=faf,
                 first_action_serve_prob=first_action_serve_prob,
+                first_action_classifier_confidence=first_action.confidence,
                 rally_start_frame=contact_sequence.rally_start_frame or 0,
             )
             if peak_frame is not None:

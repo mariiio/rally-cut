@@ -10,6 +10,7 @@ import numpy as np
 
 from rallycut.actions.trajectory_features import ACTION_TYPES
 from rallycut.tracking.serve_prepend import (
+    SERVE_PREPEND_CLASSIFIER_CONF_CEIL,
     SERVE_PREPEND_FIRST_ACTION_SERVE_CEIL,
     SERVE_PREPEND_GUARD_FRAMES,
     SERVE_PREPEND_MIN_GAP,
@@ -39,6 +40,7 @@ class TestShouldPrependServe:
             sequence_probs=seq,
             first_action_frame=426,
             first_action_serve_prob=0.02,
+            first_action_classifier_confidence=0.30,
             rally_start_frame=0,
         )
         assert result == 110
@@ -48,18 +50,59 @@ class TestShouldPrependServe:
             sequence_probs=None,
             first_action_frame=200,
             first_action_serve_prob=0.05,
+            first_action_classifier_confidence=0.30,
             rally_start_frame=0,
         ) is None
 
     def test_first_action_serve_prob_too_high_returns_none(self) -> None:
-        """If first action itself looks like a confident serve, don't override."""
+        """If MS-TCN serve probability at the first action is high, don't override."""
         seq = _seq_with_serve_peak(peak_frame=50, peak_prob=0.99, length=300)
         assert should_prepend_serve(
             sequence_probs=seq,
             first_action_frame=200,
             first_action_serve_prob=SERVE_PREPEND_FIRST_ACTION_SERVE_CEIL,
+            first_action_classifier_confidence=0.30,
             rally_start_frame=0,
         ) is None
+
+    def test_high_classifier_confidence_vetoes_fire(self) -> None:
+        """If action_classifier was confident in its serve label
+        (confidence >= SERVE_PREPEND_CLASSIFIER_CONF_CEIL), the gate must
+        NOT fire even when MS-TCN serve probability is low.
+
+        The gate's semantic precondition is "first action is mis-labeled
+        as serve". Single-model proxies for mis-labeling are fragile: when
+        MS-TCN itself is wrong, the existing first_action_serve_prob check
+        under-vetoes. Requiring DUAL-SIGNAL agreement (both MS-TCN AND
+        action_classifier indicate mis-labeling) makes the gate robust.
+
+        Bug case (06f0b063 rally 8): real serve at f=94 with classifier
+        confidence 0.65 was overridden by MS-TCN's false-positive serve
+        peak at f=4 (prob >= 0.95), producing a duplicate serve.
+        """
+        seq = _seq_with_serve_peak(peak_frame=10, peak_prob=0.99, length=200)
+        assert should_prepend_serve(
+            sequence_probs=seq,
+            first_action_frame=100,
+            first_action_serve_prob=0.05,
+            first_action_classifier_confidence=SERVE_PREPEND_CLASSIFIER_CONF_CEIL,
+            rally_start_frame=0,
+        ) is None
+
+    def test_low_classifier_confidence_allows_fire(self) -> None:
+        """When BOTH MS-TCN AND action_classifier indicate the first action
+        is weakly-labeled (low MS-TCN serve prob AND low classifier
+        confidence), the gate fires normally. Confirms the new dual-signal
+        gate doesn't break the canonical TP case."""
+        seq = _seq_with_serve_peak(peak_frame=110, peak_prob=0.99, length=500)
+        result = should_prepend_serve(
+            sequence_probs=seq,
+            first_action_frame=426,
+            first_action_serve_prob=0.02,
+            first_action_classifier_confidence=SERVE_PREPEND_CLASSIFIER_CONF_CEIL - 0.01,
+            rally_start_frame=0,
+        )
+        assert result == 110
 
     def test_peak_below_floor_returns_none(self) -> None:
         seq = _seq_with_serve_peak(peak_frame=100, peak_prob=SERVE_PREPEND_PEAK_FLOOR - 0.01,
@@ -68,6 +111,7 @@ class TestShouldPrependServe:
             sequence_probs=seq,
             first_action_frame=400,
             first_action_serve_prob=0.05,
+            first_action_classifier_confidence=0.30,
             rally_start_frame=0,
         ) is None
 
@@ -78,6 +122,7 @@ class TestShouldPrependServe:
             sequence_probs=seq,
             first_action_frame=95 + SERVE_PREPEND_MIN_GAP - 1,
             first_action_serve_prob=0.05,
+            first_action_classifier_confidence=0.30,
             rally_start_frame=0,
         ) is None
 
@@ -87,6 +132,7 @@ class TestShouldPrependServe:
             sequence_probs=seq,
             first_action_frame=95 + SERVE_PREPEND_MIN_GAP,
             first_action_serve_prob=0.05,
+            first_action_classifier_confidence=0.30,
             rally_start_frame=0,
         )
         assert result == 95
@@ -98,6 +144,7 @@ class TestShouldPrependServe:
             sequence_probs=seq,
             first_action_frame=SERVE_PREPEND_GUARD_FRAMES + 5,
             first_action_serve_prob=0.05,
+            first_action_classifier_confidence=0.30,
             rally_start_frame=SERVE_PREPEND_GUARD_FRAMES + 4,
         ) is None
 
@@ -107,6 +154,7 @@ class TestShouldPrependServe:
         assert SERVE_PREPEND_PEAK_FLOOR == 0.95
         assert SERVE_PREPEND_MIN_GAP == 25
         assert SERVE_PREPEND_FIRST_ACTION_SERVE_CEIL == 0.50
+        assert SERVE_PREPEND_CLASSIFIER_CONF_CEIL == 0.50
         assert SERVE_PREPEND_GUARD_FRAMES == 15
 
 
