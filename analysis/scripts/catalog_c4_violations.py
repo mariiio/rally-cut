@@ -470,7 +470,7 @@ def main() -> int:
             )
             continue
         try:
-            pid_violations = pid_run_all(video_id=video_id)
+            pid_violations, _stale = pid_run_all(video_id=video_id)
         except Exception:
             pid_violations = []
 

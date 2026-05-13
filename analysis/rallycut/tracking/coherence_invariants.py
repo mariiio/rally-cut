@@ -276,7 +276,7 @@ def run_all(*, video_id: str) -> list[Violation]:
     Skips rallies that fail upstream PID invariants (I-1 / I-3 / I-6) to
     avoid flagging downstream effects of structural problems.
     """
-    upstream = pid_run_all(video_id=video_id)
+    upstream, _stale = pid_run_all(video_id=video_id)
     excluded_rallies: set[str] = {
         v.rally_id for v in upstream
         if v.invariant in _UPSTREAM_BLOCKER_INVARIANTS

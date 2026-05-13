@@ -22,7 +22,7 @@ def audit_pid_invariants_cmd(
     if not quiet:
         console.print(f"[dim]Running PID-invariant audit on {video_id}…[/dim]")
 
-    violations = run_all(video_id=video_id)
+    violations, _stale = run_all(video_id=video_id)
 
     if not violations:
         if not quiet:

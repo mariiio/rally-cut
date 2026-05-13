@@ -360,6 +360,8 @@ class TestRunAll:
                     "teamAssignments": {"3": "A", "7": "A", "12": "B", "15": "B"},
                 },  # actions_json
                 [{"playerTrackId": 3, "frame": 5}],  # contacts_json
+                None,  # actions_pipeline_version
+                None,  # contacts_pipeline_version
             ),
         ]
         match_analysis = {
@@ -373,7 +375,7 @@ class TestRunAll:
         conn = self._mock_conn(rallies=rallies, match_analysis=match_analysis)
 
         with patch("rallycut.tracking.pid_invariants.get_connection", return_value=conn):
-            violations = run_all(video_id="v1")
+            violations, _stale = run_all(video_id="v1")
 
         assert violations == []
 
@@ -388,6 +390,8 @@ class TestRunAll:
                     "teamAssignments": {"3": "A", "7": "A"},  # I-6: 12 missing
                 },
                 [{"playerTrackId": 88, "frame": 5}],  # I-4: 88 not in primary
+                None,  # actions_pipeline_version
+                None,  # contacts_pipeline_version
             ),
         ]
         match_analysis = {
@@ -401,7 +405,7 @@ class TestRunAll:
         conn = self._mock_conn(rallies=rallies, match_analysis=match_analysis)
 
         with patch("rallycut.tracking.pid_invariants.get_connection", return_value=conn):
-            violations = run_all(video_id="v1")
+            violations, _stale = run_all(video_id="v1")
 
         invariants_seen = {v.invariant for v in violations}
         # Expect I-1, I-2, I-3, I-4, I-5, I-6 to all fire
@@ -425,6 +429,8 @@ class TestRunAll:
                     "teamAssignments": {"3": "A", "7": "A", "12": "B", "15": "B"},
                 },
                 [{"playerTrackId": 3, "frame": 5}],
+                None,  # actions_pipeline_version
+                None,  # contacts_pipeline_version
             ),
         ]
         match_analysis = {
@@ -439,7 +445,7 @@ class TestRunAll:
         conn = self._mock_conn(rallies=rallies, match_analysis=match_analysis)
 
         with patch("rallycut.tracking.pid_invariants.get_connection", return_value=conn):
-            violations = run_all(video_id="v1")
+            violations, _stale = run_all(video_id="v1")
 
         # I-5 must NOT fire because the orchestrator accepts snake_case.
         assert all(v.invariant != "I-5" for v in violations)

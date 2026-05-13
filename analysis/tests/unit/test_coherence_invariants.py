@@ -11,7 +11,19 @@ from rallycut.tracking.coherence_invariants import (
     check_c4_no_same_player_back_to_back,
     run_all,
 )
-from rallycut.tracking.pid_invariants import Violation as PidViolation
+from rallycut.tracking.pid_invariants import StaleVersionReport, Violation as PidViolation
+
+
+def _empty_stale_report() -> StaleVersionReport:
+    return StaleVersionReport(
+        total_rallies=0,
+        skipped_stale_actions=frozenset(),
+        skipped_stale_contacts=frozenset(),
+        current_actions_version="v1",
+        current_contacts_version="v1",
+        observed_actions_versions={},
+        observed_contacts_versions={},
+    )
 
 
 def _action(frame: int, action: str, player_track_id: int) -> dict:
@@ -210,7 +222,8 @@ class TestRunAll:
         with patch(
             "rallycut.tracking.coherence_invariants.get_connection", return_value=conn
         ), patch(
-            "rallycut.tracking.coherence_invariants.pid_run_all", return_value=[]
+            "rallycut.tracking.coherence_invariants.pid_run_all",
+            return_value=([], _empty_stale_report()),
         ):
             violations = run_all(video_id="v1")
         assert violations == []
@@ -232,7 +245,8 @@ class TestRunAll:
         with patch(
             "rallycut.tracking.coherence_invariants.get_connection", return_value=conn
         ), patch(
-            "rallycut.tracking.coherence_invariants.pid_run_all", return_value=[]
+            "rallycut.tracking.coherence_invariants.pid_run_all",
+            return_value=([], _empty_stale_report()),
         ):
             violations = run_all(video_id="v1")
         invariants_seen = {v.invariant for v in violations}
@@ -263,7 +277,8 @@ class TestRunAll:
         with patch(
             "rallycut.tracking.coherence_invariants.get_connection", return_value=conn
         ), patch(
-            "rallycut.tracking.coherence_invariants.pid_run_all", return_value=upstream
+            "rallycut.tracking.coherence_invariants.pid_run_all",
+            return_value=(upstream, _empty_stale_report()),
         ):
             violations = run_all(video_id="v1")
         assert violations == []  # Skipped due to upstream I-6
@@ -289,7 +304,7 @@ class TestRunAll:
             ) as mock_get_conn,
             patch(
                 "rallycut.tracking.coherence_invariants.pid_run_all",
-                return_value=[],
+                return_value=([], _empty_stale_report()),
             ),
         ):
             mock_get_conn.return_value.__enter__.return_value = mock_conn
