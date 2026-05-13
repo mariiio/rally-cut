@@ -8,6 +8,7 @@ from rallycut.tracking.coherence_invariants import (
     check_c1_three_contact_rule,
     check_c2_alternating_possessions,
     check_c3_first_action_is_serve,
+    check_c4_no_same_player_back_to_back,
     run_all,
 )
 from rallycut.tracking.pid_invariants import Violation as PidViolation
@@ -266,3 +267,179 @@ class TestRunAll:
         ):
             violations = run_all(video_id="v1")
         assert violations == []  # Skipped due to upstream I-6
+
+
+class TestC4NoSamePlayerBackToBack:
+    """C-4: consecutive actions must be by different players.
+
+    Exception: prev action is 'block' (block→cover by same player is legal).
+    """
+
+    def test_different_players_passes(self) -> None:
+        actions = [
+            _action(100, "serve", 3),
+            _action(140, "receive", 1),
+            _action(170, "set", 2),
+            _action(200, "attack", 1),
+        ]
+        team_assignments = {"1": "B", "2": "B", "3": "A", "4": "A"}
+        result = check_c4_no_same_player_back_to_back(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert result == []
+
+    def test_same_player_consecutive_fires(self) -> None:
+        # Player 1 sets then attacks back-to-back — illegal (no block exception).
+        actions = [
+            _action(100, "serve", 3),    # A
+            _action(140, "receive", 1),  # B
+            _action(170, "set", 1),      # B (same player as prev)
+            _action(200, "attack", 2),   # B
+        ]
+        team_assignments = {"1": "B", "2": "B", "3": "A", "4": "A"}
+        result = check_c4_no_same_player_back_to_back(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert len(result) == 1
+        v = result[0]
+        assert v.invariant == "C-4"
+        assert v.rally_id == "r1"
+        assert v.payload is not None
+        assert v.payload["prev_index"] == 1
+        assert v.payload["curr_index"] == 2
+        assert v.payload["prev_frame"] == 140
+        assert v.payload["curr_frame"] == 170
+        assert v.payload["prev_action"] == "receive"
+        assert v.payload["curr_action"] == "set"
+        assert v.payload["player_id"] == 1
+
+    def test_block_exception_block_then_same_player(self) -> None:
+        # Player 4 blocks, then player 4 sets the cover — exempt.
+        actions = [
+            _action(100, "serve", 3),    # A
+            _action(140, "attack", 1),   # B (after receive/set elsewhere, simplified)
+            _action(170, "block", 4),    # A blocks
+            _action(200, "set", 4),      # A — same player as block → exempt
+        ]
+        team_assignments = {"1": "B", "2": "B", "3": "A", "4": "A"}
+        result = check_c4_no_same_player_back_to_back(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert result == []
+
+    def test_block_then_block_same_player_exempt(self) -> None:
+        # block→block by same player: prev=block exempts the pair (strict reading).
+        actions = [
+            _action(100, "attack", 1),   # B
+            _action(140, "block", 4),    # A
+            _action(170, "block", 4),    # A — exempt because prev is block
+        ]
+        team_assignments = {"1": "B", "2": "B", "4": "A"}
+        result = check_c4_no_same_player_back_to_back(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert result == []
+
+    def test_set_then_block_same_player_fires(self) -> None:
+        # curr is block but prev is NOT block → not exempt.
+        actions = [
+            _action(100, "serve", 3),    # A
+            _action(140, "set", 4),      # A
+            _action(170, "block", 4),    # A — prev=set, NOT exempt
+        ]
+        team_assignments = {"1": "B", "3": "A", "4": "A"}
+        result = check_c4_no_same_player_back_to_back(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert len(result) == 1
+        assert result[0].invariant == "C-4"
+        assert result[0].payload is not None
+        assert result[0].payload["prev_action"] == "set"
+        assert result[0].payload["curr_action"] == "block"
+
+    def test_missing_pid_skips(self) -> None:
+        # action[1].playerTrackId == -1 → skip the (0,1) pair check.
+        actions = [
+            _action(100, "serve", 3),
+            _action(140, "receive", -1),
+            _action(170, "set", 3),  # would fire vs action[1] if not for the -1 skip
+        ]
+        team_assignments = {"3": "A"}
+        result = check_c4_no_same_player_back_to_back(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert result == []
+
+    def test_unmapped_pid_skips(self) -> None:
+        # action[1].playerTrackId == 99 not in team_assignments → skip.
+        actions = [
+            _action(100, "serve", 3),
+            _action(140, "receive", 99),
+            _action(170, "set", 99),
+        ]
+        team_assignments = {"3": "A"}
+        result = check_c4_no_same_player_back_to_back(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert result == []
+
+    def test_cascade_three_same_player_fires_twice(self) -> None:
+        # X → X → X with no block prev → pair (0,1) and pair (1,2) both fire.
+        actions = [
+            _action(100, "receive", 1),
+            _action(140, "set", 1),
+            _action(170, "attack", 1),
+        ]
+        team_assignments = {"1": "B"}
+        result = check_c4_no_same_player_back_to_back(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert len(result) == 2
+        assert all(v.invariant == "C-4" for v in result)
+        assert result[0].payload["prev_index"] == 0
+        assert result[0].payload["curr_index"] == 1
+        assert result[1].payload["prev_index"] == 1
+        assert result[1].payload["curr_index"] == 2
+
+    def test_cascade_with_middle_block_one_violation(self) -> None:
+        # X(non-block) → X(block) → X — only (0,1) fires; (1,2) exempt because prev=block.
+        actions = [
+            _action(100, "set", 4),
+            _action(140, "block", 4),   # (0,1): prev=set, NOT exempt → fires
+            _action(170, "dig", 4),     # (1,2): prev=block → exempt
+        ]
+        team_assignments = {"4": "A"}
+        result = check_c4_no_same_player_back_to_back(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert len(result) == 1
+        assert result[0].payload["prev_index"] == 0
+        assert result[0].payload["curr_index"] == 1
+
+    def test_zero_actions_skips(self) -> None:
+        result = check_c4_no_same_player_back_to_back(
+            rally_id="r1", actions=[], team_assignments={},
+        )
+        assert result == []
+
+    def test_one_action_skips(self) -> None:
+        actions = [_action(100, "serve", 1)]
+        result = check_c4_no_same_player_back_to_back(
+            rally_id="r1", actions=actions, team_assignments={"1": "A"},
+        )
+        assert result == []
+
+    def test_defensive_sort_by_frame(self) -> None:
+        # DB returns out-of-order actions; detector must sort first.
+        actions = [
+            _action(170, "set", 1),
+            _action(140, "receive", 1),  # same player as the "later" action
+            _action(100, "serve", 3),
+        ]
+        team_assignments = {"1": "B", "3": "A"}
+        result = check_c4_no_same_player_back_to_back(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert len(result) == 1
+        assert result[0].payload["prev_frame"] == 140
+        assert result[0].payload["curr_frame"] == 170
