@@ -845,7 +845,13 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
           // Cast: optimistic entries created via addActionLabel carry the raw
           // input fields directly under the ActionGroundTruthLabel type via
           // the cast in addActionLabel.
-          trackId: (l as unknown as ActionGroundTruthInput).trackId ?? l.resolvedTrackId ?? undefined,
+          // Fall through to snapshotTrackId last — protects re-saves from
+          // erasing the user's original choice when the resolver couldn't
+          // attach the label to current tracking.
+          trackId: (l as unknown as ActionGroundTruthInput).trackId
+                 ?? l.resolvedTrackId
+                 ?? l.snapshotTrackId
+                 ?? undefined,
           ballX: (l as unknown as ActionGroundTruthInput).ballX ?? l.snapshotBallX ?? undefined,
           ballY: (l as unknown as ActionGroundTruthInput).ballY ?? l.snapshotBallY ?? undefined,
         }));

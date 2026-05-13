@@ -276,11 +276,16 @@ export async function saveActionGroundTruth(
           snapshotBallX,
           snapshotBallY,
           snapshotTeam,
-          snapshotTrackId: trackId,
-          snapshotReidEmbedding,
-          resolvedSource,
-          resolvedTrackId,
-          resolvedAt: resolvedSource !== 'UNRESOLVED' ? new Date() : null,
+          // Defensive: when incoming trackId is null (e.g., a re-save from
+          // a client that lost the original choice), pass `undefined` to
+          // Prisma so the existing snapshot is preserved. Only overwrite
+          // when a real value is provided. Same protection for the
+          // resolver fields.
+          snapshotTrackId: trackId !== null ? trackId : undefined,
+          snapshotReidEmbedding: snapshotReidEmbedding ?? undefined,
+          resolvedSource: resolvedSource !== 'UNRESOLVED' ? resolvedSource : undefined,
+          resolvedTrackId: resolvedTrackId !== null ? resolvedTrackId : undefined,
+          resolvedAt: resolvedSource !== 'UNRESOLVED' ? new Date() : undefined,
         },
         select: { id: true },
       });
