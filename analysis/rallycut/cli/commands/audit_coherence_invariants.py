@@ -10,8 +10,8 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
+from rallycut.cli.commands._audit_render import render_stale_header
 from rallycut.tracking.coherence_invariants import run_all
-from rallycut.tracking.pid_invariants import StaleVersionReport
 
 console = Console()
 
@@ -28,7 +28,7 @@ def audit_coherence_invariants_cmd(
 
     violations, stale = run_all(video_id=video_id)
 
-    _render_stale_header(stale)
+    render_stale_header(console, stale)
 
     if not violations:
         if not quiet:
@@ -52,30 +52,3 @@ def audit_coherence_invariants_cmd(
     )
 
     raise typer.Exit(code=1 if n_errors else 0)
-
-
-def _render_stale_header(stale: StaleVersionReport) -> None:
-    """Print the stale-version block at the top of the report."""
-    if not stale.has_stale:
-        return
-    n_stale = len(stale.skipped_stale_actions | stale.skipped_stale_contacts)
-    console.print(
-        f"\n[yellow]⚠ {n_stale} of {stale.total_rallies} rallies skipped due to stale pipeline version[/yellow]"
-    )
-    if stale.skipped_stale_actions:
-        observed = ", ".join(
-            f"{k}:{v}" for k, v in sorted(stale.observed_actions_versions.items())
-        )
-        console.print(
-            f"  - {len(stale.skipped_stale_actions)} stale actions_pipeline_version "
-            f"(observed: {{{observed}}}; current: {stale.current_actions_version})"
-        )
-    if stale.skipped_stale_contacts:
-        observed = ", ".join(
-            f"{k}:{v}" for k, v in sorted(stale.observed_contacts_versions.items())
-        )
-        console.print(
-            f"  - {len(stale.skipped_stale_contacts)} stale contacts_pipeline_version "
-            f"(observed: {{{observed}}}; current: {stale.current_contacts_version})"
-        )
-    console.print("  Run: uv run python scripts/redetect_all_actions.py --apply\n")

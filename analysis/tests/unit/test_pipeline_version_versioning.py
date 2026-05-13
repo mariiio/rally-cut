@@ -8,9 +8,6 @@ v0 which is reserved for the migration sentinel).
 
 from __future__ import annotations
 
-import pytest
-
-
 # Past published versions. Add entries here on every constant bump to
 # prevent accidental reverts.
 LEGACY_ACTION_VERSIONS: set[str] = set()

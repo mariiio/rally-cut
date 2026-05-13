@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import cv2
 import numpy as np
@@ -253,6 +254,27 @@ def create_debug_video(
     finally:
         cap.release()
         out.release()
+
+
+def build_actions_data_dict(contact_seq: Any, rally_actions: Any) -> dict[str, Any]:
+    """Assemble the actions_data dict written into the CLI's output JSON.
+
+    Extracted from the inline body of `track_players` so the version-stamping
+    contract can be unit-tested without invoking the full CLI. The output
+    flows through `result.to_json(..., extra_data=actions_data)` to the
+    Modal/local pipeline → API saveTrackingResult.
+
+    Invariant: every successful run stamps both `contactsPipelineVersion`
+    and `actionsPipelineVersion` from the producer-module constants.
+    """
+    from rallycut.tracking.action_classifier import ACTION_PIPELINE_VERSION  # noqa: PLC0415
+    from rallycut.tracking.contact_detector import CONTACT_PIPELINE_VERSION  # noqa: PLC0415
+    return {
+        "contacts": contact_seq.to_dict(),
+        "actions": rally_actions.to_dict(),
+        "contactsPipelineVersion": CONTACT_PIPELINE_VERSION,
+        "actionsPipelineVersion": ACTION_PIPELINE_VERSION,
+    }
 
 
 def extract_segment(
@@ -1029,14 +1051,7 @@ def _run_tracking(
             calibrator,
         )
 
-        from rallycut.tracking.action_classifier import ACTION_PIPELINE_VERSION  # noqa: PLC0415
-        from rallycut.tracking.contact_detector import CONTACT_PIPELINE_VERSION  # noqa: PLC0415
-        actions_data = {
-            "contacts": contact_seq.to_dict(),
-            "actions": rally_actions.to_dict(),
-            "contactsPipelineVersion": CONTACT_PIPELINE_VERSION,
-            "actionsPipelineVersion": ACTION_PIPELINE_VERSION,
-        }
+        actions_data = build_actions_data_dict(contact_seq, rally_actions)
 
         if not quiet:
             seq = [a.action_type.value for a in rally_actions.actions]

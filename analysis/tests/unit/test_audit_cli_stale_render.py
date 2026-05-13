@@ -9,7 +9,6 @@ from typer.testing import CliRunner
 from rallycut.cli.main import app
 from rallycut.tracking.pid_invariants import StaleVersionReport, Violation
 
-
 runner = CliRunner()
 
 
