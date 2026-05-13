@@ -36,6 +36,28 @@ class Violation:
     payload: dict[str, Any] | None = None
 
 
+@dataclass(frozen=True)
+class StaleVersionReport:
+    """Per-video summary of pipeline-version staleness.
+
+    Populated by `run_all`; consumed by the audit-CLI shells to render a
+    header block warning operators that some rallies were skipped because
+    their persisted JSON predates the current pipeline-version constants.
+    """
+
+    total_rallies: int
+    skipped_stale_actions: frozenset[str]
+    skipped_stale_contacts: frozenset[str]
+    current_actions_version: str
+    current_contacts_version: str
+    observed_actions_versions: dict[str, int]
+    observed_contacts_versions: dict[str, int]
+
+    @property
+    def has_stale(self) -> bool:
+        return bool(self.skipped_stale_actions or self.skipped_stale_contacts)
+
+
 def check_i1_primary_set_size(
     *,
     rally_id: str,
@@ -290,19 +312,31 @@ def check_i8_team_partition_is_2v2(
     ]
 
 
-def run_all(*, video_id: str) -> list[Violation]:
+def run_all(*, video_id: str) -> tuple[list[Violation], StaleVersionReport]:
     """Run all 7 PID invariants against a video's persisted state.
 
     Loads rallies + player_tracks for `video_id`, plus the video's
     match_analysis_json. Calls each check_iN function and aggregates results.
+
+    Returns a tuple of (violations, stale_report). Invariants that depend on
+    versioned content are skipped when the persisted JSON version does not
+    match the current pipeline-version constant:
+      - I-3 + I-7 skipped when actions_pipeline_version is stale
+      - I-4 skipped when contacts_pipeline_version is stale
+      - I-1, I-2, I-5, I-6, I-8 always run (no versioned-content dependency)
     """
+    from rallycut.tracking.action_classifier import ACTION_PIPELINE_VERSION
+    from rallycut.tracking.contact_detector import CONTACT_PIPELINE_VERSION
+
     rally_query = """
         SELECT
             r.id AS rally_id,
             pt.primary_track_ids,
             pt.positions_json,
             pt.actions_json,
-            pt.contacts_json
+            pt.contacts_json,
+            pt.actions_pipeline_version,
+            pt.contacts_pipeline_version
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         WHERE r.video_id = %s
@@ -312,6 +346,10 @@ def run_all(*, video_id: str) -> list[Violation]:
     video_query = "SELECT match_analysis_json FROM videos WHERE id = %s"
 
     violations: list[Violation] = []
+    skipped_stale_actions: set[str] = set()
+    skipped_stale_contacts: set[str] = set()
+    observed_actions: dict[str, int] = {}
+    observed_contacts: dict[str, int] = {}
 
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -340,6 +378,26 @@ def run_all(*, video_id: str) -> list[Violation]:
         positions_json = row[2]
         actions_json = row[3]
         contacts_json = row[4]
+        actions_pv = row[5]
+        contacts_pv = row[6]
+
+        # Tally observed versions (use "null" key for absent values).
+        a_key = str(actions_pv) if actions_pv else "null"
+        c_key = str(contacts_pv) if contacts_pv else "null"
+        observed_actions[a_key] = observed_actions.get(a_key, 0) + 1
+        observed_contacts[c_key] = observed_contacts.get(c_key, 0) + 1
+
+        # A rally is "stale" if its column has a value AND that value is
+        # not the current constant. A NULL column (no content) is not
+        # stale — content-absent rallies skip the content-dependent
+        # checks for other reasons (e.g., empty actions_list).
+        actions_stale = actions_pv is not None and actions_pv != ACTION_PIPELINE_VERSION
+        contacts_stale = contacts_pv is not None and contacts_pv != CONTACT_PIPELINE_VERSION
+        if actions_stale:
+            skipped_stale_actions.add(rally_id)
+        if contacts_stale:
+            skipped_stale_contacts.add(rally_id)
+
         primary_track_ids: list[int] = []
         if isinstance(primary_raw, list):
             primary_track_ids = [int(t) for t in primary_raw]
@@ -364,20 +422,22 @@ def run_all(*, video_id: str) -> list[Violation]:
                 positions_json=positions_json if isinstance(positions_json, list) else None,
             )
         )
-        violations.extend(
-            check_i3_action_attribution(
-                rally_id=rally_id,
-                primary_track_ids=primary_track_ids,
-                actions_json=actions_list,
+        if not actions_stale:
+            violations.extend(
+                check_i3_action_attribution(
+                    rally_id=rally_id,
+                    primary_track_ids=primary_track_ids,
+                    actions_json=actions_list,
+                )
             )
-        )
-        violations.extend(
-            check_i4_contact_attribution(
-                rally_id=rally_id,
-                primary_track_ids=primary_track_ids,
-                contacts_json=contacts_json if isinstance(contacts_json, list) else None,
+        if not contacts_stale:
+            violations.extend(
+                check_i4_contact_attribution(
+                    rally_id=rally_id,
+                    primary_track_ids=primary_track_ids,
+                    contacts_json=contacts_json if isinstance(contacts_json, list) else None,
+                )
             )
-        )
         violations.extend(
             check_i5_track_to_player_total(
                 rally_id=rally_id,
@@ -402,7 +462,8 @@ def run_all(*, video_id: str) -> list[Violation]:
         # I-7 is checked using mapped_track_ids derived from actions + track_to_player.
         # An unmapped raw track_id falls through to itself, so we rebuild the same
         # mapping logic compute_match_stats uses.
-        if actions_list and track_to_player:
+        # Also skip I-7 when actions data is stale (its input is derived from actions).
+        if not actions_stale and actions_list and track_to_player:
             normalized_ttp = {int(k): int(v) for k, v in track_to_player.items()}
             mapped_track_ids: list[int] = []
             for a in actions_list:
@@ -422,4 +483,13 @@ def run_all(*, video_id: str) -> list[Violation]:
                 )
             )
 
-    return violations
+    stale_report = StaleVersionReport(
+        total_rallies=len(rally_rows),
+        skipped_stale_actions=frozenset(skipped_stale_actions),
+        skipped_stale_contacts=frozenset(skipped_stale_contacts),
+        current_actions_version=ACTION_PIPELINE_VERSION,
+        current_contacts_version=CONTACT_PIPELINE_VERSION,
+        observed_actions_versions=observed_actions,
+        observed_contacts_versions=observed_contacts,
+    )
+    return violations, stale_report
