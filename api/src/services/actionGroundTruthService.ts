@@ -178,10 +178,39 @@ export async function saveActionGroundTruth(
   const ballPositions = (pt?.ballPositionsJson ?? []) as unknown as BallPosition[];
   const teamAssignments = readTeamAssignments(pt?.actionsJson);
 
+  // Defensive dedup of the incoming batch. Same semantics as the web client
+  // (web/src/stores/playerTrackingStore.ts addActionLabel):
+  //   - Same frame, any action → keep latest only.
+  //   - Same action AND same trackId within ±SAME_ACTION_WINDOW frames → keep latest.
+  //   - Different action OR different player → both kept.
+  // "Latest" here means the later position in the incoming labels array, which
+  // is the order the client built them in. Stale state from non-client API
+  // consumers also gets caught here.
+  const SAME_ACTION_WINDOW = 3;
+  const dedupedLabels: ActionGtLabel[] = [];
+  for (const label of labels) {
+    const keepers: ActionGtLabel[] = [];
+    for (const existing of dedupedLabels) {
+      if (existing.frame === label.frame) continue; // replaced by current
+      if (existing.action !== label.action) { keepers.push(existing); continue; }
+      const within = Math.abs(existing.frame - label.frame) <= SAME_ACTION_WINDOW;
+      if (!within) { keepers.push(existing); continue; }
+      const existingTid = existing.trackId ?? null;
+      const newTid = label.trackId ?? null;
+      if (existingTid !== null && newTid !== null && existingTid !== newTid) {
+        keepers.push(existing); continue;
+      }
+      // Same action, within window, same/unknown trackId → drop earlier.
+    }
+    keepers.push(label);
+    dedupedLabels.length = 0;
+    dedupedLabels.push(...keepers);
+  }
+
   const savedLabels = await prisma.$transaction(async (tx) => {
     const results: Array<{ id: string }> = [];
 
-    for (const label of labels) {
+    for (const label of dedupedLabels) {
       const actionEnum = toActionLabel(label.action);
 
       // Frame bounds validation (only when PlayerTrack exists)

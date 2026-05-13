@@ -288,4 +288,48 @@ describe('actionGroundTruthService', () => {
     // 128 float32 = 512 bytes
     expect((row.snapshotReidEmbedding as Buffer).length).toBe(512);
   });
+
+  // ------------------------------------------------------------------
+  // Batch dedup: same action + same player within ±3 frames → keep latest
+  // ------------------------------------------------------------------
+  it('dedups same-action same-player labels within ±3 frames in the incoming batch', async () => {
+    await saveActionGroundTruth(rallyId, userId, [
+      { frame: 10, action: 'serve', trackId: 1 },
+      { frame: 12, action: 'serve', trackId: 1 },  // dropped — same action+player within 3
+    ]);
+    const rows = await prisma.rallyActionGroundTruth.findMany({ where: { rallyId } });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].frame).toBe(12);  // latest wins
+  });
+
+  // ------------------------------------------------------------------
+  // Batch dedup: same action, DIFFERENT players within ±3 frames → both kept
+  // ------------------------------------------------------------------
+  it('preserves same-action different-player labels within ±3 frames (double-block)', async () => {
+    await saveActionGroundTruth(rallyId, userId, [
+      { frame: 10, action: 'block', trackId: 1 },
+      { frame: 12, action: 'block', trackId: 2 },  // different player — kept
+    ]);
+    const rows = await prisma.rallyActionGroundTruth.findMany({
+      where: { rallyId },
+      orderBy: { frame: 'asc' },
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows.map(r => r.frame)).toEqual([10, 12]);
+  });
+
+  // ------------------------------------------------------------------
+  // Batch dedup: different actions at adjacent frames → both kept
+  // ------------------------------------------------------------------
+  it('preserves different actions at adjacent frames (attack → block sequence)', async () => {
+    await saveActionGroundTruth(rallyId, userId, [
+      { frame: 10, action: 'attack', trackId: 1 },
+      { frame: 12, action: 'block',  trackId: 1 },  // different action — kept
+    ]);
+    const rows = await prisma.rallyActionGroundTruth.findMany({
+      where: { rallyId },
+      orderBy: { frame: 'asc' },
+    });
+    expect(rows).toHaveLength(2);
+  });
 });
