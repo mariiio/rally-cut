@@ -11,6 +11,8 @@ Rules:
   C-3: First action of a rally is `serve`.
   C-4: Consecutive actions must be by different players (exception: prev
        action is `block`).
+  C-5: Cross-team transitions must follow a possession-transfer action
+       (attack / serve / block).
 
 Skip semantics: each rule has explicit skip conditions. Additionally, the
 orchestrator (`run_all`) excludes rallies that fail any I-1 / I-3 / I-6
@@ -432,6 +434,12 @@ def run_all(*, video_id: str) -> tuple[list[Violation], StaleVersionReport]:
         )
         violations.extend(
             check_c4_no_same_player_back_to_back(
+                rally_id=rally_id, actions=actions,
+                team_assignments=team_assignments,
+            )
+        )
+        violations.extend(
+            check_c5_mid_possession_crossover(
                 rally_id=rally_id, actions=actions,
                 team_assignments=team_assignments,
             )

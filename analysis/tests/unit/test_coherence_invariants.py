@@ -12,7 +12,8 @@ from rallycut.tracking.coherence_invariants import (
     check_c5_mid_possession_crossover,
     run_all,
 )
-from rallycut.tracking.pid_invariants import StaleVersionReport, Violation as PidViolation
+from rallycut.tracking.pid_invariants import StaleVersionReport
+from rallycut.tracking.pid_invariants import Violation as PidViolation
 
 
 def _empty_stale_report() -> StaleVersionReport:
@@ -314,6 +315,38 @@ class TestRunAll:
         c4 = [v for v in violations if v.invariant == "C-4"]
         assert len(c4) == 1, f"expected one C-4 from run_all, got {c4!r}"
         assert c4[0].rally_id == "rally_xyz"
+
+    def test_run_all_dispatches_c5(self) -> None:
+        # A single rally with a cross-team transition that does NOT follow a
+        # possession-transfer action (attack/serve/block) should produce at
+        # least one C-5 violation from run_all.
+        actions = [
+            {"frame": 100, "action": "receive", "playerTrackId": 1},
+            {"frame": 130, "action": "set", "playerTrackId": 3},  # C-5 pair
+        ]
+        team_assignments = {"1": "A", "2": "A", "3": "B", "4": "B"}
+        actions_json = {"actions": actions, "teamAssignments": team_assignments}
+
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_cur.fetchall.return_value = [("rally_xyz", actions_json)]
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+
+        with (
+            patch(
+                "rallycut.tracking.coherence_invariants.get_connection"
+            ) as mock_get_conn,
+            patch(
+                "rallycut.tracking.coherence_invariants.pid_run_all",
+                return_value=([], _empty_stale_report()),
+            ),
+        ):
+            mock_get_conn.return_value.__enter__.return_value = mock_conn
+            violations, _stale = run_all(video_id="vid_abc")
+
+        c5 = [v for v in violations if v.invariant == "C-5"]
+        assert len(c5) == 1, f"expected one C-5 from run_all, got {c5!r}"
+        assert c5[0].rally_id == "rally_xyz"
 
 
 class TestC4NoSamePlayerBackToBack:
