@@ -1029,9 +1029,13 @@ def _run_tracking(
             calibrator,
         )
 
+        from rallycut.tracking.action_classifier import ACTION_PIPELINE_VERSION  # noqa: PLC0415
+        from rallycut.tracking.contact_detector import CONTACT_PIPELINE_VERSION  # noqa: PLC0415
         actions_data = {
             "contacts": contact_seq.to_dict(),
             "actions": rally_actions.to_dict(),
+            "contactsPipelineVersion": CONTACT_PIPELINE_VERSION,
+            "actionsPipelineVersion": ACTION_PIPELINE_VERSION,
         }
 
         if not quiet:
