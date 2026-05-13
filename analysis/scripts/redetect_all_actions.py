@@ -23,9 +23,9 @@ from typing import Any, cast
 from rallycut.court.calibration import CourtCalibrator
 from rallycut.evaluation.db import get_connection
 from rallycut.evaluation.tracking.db import load_court_calibration
-from rallycut.tracking.action_classifier import classify_rally_actions
+from rallycut.tracking.action_classifier import ACTION_PIPELINE_VERSION, classify_rally_actions
 from rallycut.tracking.ball_tracker import BallPosition as BallPos
-from rallycut.tracking.contact_detector import detect_contacts
+from rallycut.tracking.contact_detector import CONTACT_PIPELINE_VERSION, detect_contacts
 from rallycut.tracking.match_tracker import build_match_team_assignments
 from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
 from rallycut.tracking.sequence_action_runtime import get_sequence_probs
@@ -181,8 +181,18 @@ def main() -> None:
                 with get_connection() as wconn:
                     with wconn.cursor() as wcur:
                         wcur.execute(
-                            "UPDATE player_tracks SET contacts_json = %s, actions_json = %s WHERE id = %s",
-                            (json.dumps(new_contacts_json), json.dumps(new_actions_json), pt_id),
+                            "UPDATE player_tracks SET "
+                            "contacts_json = %s, actions_json = %s, "
+                            "contacts_pipeline_version = %s, "
+                            "actions_pipeline_version = %s "
+                            "WHERE id = %s",
+                            (
+                                json.dumps(new_contacts_json),
+                                json.dumps(new_actions_json),
+                                CONTACT_PIPELINE_VERSION,
+                                ACTION_PIPELINE_VERSION,
+                                pt_id,
+                            ),
                         )
                     wconn.commit()
 
