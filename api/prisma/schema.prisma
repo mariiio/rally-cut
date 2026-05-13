@@ -333,6 +333,8 @@ model PlayerTrack {
   ballPositionsJson   Json?             @map("ball_positions_json")
   contactsJson        Json?             @map("contacts_json")
   actionsJson         Json?             @map("actions_json")
+  contactsPipelineVersion   String?           @map("contacts_pipeline_version")
+  actionsPipelineVersion    String?           @map("actions_pipeline_version")
   groundTruthJson           Json?             @map("ground_truth_json")
   groundTruthTaskId         Int?              @map("ground_truth_task_id")
   groundTruthSyncedAt       DateTime?         @map("ground_truth_synced_at") @db.Timestamptz(6)
