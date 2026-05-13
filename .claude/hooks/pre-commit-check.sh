@@ -10,7 +10,7 @@ if ! echo "$COMMAND" | grep -qE '^\s*git\s+commit'; then
   exit 0
 fi
 
-PROJECT_DIR="/Users/mario/Personal/Projects/RallyCut"
+PROJECT_DIR="${RALLYCUT_PROJECT_DIR:-/Users/mario/Personal/Projects/RallyCut}"
 ERRORS=""
 
 # List staged files (Added/Copied/Modified/Renamed)

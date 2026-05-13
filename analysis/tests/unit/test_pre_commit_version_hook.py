@@ -17,31 +17,8 @@ import os
 import subprocess
 from pathlib import Path
 
-import pytest
-
 PROJECT_DIR = Path(__file__).resolve().parents[3]
 HOOK_SCRIPT = PROJECT_DIR / ".claude" / "hooks" / "pre-commit-check.sh"
-
-
-def _run_hook(
-    *,
-    command: str,
-    staged_files: list[str],
-    file_diffs: dict[str, str],
-    monkeypatch_git: bool = True,
-) -> subprocess.CompletedProcess[str]:
-    """Run the hook with a synthetic git environment.
-
-    Uses a tmpdir as fake $PROJECT_DIR by overriding GIT_DIR / GIT_WORK_TREE
-    and stubbing `git diff --cached` via a wrapper on PATH.
-    """
-    # The hook reads $INPUT from stdin (the Claude-tool-input JSON).
-    payload = json.dumps({"tool_input": {"command": command}})
-
-    # For the version-bump block we only need: $STAGED list + git diff output.
-    # The simplest approach: set up a real git repo with the staged
-    # changes already applied, then call the hook with that as PROJECT_DIR.
-    raise NotImplementedError("see Step 2 — implement using a tmp git repo")
 
 
 def test_action_classifier_change_without_bump_is_blocked(tmp_path: Path) -> None:
@@ -146,25 +123,13 @@ def _stage(repo: Path, file: Path) -> None:
 
 
 def _invoke_hook(repo: Path, *, command: str) -> subprocess.CompletedProcess[str]:
-    """Run the hook with PROJECT_DIR pointing at a tmp repo.
-
-    The hook hard-codes PROJECT_DIR. We patch it for the test run by
-    writing a temporary hook copy that substitutes the path.
-    """
-    src = HOOK_SCRIPT.read_text()
-    patched = src.replace(
-        'PROJECT_DIR="/Users/mario/Personal/Projects/RallyCut"',
-        f'PROJECT_DIR="{repo}"',
-    )
-    tmp_hook = repo / "pre-commit-check.sh"
-    tmp_hook.write_text(patched)
-    tmp_hook.chmod(0o755)
-
+    """Run the production hook against a tmp repo via the RALLYCUT_PROJECT_DIR env override."""
     payload = json.dumps({"tool_input": {"command": command}})
     return subprocess.run(
-        ["bash", str(tmp_hook)],
+        ["bash", str(HOOK_SCRIPT)],
         input=payload,
         capture_output=True,
         text=True,
         cwd=repo,
+        env={**os.environ, "RALLYCUT_PROJECT_DIR": str(repo)},
     )
