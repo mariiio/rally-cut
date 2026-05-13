@@ -2970,6 +2970,114 @@ def _team_chain_override_allowed(
     return True
 
 
+# Volleyball-rule attribution pass (A1, 2026-05-13). Abstention bound:
+# if no same-team alt to the ball is within this normalized court
+# distance, the rule abstains rather than flip. Picked as a sanity
+# bound — values in [0.2, 0.4] produce identical panel outcomes.
+_VOLLEYBALL_RULE_ABSTAIN_BOUND = 0.3
+
+
+def _attribution_volleyball_rule_pass(
+    *,
+    actions: list[ClassifiedAction],
+    contacts: list[Contact],
+    team_assignments: dict[int, int] | None,
+) -> int:
+    """A1: enforce the volleyball-rule (consecutive contacts != same
+    player, block exception only) as a hard constraint at attribution
+    time.
+
+    For each consecutive pair (prev, curr) in frame-order:
+      - If same team AND same player AND prev.action_type != BLOCK:
+        - Find the closest same-team alt to the ball at curr.frame
+          from contact.player_candidates (excluding prev.player).
+        - If alt_distance <= _VOLLEYBALL_RULE_ABSTAIN_BOUND: flip
+          curr.player_track_id to alt.
+        - Else: set curr.attribution_uncertain = True (abstain).
+
+    Modifies ``actions`` in place. Returns count of flips (abstentions
+    don't count).
+
+    No distance cap (the 2x cap that parked Sub-2.B Phase 2 excluded
+    cases like the cascade with alt_ratios up to 36x — the alt is
+    still legitimate by the volleyball rule). No soft signal mix
+    (signals were where Sub-2.B's hand-tuning happened).
+
+    Spec: docs/superpowers/specs/2026-05-13-action-attribution-root-causes-design.md
+    """
+    if team_assignments is None or not team_assignments:
+        return 0
+    if len(actions) < 2:
+        return 0
+
+    # Index contacts by frame for O(1) lookup.
+    contact_by_frame: dict[int, Contact] = {c.frame: c for c in contacts}
+
+    # Sort actions by frame defensively (same convention as
+    # coherence_invariants); we mutate in place, so build an index
+    # of (frame -> list-position).
+    sorted_indices = sorted(
+        range(len(actions)), key=lambda i: actions[i].frame
+    )
+
+    n_flips = 0
+    for k in range(1, len(sorted_indices)):
+        prev_idx = sorted_indices[k - 1]
+        curr_idx = sorted_indices[k]
+        prev = actions[prev_idx]
+        curr = actions[curr_idx]
+
+        if prev.player_track_id < 0 or curr.player_track_id < 0:
+            continue
+        if prev.player_track_id != curr.player_track_id:
+            continue
+
+        prev_team = team_assignments.get(prev.player_track_id)
+        curr_team = team_assignments.get(curr.player_track_id)
+        if prev_team is None or curr_team is None:
+            continue
+        if prev_team != curr_team:
+            continue  # cross-team isn't a C-4 violation
+
+        # Strict block exception: only prev=block exempts the pair.
+        if prev.action_type == ActionType.BLOCK:
+            continue
+
+        contact = contact_by_frame.get(curr.frame)
+        if contact is None or not contact.player_candidates:
+            # No candidates to consider; abstain.
+            curr.attribution_uncertain = True
+            continue
+
+        # Find closest same-team alt that isn't prev.player.
+        best_tid = -1
+        best_dist = float("inf")
+        for tid, dist in contact.player_candidates:
+            if tid == curr.player_track_id:
+                continue  # current (== prev) — skip
+            if team_assignments.get(tid) != curr_team:
+                continue
+            if dist < best_dist:
+                best_tid = tid
+                best_dist = dist
+
+        if best_tid < 0 or best_dist > _VOLLEYBALL_RULE_ABSTAIN_BOUND:
+            # No plausible alt -> abstain.
+            curr.attribution_uncertain = True
+            continue
+
+        logger.info(
+            "volleyball_rule_flip frame=%d action=%s prev_action=%s "
+            "old_pid=%d new_pid=%d team=%d alt_dist=%.3f",
+            curr.frame, curr.action_type.value, prev.action_type.value,
+            curr.player_track_id, best_tid, curr_team, best_dist,
+        )
+        curr.player_track_id = best_tid
+        n_flips += 1
+
+    return n_flips
+
+
 def reattribute_players(
     actions: list[ClassifiedAction],
     contacts: list[Contact],
