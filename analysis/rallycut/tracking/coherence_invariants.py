@@ -25,7 +25,7 @@ from __future__ import annotations
 from typing import Any, cast
 
 from rallycut.evaluation.tracking.db import get_connection
-from rallycut.tracking.pid_invariants import Violation
+from rallycut.tracking.pid_invariants import StaleVersionReport, Violation
 from rallycut.tracking.pid_invariants import run_all as pid_run_all
 
 
@@ -270,13 +270,20 @@ def check_c4_no_same_player_back_to_back(
 _UPSTREAM_BLOCKER_INVARIANTS = frozenset({"I-1", "I-3", "I-6"})
 
 
-def run_all(*, video_id: str) -> list[Violation]:
+def run_all(*, video_id: str) -> tuple[list[Violation], StaleVersionReport]:
     """Run all 4 coherence invariants against a video's persisted state.
 
-    Skips rallies that fail upstream PID invariants (I-1 / I-3 / I-6) to
-    avoid flagging downstream effects of structural problems.
+    Skips rallies that:
+    - fail upstream PID invariants (I-1 / I-3 / I-6 in _UPSTREAM_BLOCKER_INVARIANTS), OR
+    - have stale `actions_pipeline_version` (coherence rules read actions_json
+      content; stale content would produce noise).
+
+    Returns:
+        (violations, stale_report) — stale_report is the same one pid_run_all
+        produces (it covers both actions + contacts; coherence only consumes
+        the actions side but the audit-CLI shell renders both for the user).
     """
-    upstream, _stale = pid_run_all(video_id=video_id)
+    upstream, pid_stale = pid_run_all(video_id=video_id)
     excluded_rallies: set[str] = {
         v.rally_id for v in upstream
         if v.invariant in _UPSTREAM_BLOCKER_INVARIANTS
@@ -303,6 +310,9 @@ def run_all(*, video_id: str) -> list[Violation]:
     for row in rally_rows:
         rally_id = cast(str, row[0])
         if rally_id in excluded_rallies:
+            continue
+        # Stale-actions skip: coherence rules (C-1..C-4) all read actions_json.
+        if rally_id in pid_stale.skipped_stale_actions:
             continue
         actions_json = row[1]
         if not isinstance(actions_json, dict):
@@ -338,4 +348,4 @@ def run_all(*, video_id: str) -> list[Violation]:
             )
         )
 
-    return violations
+    return violations, pid_stale

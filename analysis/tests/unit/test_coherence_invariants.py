@@ -225,7 +225,7 @@ class TestRunAll:
             "rallycut.tracking.coherence_invariants.pid_run_all",
             return_value=([], _empty_stale_report()),
         ):
-            violations = run_all(video_id="v1")
+            violations, _stale = run_all(video_id="v1")
         assert violations == []
 
     def test_dirty_video_aggregates_violations(self) -> None:
@@ -248,7 +248,7 @@ class TestRunAll:
             "rallycut.tracking.coherence_invariants.pid_run_all",
             return_value=([], _empty_stale_report()),
         ):
-            violations = run_all(video_id="v1")
+            violations, _stale = run_all(video_id="v1")
         invariants_seen = {v.invariant for v in violations}
         assert "C-1" in invariants_seen
         assert "C-3" in invariants_seen
@@ -280,7 +280,7 @@ class TestRunAll:
             "rallycut.tracking.coherence_invariants.pid_run_all",
             return_value=(upstream, _empty_stale_report()),
         ):
-            violations = run_all(video_id="v1")
+            violations, _stale = run_all(video_id="v1")
         assert violations == []  # Skipped due to upstream I-6
 
     def test_run_all_dispatches_c4(self) -> None:
@@ -308,7 +308,7 @@ class TestRunAll:
             ),
         ):
             mock_get_conn.return_value.__enter__.return_value = mock_conn
-            violations = run_all(video_id="vid_abc")
+            violations, _stale = run_all(video_id="vid_abc")
 
         c4 = [v for v in violations if v.invariant == "C-4"]
         assert len(c4) == 1, f"expected one C-4 from run_all, got {c4!r}"

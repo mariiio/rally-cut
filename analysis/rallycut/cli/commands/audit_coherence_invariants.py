@@ -25,7 +25,7 @@ def audit_coherence_invariants_cmd(
             f"[dim]Running coherence-invariant audit on {video_id}…[/dim]"
         )
 
-    violations = run_all(video_id=video_id)
+    violations, _stale = run_all(video_id=video_id)
 
     if not violations:
         if not quiet:

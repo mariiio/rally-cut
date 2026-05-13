@@ -462,7 +462,7 @@ def main() -> int:
     all_rows: list[dict[str, Any]] = []
     for idx, video_id in enumerate(video_ids, start=1):
         try:
-            coherence_violations = coherence_run_all(video_id=video_id)
+            coherence_violations, _stale = coherence_run_all(video_id=video_id)
         except Exception as exc:
             print(
                 f"[{idx}/{len(video_ids)}] video={video_id} ERROR: {exc}",

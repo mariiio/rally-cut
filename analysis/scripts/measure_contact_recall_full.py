@@ -118,7 +118,7 @@ def count_coherence_violations(video_ids: list[str]) -> dict[str, int]:
     counts = {"C1": 0, "C2": 0, "C3": 0}
     for i, vid in enumerate(video_ids, 1):
         try:
-            violations = run_coherence_audit(video_id=vid)
+            violations, _stale = run_coherence_audit(video_id=vid)
         except Exception as e:
             print(f"  [{i}/{len(video_ids)}] {vid}: audit error {e}", flush=True)
             continue
