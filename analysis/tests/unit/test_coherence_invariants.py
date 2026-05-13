@@ -9,6 +9,7 @@ from rallycut.tracking.coherence_invariants import (
     check_c2_alternating_possessions,
     check_c3_first_action_is_serve,
     check_c4_no_same_player_back_to_back,
+    check_c5_mid_possession_crossover,
     run_all,
 )
 from rallycut.tracking.pid_invariants import StaleVersionReport, Violation as PidViolation
@@ -489,3 +490,164 @@ class TestC4NoSamePlayerBackToBack:
         assert len(result) == 1
         assert result[0].payload["prev_frame"] == 140
         assert result[0].payload["curr_frame"] == 170
+
+
+class TestC5MidPossessionCrossover:
+    """C-5: consecutive same-team possession passes (receive/set/dig) must
+    not cross to the other team without a possession-end action between
+    them. attack, serve, block are possession-end actions that legally
+    transfer the ball.
+    """
+
+    def test_cross_team_after_attack_passes(self) -> None:
+        actions = [
+            {"frame": 100, "action": "attack", "playerTrackId": 1},
+            {"frame": 130, "action": "dig", "playerTrackId": 3},
+        ]
+        team_assignments = {"1": "A", "2": "A", "3": "B", "4": "B"}
+        v = check_c5_mid_possession_crossover(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert v == [], "attack→dig cross-team is legal; should not fire"
+
+    def test_cross_team_after_serve_passes(self) -> None:
+        actions = [
+            {"frame": 50, "action": "serve", "playerTrackId": 1},
+            {"frame": 78, "action": "receive", "playerTrackId": 3},
+        ]
+        team_assignments = {"1": "A", "2": "A", "3": "B", "4": "B"}
+        v = check_c5_mid_possession_crossover(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert v == [], "serve→receive cross-team is legal"
+
+    def test_cross_team_after_block_passes(self) -> None:
+        actions = [
+            {"frame": 100, "action": "block", "playerTrackId": 1},
+            {"frame": 110, "action": "dig", "playerTrackId": 3},
+        ]
+        team_assignments = {"1": "A", "2": "A", "3": "B", "4": "B"}
+        v = check_c5_mid_possession_crossover(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert v == [], "block→dig cross-team is legal"
+
+    def test_cross_team_after_receive_fires(self) -> None:
+        actions = [
+            {"frame": 100, "action": "receive", "playerTrackId": 1},
+            {"frame": 130, "action": "set", "playerTrackId": 3},
+        ]
+        team_assignments = {"1": "A", "2": "A", "3": "B", "4": "B"}
+        v = check_c5_mid_possession_crossover(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert len(v) == 1
+        assert v[0].invariant == "C-5"
+        assert v[0].rally_id == "r1"
+        assert "100" in v[0].detail and "130" in v[0].detail
+
+    def test_cross_team_after_set_fires(self) -> None:
+        actions = [
+            {"frame": 100, "action": "set", "playerTrackId": 1},
+            {"frame": 130, "action": "attack", "playerTrackId": 3},
+        ]
+        team_assignments = {"1": "A", "2": "A", "3": "B", "4": "B"}
+        v = check_c5_mid_possession_crossover(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert len(v) == 1
+        assert v[0].invariant == "C-5"
+
+    def test_cross_team_after_dig_fires(self) -> None:
+        actions = [
+            {"frame": 100, "action": "dig", "playerTrackId": 1},
+            {"frame": 130, "action": "set", "playerTrackId": 3},
+        ]
+        team_assignments = {"1": "A", "2": "A", "3": "B", "4": "B"}
+        v = check_c5_mid_possession_crossover(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert len(v) == 1
+        assert v[0].invariant == "C-5"
+
+    def test_same_team_transitions_no_fire(self) -> None:
+        actions = [
+            {"frame": 100, "action": "receive", "playerTrackId": 1},
+            {"frame": 130, "action": "set", "playerTrackId": 2},
+            {"frame": 160, "action": "attack", "playerTrackId": 1},
+        ]
+        team_assignments = {"1": "A", "2": "A", "3": "B", "4": "B"}
+        v = check_c5_mid_possession_crossover(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert v == [], "all same-team — no crossover"
+
+    def test_multiple_crossovers_in_rally(self) -> None:
+        actions = [
+            {"frame": 100, "action": "receive", "playerTrackId": 1},
+            {"frame": 130, "action": "set", "playerTrackId": 3},
+            {"frame": 160, "action": "dig", "playerTrackId": 1},
+        ]
+        team_assignments = {"1": "A", "2": "A", "3": "B", "4": "B"}
+        v = check_c5_mid_possession_crossover(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert len(v) == 2, "two crossovers should fire two violations"
+
+    def test_missing_pid_skips_pair(self) -> None:
+        actions = [
+            {"frame": 100, "action": "receive", "playerTrackId": None},
+            {"frame": 130, "action": "set", "playerTrackId": 3},
+        ]
+        team_assignments = {"1": "A", "2": "A", "3": "B", "4": "B"}
+        v = check_c5_mid_possession_crossover(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert v == []
+
+    def test_negative_pid_skips_pair(self) -> None:
+        actions = [
+            {"frame": 100, "action": "receive", "playerTrackId": -1},
+            {"frame": 130, "action": "set", "playerTrackId": 3},
+        ]
+        team_assignments = {"1": "A", "2": "A", "3": "B", "4": "B"}
+        v = check_c5_mid_possession_crossover(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert v == []
+
+    def test_unmapped_pid_skips_pair(self) -> None:
+        actions = [
+            {"frame": 100, "action": "receive", "playerTrackId": 99},
+            {"frame": 130, "action": "set", "playerTrackId": 3},
+        ]
+        team_assignments = {"1": "A", "2": "A", "3": "B", "4": "B"}
+        v = check_c5_mid_possession_crossover(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert v == []
+
+    def test_zero_actions_skips(self) -> None:
+        v = check_c5_mid_possession_crossover(
+            rally_id="r1", actions=[], team_assignments={"1": "A"},
+        )
+        assert v == []
+
+    def test_one_action_skips(self) -> None:
+        actions = [{"frame": 100, "action": "receive", "playerTrackId": 1}]
+        v = check_c5_mid_possession_crossover(
+            rally_id="r1", actions=actions, team_assignments={"1": "A"},
+        )
+        assert v == []
+
+    def test_defensive_sort_by_frame(self) -> None:
+        # Out-of-order input; the check should sort by frame.
+        actions = [
+            {"frame": 130, "action": "set", "playerTrackId": 3},
+            {"frame": 100, "action": "receive", "playerTrackId": 1},
+        ]
+        team_assignments = {"1": "A", "2": "A", "3": "B", "4": "B"}
+        v = check_c5_mid_possession_crossover(
+            rally_id="r1", actions=actions, team_assignments=team_assignments,
+        )
+        assert len(v) == 1

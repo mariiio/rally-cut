@@ -93,6 +93,15 @@ def check_c1_three_contact_rule(
 _POSSESSION_END_ACTIONS = {"attack", "serve"}
 
 
+# Action types that legally transfer possession to the other team. C-5
+# fires when a cross-team transition occurs without one of these as the
+# *prev* action. `block` is included here even though it's not a
+# possession-end action for C-2 (a block doesn't end your team's
+# possession if your team also blocked-cover) — for C-5, block→opponent
+# is always legal because the block itself transferred the ball.
+_C5_POSSESSION_TRANSFER_ACTIONS = frozenset({"attack", "serve", "block"})
+
+
 def check_c2_alternating_possessions(
     *,
     rally_id: str,
@@ -258,6 +267,86 @@ def check_c4_no_same_player_back_to_back(
                     "prev_action": prev_action,
                     "curr_action": curr_action,
                     "player_id": int(prev_pid),
+                },
+            )
+        )
+    return violations
+
+
+def check_c5_mid_possession_crossover(
+    *,
+    rally_id: str,
+    actions: list[dict[str, Any]],
+    team_assignments: dict[str, str],
+) -> list[Violation]:
+    """C-5: consecutive actions that cross teams must follow a
+    possession-transfer action (attack / serve / block).
+
+    Rationale: in volleyball, possession only changes legally via attack,
+    serve, or block. A team's receive / set / dig sequence stays within
+    the team. A cross-team transition without one of those three as the
+    *prev* action means either: (a) the prev action was mis-typed, or
+    (b) one of the two actions has wrong team attribution.
+
+    This complements C-2 which only catches **possession-end** alternation
+    failures (C-2 punts on mid-possession crossover by design — see the v1
+    comment in check_c2_alternating_possessions).
+
+    Skip semantics: pair is skipped if either ``playerTrackId`` is
+    missing, -1, or not in ``team_assignments``.
+    """
+    if len(actions) < 2:
+        return []
+    sorted_actions = _actions_sorted_by_frame(actions)
+
+    violations: list[Violation] = []
+    for i in range(1, len(sorted_actions)):
+        prev = sorted_actions[i - 1]
+        curr = sorted_actions[i]
+        prev_pid = prev.get("playerTrackId")
+        curr_pid = curr.get("playerTrackId")
+
+        if prev_pid is None or curr_pid is None:
+            continue
+        if prev_pid == -1 or curr_pid == -1:
+            continue
+        if str(prev_pid) not in team_assignments:
+            continue
+        if str(curr_pid) not in team_assignments:
+            continue
+
+        prev_team = team_assignments[str(prev_pid)]
+        curr_team = team_assignments[str(curr_pid)]
+        if prev_team == curr_team:
+            continue  # same-team transitions handled by C-1/C-4
+
+        prev_action = str(prev.get("action", ""))
+        if prev_action in _C5_POSSESSION_TRANSFER_ACTIONS:
+            continue  # legal crossover
+
+        curr_action = str(curr.get("action", ""))
+        violations.append(
+            Violation(
+                invariant="C-5",
+                rally_id=rally_id,
+                detail=(
+                    f"action[{i - 1}] (frame {prev.get('frame')}, "
+                    f"{prev_action}, player {prev_pid} team {prev_team}) "
+                    f"crossed to action[{i}] (frame {curr.get('frame')}, "
+                    f"{curr_action}, player {curr_pid} team {curr_team}) "
+                    f"without a possession-transfer action"
+                ),
+                payload={
+                    "prev_index": i - 1,
+                    "curr_index": i,
+                    "prev_frame": int(prev.get("frame", 0)),
+                    "curr_frame": int(curr.get("frame", 0)),
+                    "prev_action": prev_action,
+                    "curr_action": curr_action,
+                    "prev_team": prev_team,
+                    "curr_team": curr_team,
+                    "prev_player_id": int(prev_pid),
+                    "curr_player_id": int(curr_pid),
                 },
             )
         )
