@@ -1,10 +1,13 @@
 /**
  * Quality report service.
  *
- * `runUploadChecks` runs on `POST /v1/videos/:id/confirm` (fast, metadata + frame sample).
  * `runPreflightChecks` runs on `POST /v1/videos/:id/assess-quality` just before detection;
  * spawns `rallycut preflight` which performs heavier checks (court keypoints, YOLO, etc.).
- * Both write to `Video.qualityReportJson`; the banner picks the top 3.
+ * Fast upload-time checks (brightness, tilt) live in `processingService.generatePosterImmediate`
+ * and merge into `Video.qualityReportJson` via `saveUploadReport`. The banner picks the top 3.
+ *
+ * Court calibration auto-save runs as a side effect of `runPreflightChecks`
+ * via `refreshCourtAutoCalibration` (see `courtCalibration.ts`).
  */
 import { spawn } from 'child_process';
 import { createWriteStream } from 'fs';
