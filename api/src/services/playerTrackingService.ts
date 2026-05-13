@@ -195,6 +195,8 @@ function playerTrackToResult(track: PlayerTrack, extra?: { processingTimeMs?: nu
     ballPositions: (track.ballPositionsJson as BallPosition[] | null) ?? undefined,
     contacts: (track.contactsJson as ContactsData | null) ?? undefined,
     actions: (track.actionsJson as ActionsData | null) ?? undefined,
+    contactsPipelineVersion: track.contactsPipelineVersion,
+    actionsPipelineVersion: track.actionsPipelineVersion,
     qualityReport: (track.qualityReportJson as QualityReport | null) ?? undefined,
   };
 }
