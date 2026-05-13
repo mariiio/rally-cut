@@ -15,6 +15,7 @@ import typer
 from rich.console import Console
 
 from rallycut.cli.utils import handle_errors
+from rallycut.tracking.action_classifier import ACTION_PIPELINE_VERSION
 from rallycut.tracking.match_tracker import build_match_team_assignments
 
 if TYPE_CHECKING:
@@ -991,8 +992,9 @@ def reattribute_actions_cmd(
             with conn.cursor() as cur:
                 for update_pt_id, new_json in updated_tracks:
                     cur.execute(
-                        "UPDATE player_tracks SET actions_json = %s WHERE id = %s",
-                        [new_json, update_pt_id],
+                        "UPDATE player_tracks SET actions_json = %s, "
+                        "actions_pipeline_version = %s WHERE id = %s",
+                        [new_json, ACTION_PIPELINE_VERSION, update_pt_id],
                     )
                 # Mirror formation-based serving_team to the rallies table
                 # so it surfaces in the editor UI and score_accuracy eval.
