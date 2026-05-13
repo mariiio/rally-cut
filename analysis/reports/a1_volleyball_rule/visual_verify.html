@@ -1,0 +1,540 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A1 Visual Verification (10 fixes) — 2026-05-13</title>
+<style>
+  :root {
+    --bg:#0f0f10; --fg:#eaeaea; --muted:#9c9c9c; --card:#1a1a1c;
+    --border:#2a2a2e; --accent:#5b8def;
+    --ok:#2bb673; --bad:#e3534b; --warn:#f0a83b;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+         line-height:1.45; }
+  header { position:sticky; top:0; background:#000; border-bottom:1px solid #222;
+           padding:14px 22px; display:flex; gap:18px; align-items:center;
+           z-index:20; }
+  header h1 { margin:0; font-size:17px; }
+  header .status { color:var(--muted); font-size:13px; }
+  header .grow { flex:1; }
+  header button { background:#222; color:#eee; border:1px solid #333; padding:8px 14px;
+                  border-radius:6px; font-weight:600; cursor:pointer; font-size:13px; }
+  header button.primary { background:var(--accent); color:#000; border-color:transparent; }
+  header button:hover { background:#2d2d2d; }
+  header button.primary:hover { background:#789fef; }
+
+  .container { max-width:1500px; margin:0 auto; padding:24px 22px 80px; }
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px;
+          margin-bottom:26px; overflow:hidden; }
+  .card-head { padding:14px 20px; display:flex; align-items:center; gap:14px;
+               background:#161617; border-bottom:1px solid var(--border); }
+  .card-head .num { font-size:20px; font-weight:700; color:var(--accent);
+                    min-width:34px; }
+  .card-head .title { font-size:16px; font-weight:600; }
+  .card-head .pill { font-size:11px; padding:3px 9px; border-radius:12px;
+                     background:#222; color:#cfcfcf; }
+  .card-head .pill.alt { background:#332; color:#ffd599; }
+  .card-head .grow { flex:1; }
+  .card-head .verdict-status { font-size:13px; color:var(--muted); }
+  .card-head .verdict-status.ok   { color:var(--ok); font-weight:700; }
+  .card-head .verdict-status.bad  { color:var(--bad); font-weight:700; }
+  .card-head .verdict-status.warn { color:var(--warn); font-weight:700; }
+
+  .card-body { display:grid; grid-template-columns:minmax(0,2.4fr) minmax(280px,1fr);
+               gap:18px; padding:18px 20px; }
+  @media (max-width:1000px) { .card-body { grid-template-columns:1fr; } }
+
+  .frames { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  @media (max-width:760px) { .frames { grid-template-columns:1fr; } }
+  .frame { background:#000; border-radius:6px; overflow:hidden; position:relative; }
+  .frame img { display:block; width:100%; max-height:62vh; object-fit:contain;
+               background:#000; cursor:zoom-in; }
+  .frame .frame-tag { position:absolute; top:8px; left:8px;
+                      background:rgba(0,0,0,.75); color:#fff; font-size:11px;
+                      padding:2px 8px; border-radius:10px; letter-spacing:.04em; }
+  .frame.error { aspect-ratio:16/9; display:flex; align-items:center;
+                 justify-content:center; color:var(--bad); padding:20px;
+                 background:#1f0f0f; }
+
+  .sidebar { font-size:13px; }
+  .sidebar dl { margin:0; display:grid; grid-template-columns:auto 1fr;
+                column-gap:10px; row-gap:5px; }
+  .sidebar dt { color:var(--muted); }
+  .sidebar dd { margin:0; font-family:ui-monospace,Menlo,monospace;
+                font-size:12px; word-break:break-word; }
+  .sidebar .group + .group { margin-top:12px;
+                              padding-top:12px;
+                              border-top:1px dashed #2a2a2a; }
+  .sidebar .change-arrow { color:var(--warn); font-weight:700; }
+
+  .verdicts { display:grid; grid-template-columns:repeat(3,1fr); gap:8px;
+              margin-top:16px; }
+  .verdicts button { background:#1f1f22; color:#eee; border:2px solid #2a2a2e;
+                     border-radius:8px; padding:14px 8px; font-size:14px;
+                     font-weight:600; cursor:pointer; }
+  .verdicts button:hover { transform:translateY(-1px); }
+  .verdicts button .icon { display:block; font-size:20px; margin-bottom:4px; }
+  .verdicts button.ok:hover   { border-color:var(--ok);   background:#0f261c; }
+  .verdicts button.bad:hover  { border-color:var(--bad);  background:#291313; }
+  .verdicts button.warn:hover { border-color:var(--warn); background:#2a210e; }
+  .verdicts button.ok.sel   { border-color:var(--ok);   background:#0f261c; }
+  .verdicts button.bad.sel  { border-color:var(--bad);  background:#291313; }
+  .verdicts button.warn.sel { border-color:var(--warn); background:#2a210e; }
+
+  .summary-bar { position:fixed; bottom:0; left:0; right:0;
+                 background:#0a0a0a; border-top:1px solid #222;
+                 padding:14px 22px;
+                 display:flex; gap:14px; align-items:center;
+                 z-index:30; }
+  .summary-bar .pill { background:#1d1d1d; color:#ddd; padding:6px 12px;
+                       border-radius:14px; font-size:13px;
+                       font-family:ui-monospace,Menlo,monospace; }
+  .summary-bar .grow { flex:1; }
+  .summary-bar button { background:var(--accent); color:#000; border:none;
+                        padding:10px 18px; border-radius:6px; font-weight:700;
+                        font-size:14px; cursor:pointer; }
+  .summary-bar button.secondary { background:#222; color:#eee; }
+
+  #zoom-overlay { display:none; position:fixed; inset:0;
+                  background:rgba(0,0,0,.94); z-index:99;
+                  align-items:center; justify-content:center; cursor:zoom-out; }
+  #zoom-overlay.open { display:flex; }
+  #zoom-overlay img { max-width:96vw; max-height:96vh; }
+
+  #copy-modal { display:none; position:fixed; inset:0;
+                background:rgba(0,0,0,.7); z-index:99;
+                align-items:center; justify-content:center; }
+  #copy-modal.open { display:flex; }
+  #copy-modal .box { background:#1a1a1c; border:1px solid #333;
+                     border-radius:10px; padding:20px; max-width:680px;
+                     width:90%; }
+  #copy-modal pre { background:#0a0a0a; color:#eaeaea; padding:14px;
+                    border-radius:6px; font-size:14px; max-height:60vh;
+                    overflow:auto; user-select:all; }
+  #copy-modal .row { display:flex; gap:10px; margin-top:12px;
+                     justify-content:flex-end; }
+  #copy-modal button { background:#222; color:#eee; border:1px solid #333;
+                       padding:8px 16px; border-radius:6px; cursor:pointer; }
+  #copy-modal button.primary { background:var(--accent); color:#000;
+                                border-color:transparent; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>A1 Visual Verification — 10 fixes</h1>
+  <span class="status" id="status">0 / 10 verdicts</span>
+  <span class="grow"></span>
+  <button id="copy-btn" class="primary">Copy verdicts</button>
+  <button id="reset-btn">Reset</button>
+</header>
+
+<div class="container" id="container"></div>
+
+<div class="summary-bar">
+  <span class="pill" id="counts">✅ 0 &nbsp; ❌ 0 &nbsp; ⚠️ 0 &nbsp; (· 10 pending)</span>
+  <span class="grow"></span>
+  <button class="secondary" id="reset-btn-2">Reset all</button>
+  <button id="copy-btn-2">Copy verdicts</button>
+</div>
+
+<div id="zoom-overlay"><img id="zoom-img"></div>
+
+<div id="copy-modal">
+  <div class="box">
+    <h3 style="margin-top:0">Verdicts — copy and paste back to Claude</h3>
+    <pre id="copy-text"></pre>
+    <div class="row">
+      <button id="copy-clipboard" class="primary">Copy to clipboard</button>
+      <button id="copy-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<script id="rows-data" type="application/json">[
+  {
+    "idx": 1,
+    "video": "juju",
+    "rally_short": "d810943e",
+    "action": "set",
+    "alt_ratio": 2.7,
+    "pid_before": 4,
+    "pid_after": 3,
+    "a1_target": "curr",
+    "prev_action_desc": "dig @ frame 252, player p4 (unknown)",
+    "curr_action_desc": "set @ frame 345",
+    "prev_candidates": "p2(A)@0.0282, p4(B)@0.0294, p3(B)@0.0416",
+    "curr_candidates": "p4(B)@0.0122, p3(B)@0.0330, p2(A)@0.0620",
+    "curr_frame_path": "visual_verify_frames/01_juju_curr_f345.jpg",
+    "prev_frame_path": "visual_verify_frames/01_juju_prev_f252.jpg",
+    "error": null,
+    "summary_line": "CURR p4 \u2192 p3"
+  },
+  {
+    "idx": 2,
+    "video": "gigi",
+    "rally_short": "72c8229b",
+    "action": "attack",
+    "alt_ratio": 2.66,
+    "pid_before": 3,
+    "pid_after": 4,
+    "a1_target": "prev",
+    "prev_action_desc": "set @ frame 357, player p3 (B)",
+    "curr_action_desc": "attack @ frame 399",
+    "prev_candidates": "p3(B)@0.0291, p1(A)@0.0473, p2(A)@0.0496",
+    "curr_candidates": "p3(B)@0.0454, p1(A)@0.0720, p4(B)@0.1208",
+    "curr_frame_path": "visual_verify_frames/02_gigi_curr_f399.jpg",
+    "prev_frame_path": "visual_verify_frames/02_gigi_prev_f357.jpg",
+    "error": null,
+    "summary_line": "PREV p3 \u2192 p4"
+  },
+  {
+    "idx": 3,
+    "video": "caca",
+    "rally_short": "ae99ab2a",
+    "action": "set",
+    "alt_ratio": 4.58,
+    "pid_before": 1,
+    "pid_after": 2,
+    "a1_target": "curr",
+    "prev_action_desc": "receive @ frame 241, player p1 (A)",
+    "curr_action_desc": "set @ frame 353",
+    "prev_candidates": "p1(A)@0.0308, p3(B)@0.0774, p2(A)@0.1878",
+    "curr_candidates": "p1(A)@0.0332, p3(B)@0.0644, p2(A)@0.1519",
+    "curr_frame_path": "visual_verify_frames/03_caca_curr_f353.jpg",
+    "prev_frame_path": "visual_verify_frames/03_caca_prev_f241.jpg",
+    "error": null,
+    "summary_line": "CURR p1 \u2192 p2"
+  },
+  {
+    "idx": 4,
+    "video": "machi",
+    "rally_short": "f406f4b3",
+    "action": "attack",
+    "alt_ratio": 4.53,
+    "pid_before": 1,
+    "pid_after": 2,
+    "a1_target": "curr",
+    "prev_action_desc": "serve @ frame 242, player p1 (A)",
+    "curr_action_desc": "attack @ frame 333",
+    "prev_candidates": "p1(A)@0.1060, p2(A)@0.3075, p3(B)@0.3075",
+    "curr_candidates": "p1(A)@0.0301, p2(A)@0.1361, p4(B)@0.2362",
+    "curr_frame_path": "visual_verify_frames/04_machi_curr_f333.jpg",
+    "prev_frame_path": "visual_verify_frames/04_machi_prev_f242.jpg",
+    "error": null,
+    "summary_line": "CURR p1 \u2192 p2"
+  },
+  {
+    "idx": 5,
+    "video": "matchop",
+    "rally_short": "f433967e",
+    "action": "receive",
+    "alt_ratio": 5.42,
+    "pid_before": 4,
+    "pid_after": 3,
+    "a1_target": "prev",
+    "prev_action_desc": "receive @ frame 83, player p4 (A)",
+    "curr_action_desc": "receive @ frame 100",
+    "prev_candidates": "p4(A)@0.0448, p3(A)@0.1444, p2(B)@0.3561",
+    "curr_candidates": "p4(A)@0.0162, p3(A)@0.0876, p2(B)@0.2597",
+    "curr_frame_path": "visual_verify_frames/05_matchop_curr_f100.jpg",
+    "prev_frame_path": "visual_verify_frames/05_matchop_prev_f83.jpg",
+    "error": null,
+    "summary_line": "PREV p4 \u2192 p3"
+  },
+  {
+    "idx": 6,
+    "video": "lala",
+    "rally_short": "2eeb3ae6",
+    "action": "dig",
+    "alt_ratio": 8.47,
+    "pid_before": 1,
+    "pid_after": 2,
+    "a1_target": "curr",
+    "prev_action_desc": "dig @ frame 569, player p1 (B)",
+    "curr_action_desc": "dig @ frame 616",
+    "prev_candidates": "p1(B)@0.0233, p3(A)@0.0626, p2(B)@0.1407",
+    "curr_candidates": "p3(A)@0.0123, p1(B)@0.0269, p2(B)@0.1872",
+    "curr_frame_path": "visual_verify_frames/06_lala_curr_f616.jpg",
+    "prev_frame_path": "visual_verify_frames/06_lala_prev_f569.jpg",
+    "error": null,
+    "summary_line": "CURR p1 \u2192 p2"
+  },
+  {
+    "idx": 7,
+    "video": "mech",
+    "rally_short": "b0dabe43",
+    "action": "receive",
+    "alt_ratio": 19.74,
+    "pid_before": 3,
+    "pid_after": 4,
+    "a1_target": "curr",
+    "prev_action_desc": "serve @ frame 39, player p3 (A)",
+    "curr_action_desc": "receive @ frame 59",
+    "prev_candidates": "p3(A)@0.1779, p4(A)@0.3985, p1(B)@0.4606",
+    "curr_candidates": "p3(A)@0.0066, p4(A)@0.1312, p1(B)@0.1394",
+    "curr_frame_path": "visual_verify_frames/07_mech_curr_f59.jpg",
+    "prev_frame_path": "visual_verify_frames/07_mech_prev_f39.jpg",
+    "error": null,
+    "summary_line": "CURR p3 \u2192 p4"
+  },
+  {
+    "idx": 8,
+    "video": "veve",
+    "rally_short": "4c27b635",
+    "action": "dig",
+    "alt_ratio": 15.16,
+    "pid_before": 3,
+    "pid_after": 4,
+    "a1_target": "curr",
+    "prev_action_desc": "attack @ frame 265, player p3 (B)",
+    "curr_action_desc": "dig @ frame 284",
+    "prev_candidates": "p3(B)@0.0039, p2(A)@0.0626, p1(A)@0.2057",
+    "curr_candidates": "p3(B)@0.0096, p2(A)@0.0117, p4(B)@0.1453",
+    "curr_frame_path": "visual_verify_frames/08_veve_curr_f284.jpg",
+    "prev_frame_path": "visual_verify_frames/08_veve_prev_f265.jpg",
+    "error": null,
+    "summary_line": "CURR p3 \u2192 p4"
+  },
+  {
+    "idx": 9,
+    "video": "natch",
+    "rally_short": "e5e4c0b7",
+    "action": "attack",
+    "alt_ratio": 2.02,
+    "pid_before": 1,
+    "pid_after": 2,
+    "a1_target": "curr",
+    "prev_action_desc": "receive @ frame 110, player p1 (A)",
+    "curr_action_desc": "attack @ frame 214",
+    "prev_candidates": "p4(B)@0.1508, p1(A)@0.1735, p3(B)@0.1950",
+    "curr_candidates": "p1(A)@0.0759, p2(A)@0.1533, p3(B)@0.1741",
+    "curr_frame_path": "visual_verify_frames/09_natch_curr_f214.jpg",
+    "prev_frame_path": "visual_verify_frames/09_natch_prev_f110.jpg",
+    "error": null,
+    "summary_line": "CURR p1 \u2192 p2"
+  },
+  {
+    "idx": 10,
+    "video": "matttch",
+    "rally_short": "8d3205ed",
+    "action": "attack",
+    "alt_ratio": 2.41,
+    "pid_before": 3,
+    "pid_after": 4,
+    "a1_target": "prev",
+    "prev_action_desc": "attack @ frame 220, player p3 (B)",
+    "curr_action_desc": "attack @ frame 296",
+    "prev_candidates": "p3(B)@0.0250, p4(B)@0.1652, p1(A)@0.2713",
+    "curr_candidates": "p3(B)@0.0777, p4(B)@0.1874, p1(A)@0.3387",
+    "curr_frame_path": "visual_verify_frames/10_matttch_curr_f296.jpg",
+    "prev_frame_path": "visual_verify_frames/10_matttch_prev_f220.jpg",
+    "error": null,
+    "summary_line": "PREV p3 \u2192 p4"
+  }
+]</script>
+<script>
+const ROWS = JSON.parse(document.getElementById('rows-data').textContent);
+const STORAGE_KEY = 'a1_visual_verify_2026_05_13';
+
+function loadVerdicts() {
+  try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; }
+  catch (_) { return {}; }
+}
+function saveVerdicts(v) { localStorage.setItem(STORAGE_KEY, JSON.stringify(v)); }
+let verdicts = loadVerdicts();
+
+const $ = (id) => document.getElementById(id);
+
+function verdictEmoji(v) {
+  if (v === 'ok')   return '✅';
+  if (v === 'bad')  return '❌';
+  if (v === 'warn') return '⚠️';
+  return '·';
+}
+function verdictLabel(v) {
+  if (v === 'ok')   return 'A1 right';
+  if (v === 'bad')  return 'A1 wrong';
+  if (v === 'warn') return 'ambiguous';
+  return '—';
+}
+
+function renderCard(row) {
+  const v = verdicts[row.idx] || null;
+  const head = `
+    <div class="card-head">
+      <span class="num">${row.idx}</span>
+      <span class="title">${row.video} / rally ${row.rally_short} / ${row.action.toUpperCase()}</span>
+      <span class="pill alt">alt_ratio ${row.alt_ratio.toFixed(2)}×</span>
+      <span class="pill">${row.summary_line}</span>
+      <span class="grow"></span>
+      <span class="verdict-status ${v || ''}" id="status-${row.idx}">${verdictEmoji(v)} ${verdictLabel(v)}</span>
+    </div>`;
+
+  const framesHtml = row.error
+    ? `<div class="frame error">extraction failed: ${row.error}</div>`
+    : `
+      <div class="frame">
+        <span class="frame-tag">PREV (context)</span>
+        ${row.prev_frame_path
+          ? `<img src="${row.prev_frame_path}" alt="prev frame" onclick="zoomImg(this.src)">`
+          : '<div class="error">prev frame missing</div>'}
+      </div>
+      <div class="frame">
+        <span class="frame-tag">CURR (A1 contact frame)</span>
+        ${row.curr_frame_path
+          ? `<img src="${row.curr_frame_path}" alt="curr frame" onclick="zoomImg(this.src)">`
+          : '<div class="error">curr frame missing</div>'}
+      </div>`;
+
+  const sidebar = `
+    <div class="sidebar">
+      <div class="group">
+        <dl>
+          <dt>video</dt><dd>${row.video}</dd>
+          <dt>rally</dt><dd>${row.rally_short}…</dd>
+          <dt>action</dt><dd>${row.action}</dd>
+          <dt>alt ratio</dt><dd>${row.alt_ratio.toFixed(2)}×</dd>
+          <dt>A1 changed</dt><dd><span class="change-arrow">${row.a1_target.toUpperCase()}</span>: p${row.pid_before} → p${row.pid_after}</dd>
+        </dl>
+      </div>
+      <div class="group">
+        <dl>
+          <dt>prev</dt><dd>${row.prev_action_desc}</dd>
+          <dt>curr</dt><dd>${row.curr_action_desc}</dd>
+        </dl>
+      </div>
+      <div class="group">
+        <dl>
+          <dt>prev cands</dt><dd>${row.prev_candidates}</dd>
+          <dt>curr cands</dt><dd>${row.curr_candidates}</dd>
+        </dl>
+      </div>
+      <div class="verdicts" data-idx="${row.idx}">
+        <button class="ok ${v==='ok'?'sel':''}"   data-v="ok">
+          <span class="icon">✅</span>A1 right</button>
+        <button class="bad ${v==='bad'?'sel':''}" data-v="bad">
+          <span class="icon">❌</span>A1 wrong</button>
+        <button class="warn ${v==='warn'?'sel':''}" data-v="warn">
+          <span class="icon">⚠️</span>ambiguous</button>
+      </div>
+    </div>`;
+
+  return `<div class="card" id="card-${row.idx}">${head}
+    <div class="card-body">
+      <div class="frames">${framesHtml}</div>
+      ${sidebar}
+    </div></div>`;
+}
+
+function renderAll() {
+  const container = $('container');
+  container.innerHTML = ROWS.map(renderCard).join('');
+  container.querySelectorAll('.verdicts').forEach(div => {
+    const idx = +div.dataset.idx;
+    div.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => setVerdict(idx, btn.dataset.v));
+    });
+  });
+  updateStatus();
+}
+
+function setVerdict(idx, v) {
+  if (verdicts[idx] === v) {
+    delete verdicts[idx];
+  } else {
+    verdicts[idx] = v;
+  }
+  saveVerdicts(verdicts);
+  // Re-render the card row only
+  const card = ROWS.find(r => r.idx === idx);
+  const el = document.getElementById(`card-${idx}`);
+  if (el && card) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = renderCard(card);
+    el.replaceWith(tmp.firstElementChild);
+    document.querySelector(`[data-idx="${idx}"]`).querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => setVerdict(idx, btn.dataset.v));
+    });
+  }
+  updateStatus();
+}
+
+function updateStatus() {
+  const total = ROWS.length;
+  let ok=0, bad=0, warn=0;
+  for (const idx in verdicts) {
+    if (verdicts[idx] === 'ok') ok++;
+    else if (verdicts[idx] === 'bad') bad++;
+    else if (verdicts[idx] === 'warn') warn++;
+  }
+  const done = ok + bad + warn;
+  $('status').textContent = `${done} / ${total} verdicts`;
+  const pending = total - done;
+  $('counts').textContent =
+    `✅ ${ok}  ❌ ${bad}  ⚠️ ${warn}  (· ${pending} pending)`;
+}
+
+function compileVerdictString() {
+  const parts = [];
+  for (const r of ROWS) {
+    const v = verdicts[r.idx];
+    parts.push(`${r.idx}:${verdictEmoji(v)}`);
+  }
+  let line = parts.join(' ');
+  // Plus a per-fix block for context
+  let detail = ROWS.map(r => {
+    const v = verdicts[r.idx];
+    return `  ${r.idx}. ${r.video}/${r.rally_short} ${r.action} `
+         + `(${r.summary_line}, alt ${r.alt_ratio.toFixed(2)}×): `
+         + `${verdictEmoji(v)} ${verdictLabel(v)}`;
+  }).join('\n');
+  return line + '\n\n' + detail;
+}
+
+function showCopy() {
+  $('copy-text').textContent = compileVerdictString();
+  $('copy-modal').classList.add('open');
+}
+
+function hideCopy() { $('copy-modal').classList.remove('open'); }
+
+async function copyClipboard() {
+  try {
+    await navigator.clipboard.writeText($('copy-text').textContent);
+    $('copy-clipboard').textContent = 'Copied!';
+    setTimeout(() => $('copy-clipboard').textContent = 'Copy to clipboard', 1200);
+  } catch (e) {
+    alert('Clipboard copy failed; select the text manually.');
+  }
+}
+
+function zoomImg(src) {
+  $('zoom-img').src = src;
+  $('zoom-overlay').classList.add('open');
+}
+
+$('zoom-overlay').addEventListener('click', () => {
+  $('zoom-overlay').classList.remove('open');
+});
+$('copy-btn').addEventListener('click', showCopy);
+$('copy-btn-2').addEventListener('click', showCopy);
+$('copy-close').addEventListener('click', hideCopy);
+$('copy-clipboard').addEventListener('click', copyClipboard);
+$('reset-btn').addEventListener('click', () => {
+  if (confirm('Clear all verdicts?')) {
+    verdicts = {}; saveVerdicts(verdicts); renderAll();
+  }
+});
+$('reset-btn-2').addEventListener('click', () => {
+  if (confirm('Clear all verdicts?')) {
+    verdicts = {}; saveVerdicts(verdicts); renderAll();
+  }
+});
+
+renderAll();
+</script>
+</body>
+</html>
