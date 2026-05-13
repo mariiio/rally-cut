@@ -768,11 +768,43 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
       addActionLabel: (rallyId: string, label: ActionGroundTruthInput) => {
         set((state) => {
           const existing = state.actionGroundTruth[rallyId] ?? [];
-          // Replace if same frame exists, otherwise add.
+          // Dedup rules (most specific first):
+          //
+          // 1. Same frame, any action → replace. The frame is the user's
+          //    explicit unit; two presses at the same frame are a retype.
+          //
+          // 2. Same action AND same player (trackId) within a narrow window
+          //    → replace. Catches the "press 'a', step ±1 with ',' / '.',
+          //    press 'a' again" pattern that the 60fps stride-2 parity makes
+          //    common. Same-player same-action contacts physically cannot
+          //    repeat within a few frames (one player can't make two attacks
+          //    in 1-2 frames), so this is safe.
+          //
+          // 3. Distinct events (different action, different player, or far
+          //    enough apart) are ALL preserved. A double-block is two
+          //    different trackIds; this rule keeps both.
+          const SAME_ACTION_WINDOW = 3;
+          const newTrackId = (label as ActionGroundTruthInput).trackId ?? null;
+          const filtered = existing.filter(l => {
+            if (l.frame === label.frame) return false;
+            if (l.action !== label.action) return true;
+            if (Math.abs(l.frame - label.frame) > SAME_ACTION_WINDOW) return true;
+            // Same action AND within window. Only dedup if the player is the
+            // same — different players doing the same action in close
+            // succession is a legitimate double-event (e.g., double-block).
+            const existingTid =
+              (l as unknown as ActionGroundTruthInput).trackId
+              ?? l.resolvedTrackId
+              ?? l.snapshotTrackId
+              ?? null;
+            if (newTrackId !== null && existingTid !== null && newTrackId !== existingTid) {
+              return true;
+            }
+            return false;
+          });
           // The local store holds ActionGroundTruthLabel[] (full server shape) but
           // new labels are created as ActionGroundTruthInput before they're saved;
           // cast here so the optimistic list stays sortable by frame.
-          const filtered = existing.filter(l => l.frame !== label.frame);
           const updated = [...filtered, label as unknown as ActionGroundTruthLabel].sort((a, b) => a.frame - b.frame);
           return {
             actionGroundTruth: { ...state.actionGroundTruth, [rallyId]: updated },
