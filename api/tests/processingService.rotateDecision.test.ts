@@ -12,7 +12,7 @@ vi.mock('../src/config/env.js', () => ({
 }));
 
 import { describe, expect, it } from 'vitest';
-import { shouldAutoRotate } from '../src/services/processingService.js';
+import { shouldAutoRotate, shouldSkipOptimization } from '../src/services/processingService.js';
 
 describe('shouldAutoRotate', () => {
   it('fires when |tilt| > 5 and linesScored >= 3', () => {
@@ -38,5 +38,20 @@ describe('shouldAutoRotate', () => {
   });
   it('does not fire on null fields', () => {
     expect(shouldAutoRotate({})).toBe(false);
+  });
+});
+
+describe('shouldSkipOptimization', () => {
+  it('skips when neither bitrate/moov nor tilt demand a re-encode', () => {
+    expect(shouldSkipOptimization({ needsOptimization: false, wantsRotate: false })).toBe(true);
+  });
+  it('runs when bitrate/moov demand optimization (legacy path)', () => {
+    expect(shouldSkipOptimization({ needsOptimization: true, wantsRotate: false })).toBe(false);
+  });
+  it('runs when only rotation is needed — closes the pre-2026-05-13 bypass', () => {
+    expect(shouldSkipOptimization({ needsOptimization: false, wantsRotate: true })).toBe(false);
+  });
+  it('runs when both signals demand a re-encode', () => {
+    expect(shouldSkipOptimization({ needsOptimization: true, wantsRotate: true })).toBe(false);
   });
 });

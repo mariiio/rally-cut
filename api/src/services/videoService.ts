@@ -506,17 +506,22 @@ export async function confirmVideoUpload(
     });
   }
 
-  // Generate poster immediately for fast UX (async, ~2-3 seconds)
-  generatePosterImmediate(videoId, updated.s3Key).catch((error) => {
-    console.error(`[UPLOAD] Failed to generate poster for ${videoId}:`, error);
-    // Non-fatal: processing pipeline will regenerate if missing
-  });
-
-  // Queue video for optimization processing (async, non-blocking)
-  // Video is immediately playable; processing happens in background
-  queueVideoProcessing(videoId, userId).catch((error) => {
-    console.error(`[UPLOAD] Failed to queue processing for video ${videoId}:`, error);
-  });
+  // Background: poster generation + tilt-detect, THEN optimization.
+  // The chain is load-bearing: generatePosterImmediate writes tiltDeg /
+  // linesScored into qualityReportJson, and triggerLocal/Lambda reads
+  // those fields to drive the auto-rotate decision. Running them in
+  // parallel (the pre-2026-05-13 shape) raced the rotate read against
+  // the tilt-detect write — sometimes leaving a 9°-tilted upload
+  // unrotated despite a populated tiltDeg.
+  generatePosterImmediate(videoId, updated.s3Key)
+    .catch((error) => {
+      console.error(`[UPLOAD] Failed to generate poster for ${videoId}:`, error);
+      // Non-fatal: processing pipeline will regenerate if missing
+    })
+    .then(() => queueVideoProcessing(videoId, userId))
+    .catch((error) => {
+      console.error(`[UPLOAD] Failed to queue processing for video ${videoId}:`, error);
+    });
 
   return serializeBigInts(updated);
 }
@@ -938,16 +943,17 @@ export async function confirmUpload(
     });
   }
 
-  // Generate poster immediately for fast UX (async, ~2-3 seconds)
-  generatePosterImmediate(data.videoId, updated.s3Key).catch((error) => {
-    console.error(`[UPLOAD] Failed to generate poster for ${data.videoId}:`, error);
-    // Non-fatal: processing pipeline will regenerate if missing
-  });
-
-  // Queue video for optimization processing (async, non-blocking)
-  queueVideoProcessing(data.videoId, userId).catch((error) => {
-    console.error(`[UPLOAD] Failed to queue processing for video ${data.videoId}:`, error);
-  });
+  // Sequenced background pipeline: poster + tilt-detect → optimization.
+  // See confirmVideoUpload above for why parallel was wrong.
+  generatePosterImmediate(data.videoId, updated.s3Key)
+    .catch((error) => {
+      console.error(`[UPLOAD] Failed to generate poster for ${data.videoId}:`, error);
+      // Non-fatal: processing pipeline will regenerate if missing
+    })
+    .then(() => queueVideoProcessing(data.videoId, userId))
+    .catch((error) => {
+      console.error(`[UPLOAD] Failed to queue processing for video ${data.videoId}:`, error);
+    });
 
   return serializeBigInts(updated);
 }

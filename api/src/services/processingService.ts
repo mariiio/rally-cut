@@ -638,6 +638,20 @@ export function shouldAutoRotate(qr: {
 }
 
 /**
+ * The local-processing skip predicate. Returns true when ffmpeg can be
+ * bypassed entirely. Pre-2026-05-13 this was just `!needsOptimization`,
+ * which let a tilted-but-already-optimized upload escape rotation. The
+ * gate is now both signals: skip only when the video is well-formatted
+ * AND not auto-rotate-eligible.
+ */
+export function shouldSkipOptimization(opts: {
+  needsOptimization: boolean;
+  wantsRotate: boolean;
+}): boolean {
+  return !opts.needsOptimization && !opts.wantsRotate;
+}
+
+/**
  * Run FFmpeg locally for development.
  * Downloads video from S3, optimizes it, generates poster and proxy.
  */
@@ -711,11 +725,20 @@ async function triggerLocalProcessing(
       console.log(`[LOCAL PROCESSING] Uploaded poster to ${posterKey}`);
     }
 
-    // Check if optimization is needed
-    const needsOptimization = await checkNeedsOptimization(inputPath);
+    // Read the rotate decision BEFORE deciding whether to skip optimization.
+    // A tilted-but-otherwise-well-formatted upload (bitrate ≤ 8 Mbps, moov at
+    // start) used to slip through the skip path entirely and never get
+    // rotated. The skip is gated on BOTH signals now.
+    const [needsOptimization, vidForRotate] = await Promise.all([
+      checkNeedsOptimization(inputPath),
+      prisma.video.findUnique({ where: { id: videoId } }),
+    ]);
+    const qr = (vidForRotate?.qualityReportJson as Partial<QualityReport> | null) ?? {};
+    const wantsRotate = shouldAutoRotate(qr);
+    const rotationRad = wantsRotate ? -((qr.tiltDeg ?? 0) * Math.PI) / 180 : 0;
 
-    if (!needsOptimization) {
-      console.log(`[LOCAL PROCESSING] Video ${videoId} already optimized, skipping video processing`);
+    if (shouldSkipOptimization({ needsOptimization, wantsRotate })) {
+      console.log(`[LOCAL PROCESSING] Video ${videoId} already optimized and aligned, skipping`);
       await handleProcessingComplete({
         video_id: videoId,
         status: "skipped",
@@ -724,12 +747,6 @@ async function triggerLocalProcessing(
       });
       return;
     }
-
-    // Project C Component B: read persisted quality report to decide if we rotate.
-    const vidForRotate = await prisma.video.findUnique({ where: { id: videoId } });
-    const qr = (vidForRotate?.qualityReportJson as Partial<QualityReport> | null) ?? {};
-    const wantsRotate = shouldAutoRotate(qr);
-    const rotationRad = wantsRotate ? -((qr.tiltDeg ?? 0) * Math.PI) / 180 : 0;
 
     // Optimize video with FFmpeg
     // Use -pix_fmt yuv420p to handle 10-bit/HDR videos (libx264 only supports 8-bit)
