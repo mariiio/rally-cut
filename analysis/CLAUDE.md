@@ -398,6 +398,40 @@ The committed snapshot (`analysis/tests/fixtures/panel_player_tracks/{video}_sum
 
 - `MATCH_PLAYERS_PROBE=1` — write per-(iteration, rally) sidecar JSON to `analysis/reports/profile_drift_probe/` capturing MatchSolver iteration state + post-solve `_update_profiles` snapshots. Default OFF; used to falsify hypotheses about cross-rally cascade.
 
+## Post-classifier-change checklist
+
+When you change `analysis/rallycut/tracking/action_classifier.py` or
+`analysis/rallycut/tracking/contact_detector.py` in a way that affects
+the serialized output of `RallyActions.to_dict()` or
+`ContactSequence.to_dict()`:
+
+1. **Bump the constant** in the same commit:
+   - `ACTION_PIPELINE_VERSION` in `action_classifier.py`
+   - `CONTACT_PIPELINE_VERSION` in `contact_detector.py`
+2. **Add a version-history comment line** above the constant explaining
+   what changed (mirror the `MATCHER_VERSION` style in
+   `analysis/rallycut/tracking/match_tracker.py`).
+3. **Pre-commit hook** (`.claude/hooks/pre-commit-check.sh`) will reject
+   commits that touch these files without a version bump. Add
+   `[no-version-bump]` to the commit message if the change is genuinely
+   cosmetic (docstring/typo/comment-only).
+4. **After merge, refresh the fleet:**
+   ```bash
+   uv run python scripts/redetect_all_actions.py --apply
+   ```
+5. **Re-run the audit** to confirm zero stale rallies and refresh the
+   reference baseline if behavior changed:
+   ```bash
+   uv run rallycut audit-coherence-invariants <video-id>
+   uv run python scripts/catalog_c4_violations.py
+   ```
+
+The same discipline applies to `MATCHER_VERSION` in `match_tracker.py`
+(see `tests/unit/test_assignment_anchor_versioning.py`). The difference:
+`MATCHER_VERSION` has a self-enforcing consumer-side feedback loop
+(stale anchors visibly break the next PERMUTED panel), while the
+pipeline versions rely on the pre-commit hook + audit reporting.
+
 ## Ground Truth Labeling
 
 Label Studio integration for tracking accuracy evaluation. See `labeling/studio_client.py`.
