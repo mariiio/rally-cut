@@ -1,0 +1,759 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A2 Pose Probe Visual Verification — 2026-05-13</title>
+<style>
+  :root {
+    --bg:#0f0f10; --fg:#eaeaea; --muted:#9c9c9c; --card:#1a1a1c;
+    --border:#2a2a2e; --accent:#5b8def;
+    --ok:#2bb673; --bad:#e3534b; --warn:#f0a83b;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+         line-height:1.45; }
+  header { position:sticky; top:0; background:#000; border-bottom:1px solid #222;
+           padding:14px 22px; display:flex; gap:18px; align-items:center; z-index:20; }
+  header h1 { margin:0; font-size:17px; }
+  header .status { color:var(--muted); font-size:13px; }
+  header .grow { flex:1; }
+  header .pill { padding:5px 12px; border-radius:12px; background:#1d1d1d;
+                 color:#cfcfcf; font-size:12px;
+                 font-family:ui-monospace,Menlo,monospace; }
+  header .pill.ok   { background:#13361f; color:#9bdbb3; }
+  header .pill.bad  { background:#3a1414; color:#f0a59f; }
+
+  .container { max-width:1500px; margin:0 auto; padding:24px 22px 60px; }
+  .agg { background:var(--card); border:1px solid var(--border); border-radius:10px;
+         padding:18px 22px; margin-bottom:22px; }
+  .agg dl { display:grid; grid-template-columns:auto 1fr; gap:6px 16px; margin:0; }
+  .agg dt { color:var(--muted); }
+  .agg dd { margin:0; font-family:ui-monospace,Menlo,monospace; }
+  .verdict { margin-top:10px; font-size:18px; font-weight:700; }
+  .verdict.ok  { color:var(--ok); }
+  .verdict.bad { color:var(--bad); }
+
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px;
+          margin-bottom:22px; overflow:hidden; }
+  .card-head { padding:13px 20px; display:flex; gap:12px; align-items:center;
+               background:#161617; border-bottom:1px solid var(--border); }
+  .card-head .num { font-size:20px; font-weight:700; color:var(--accent); min-width:34px; }
+  .card-head .title { font-size:15px; font-weight:600; }
+  .card-head .pill { font-size:11px; padding:3px 9px; border-radius:12px;
+                     background:#222; color:#cfcfcf; }
+  .card-head .pill.err  { background:#3a1414; color:#f0a59f; }
+  .card-head .pill.ctrl { background:#13361f; color:#9bdbb3; }
+  .card-head .pill.f3   { background:#2a210e; color:#f0c98a; }
+  .card-head .pill.win  { background:#13361f; color:#9bdbb3; }
+  .card-head .pill.tie  { background:#222; color:#cfcfcf; }
+  .card-head .pill.lose { background:#3a1414; color:#f0a59f; }
+  .card-head .grow { flex:1; }
+
+  .card-body { display:grid; grid-template-columns:minmax(0,2.3fr) minmax(280px,1fr);
+               gap:18px; padding:18px 20px; }
+  @media (max-width:1000px) { .card-body { grid-template-columns:1fr; } }
+  .frame { background:#000; border-radius:6px; overflow:hidden; }
+  .frame img { display:block; width:100%; max-height:70vh; object-fit:contain;
+               background:#000; cursor:zoom-in; }
+  .frame.error { aspect-ratio:16/9; display:flex; align-items:center;
+                 justify-content:center; color:var(--bad); padding:20px;
+                 background:#1f0f0f; }
+
+  .sidebar { font-size:13px; }
+  .sidebar dl { margin:0; display:grid; grid-template-columns:auto 1fr;
+                column-gap:10px; row-gap:5px; }
+  .sidebar dt { color:var(--muted); }
+  .sidebar dd { margin:0; font-family:ui-monospace,Menlo,monospace;
+                font-size:12px; word-break:break-word; }
+  .sidebar .group + .group { margin-top:12px; padding-top:12px;
+                              border-top:1px dashed #2a2a2a; }
+
+  .verdicts { display:grid; grid-template-columns:repeat(3,1fr); gap:8px;
+              margin-top:16px; }
+  .verdicts button { background:#1f1f22; color:#eee; border:2px solid #2a2a2e;
+                     border-radius:8px; padding:14px 8px; font-size:14px;
+                     font-weight:600; cursor:pointer; }
+  .verdicts button:hover { transform:translateY(-1px); }
+  .verdicts button.ok.sel   { border-color:var(--ok);   background:#0f261c; }
+  .verdicts button.bad.sel  { border-color:var(--bad);  background:#291313; }
+  .verdicts button.warn.sel { border-color:var(--warn); background:#2a210e; }
+
+  #zoom-overlay { display:none; position:fixed; inset:0;
+                  background:rgba(0,0,0,.94); z-index:99;
+                  align-items:center; justify-content:center; cursor:zoom-out; }
+  #zoom-overlay.open { display:flex; }
+  #zoom-overlay img { max-width:96vw; max-height:96vh; }
+
+  #copy-modal { display:none; position:fixed; inset:0;
+                background:rgba(0,0,0,.7); z-index:99;
+                align-items:center; justify-content:center; }
+  #copy-modal.open { display:flex; }
+  #copy-modal .box { background:#1a1a1c; border:1px solid #333; border-radius:10px;
+                     padding:20px; max-width:680px; width:90%; }
+  #copy-modal pre { background:#0a0a0a; color:#eaeaea; padding:14px;
+                    border-radius:6px; font-size:14px; max-height:60vh;
+                    overflow:auto; user-select:all; }
+  #copy-modal .row { display:flex; gap:10px; margin-top:12px;
+                     justify-content:flex-end; }
+  #copy-modal button { background:#222; color:#eee; border:1px solid #333;
+                       padding:8px 16px; border-radius:6px; cursor:pointer; }
+  #copy-modal button.primary { background:var(--accent); color:#000;
+                                border-color:transparent; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>A2 Pose Probe — 11 attacks</h1>
+  <span class="status" id="status">0 / 11 verdicts</span>
+  <span class="grow"></span>
+  <span class="pill" id="agg-pill">…</span>
+  <button id="copy-btn" style="background:#222;color:#eee;border:1px solid #333;padding:8px 14px;border-radius:6px;font-weight:600;cursor:pointer;">Copy verdicts</button>
+</header>
+
+<div class="container">
+  <div class="agg" id="agg-card"></div>
+  <div id="cards"></div>
+</div>
+
+<div id="zoom-overlay"><img id="zoom-img"></div>
+
+<div id="copy-modal">
+  <div class="box">
+    <h3 style="margin-top:0">Verdicts — copy and paste back to Claude</h3>
+    <pre id="copy-text"></pre>
+    <div class="row">
+      <button id="copy-clipboard" class="primary">Copy to clipboard</button>
+      <button id="copy-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<script id="data" type="application/json">{
+  "agg": {
+    "n_total": 11,
+    "n_gt_anchored": 10,
+    "n_pose_evaluable": 9,
+    "bbox_correct": 5,
+    "pose_correct": 5,
+    "disambiguation_improvement": 0.0,
+    "ship_threshold": 0.5,
+    "verdict": "NO-SHIP A2 (move to A3 or other)",
+    "by_kind": {
+      "error": {
+        "n": 7,
+        "evaluable": 6,
+        "bbox_correct": 3,
+        "pose_correct": 3
+      },
+      "control": {
+        "n": 3,
+        "evaluable": 3,
+        "bbox_correct": 2,
+        "pose_correct": 2
+      }
+    },
+    "pose_inference_ms_mean": 182.5491933321411
+  },
+  "cases": [
+    {
+      "idx": 1,
+      "kind": "error",
+      "video": "wawa",
+      "rally_short": "7094136a",
+      "pl_frame": 306,
+      "gt_tid": 3,
+      "pl_tid": 4,
+      "bbox_pick": 4,
+      "pose_pick": null,
+      "pose_evaluable": false,
+      "bbox_correct": false,
+      "pose_correct": null,
+      "same_team_bbox_dists": {
+        "4": 0.040268986120506715,
+        "3": 0.1780085663033003
+      },
+      "pose_wrist_dists": {
+        "4": null,
+        "3": 0.1820324111372488
+      },
+      "pose_wrist_xy": {
+        "4": null,
+        "3": [
+          0.5079456567764282,
+          0.46342581510543823
+        ]
+      },
+      "pose_wrist_which": {
+        "4": null,
+        "3": "right"
+      },
+      "pose_inference_ms": 264.2271250952035,
+      "visual_frame_path": "visual_frames/01_wawa_7094136a_f306.jpg",
+      "error": null,
+      "reason": "wawa same-team ATTACK (A1 inspection flagged)"
+    },
+    {
+      "idx": 2,
+      "kind": "error",
+      "video": "wawa",
+      "rally_short": "21d4cdf6",
+      "pl_frame": 485,
+      "gt_tid": 2,
+      "pl_tid": 1,
+      "bbox_pick": 1,
+      "pose_pick": 1,
+      "pose_evaluable": true,
+      "bbox_correct": false,
+      "pose_correct": false,
+      "same_team_bbox_dists": {
+        "1": 0.04505653324751621,
+        "2": 0.16408786774302747
+      },
+      "pose_wrist_dists": {
+        "1": 0.020197668795852382,
+        "2": 0.18952968059466763
+      },
+      "pose_wrist_xy": {
+        "1": [
+          0.3481663465499878,
+          0.32726770639419556
+        ],
+        "2": [
+          0.4454443156719208,
+          0.46970880031585693
+        ]
+      },
+      "pose_wrist_which": {
+        "1": "right",
+        "2": "right"
+      },
+      "pose_inference_ms": 176.97741696611047,
+      "visual_frame_path": "visual_frames/02_wawa_21d4cdf6_f485.jpg",
+      "error": null,
+      "reason": "wawa same-team ATTACK (A1 inspection flagged)"
+    },
+    {
+      "idx": 3,
+      "kind": "error",
+      "video": "gigi",
+      "rally_short": "39e866fd",
+      "pl_frame": 297,
+      "gt_tid": 3,
+      "pl_tid": 1,
+      "bbox_pick": 1,
+      "pose_pick": 1,
+      "pose_evaluable": true,
+      "bbox_correct": false,
+      "pose_correct": false,
+      "same_team_bbox_dists": {
+        "1": 0.05848492432486328,
+        "2": 0.17041029503729585
+      },
+      "pose_wrist_dists": {
+        "1": 0.022731636987385433,
+        "2": 0.198187492495662
+      },
+      "pose_wrist_xy": {
+        "1": [
+          0.5559447407722473,
+          0.342313289642334
+        ],
+        "2": [
+          0.6665193438529968,
+          0.48839834332466125
+        ]
+      },
+      "pose_wrist_which": {
+        "1": "right",
+        "2": "right"
+      },
+      "pose_inference_ms": 185.05929200910032,
+      "visual_frame_path": "visual_frames/03_gigi_39e866fd_f297.jpg",
+      "error": null,
+      "reason": "gigi same-team ATTACK"
+    },
+    {
+      "idx": 4,
+      "kind": "error",
+      "video": "cece",
+      "rally_short": "5c35e049",
+      "pl_frame": 501,
+      "gt_tid": 1,
+      "pl_tid": 1,
+      "bbox_pick": 1,
+      "pose_pick": 1,
+      "pose_evaluable": true,
+      "bbox_correct": true,
+      "pose_correct": true,
+      "same_team_bbox_dists": {
+        "1": 0.032861400775751635,
+        "2": 0.21247772523890418
+      },
+      "pose_wrist_dists": {
+        "1": 0.017124753252093474,
+        "2": 0.23584717712641465
+      },
+      "pose_wrist_xy": {
+        "1": [
+          0.569083034992218,
+          0.23535512387752533
+        ],
+        "2": [
+          0.4168704152107239,
+          0.43670544028282166
+        ]
+      },
+      "pose_wrist_which": {
+        "1": "right",
+        "2": "right"
+      },
+      "pose_inference_ms": 175.00724992714822,
+      "visual_frame_path": "visual_frames/04_cece_5c35e049_f501.jpg",
+      "error": null,
+      "reason": "cece same-team ATTACK"
+    },
+    {
+      "idx": 5,
+      "kind": "error",
+      "video": "titi",
+      "rally_short": "43b849ec",
+      "pl_frame": 344,
+      "gt_tid": 2,
+      "pl_tid": 3,
+      "bbox_pick": 3,
+      "pose_pick": 3,
+      "pose_evaluable": true,
+      "bbox_correct": false,
+      "pose_correct": false,
+      "same_team_bbox_dists": {
+        "3": 0.07043281288643219,
+        "4": 0.21127804352911236
+      },
+      "pose_wrist_dists": {
+        "3": 0.04293729637180848,
+        "4": 0.24889364358599142
+      },
+      "pose_wrist_xy": {
+        "3": [
+          0.6727890372276306,
+          0.4813491404056549
+        ],
+        "4": [
+          0.49504345655441284,
+          0.6219789981842041
+        ]
+      },
+      "pose_wrist_which": {
+        "3": "left",
+        "4": "right"
+      },
+      "pose_inference_ms": 171.17933416739106,
+      "visual_frame_path": "visual_frames/05_titi_43b849ec_f344.jpg",
+      "error": null,
+      "reason": "titi (top C-5 video) same-team ATTACK"
+    },
+    {
+      "idx": 6,
+      "kind": "error",
+      "video": "titi",
+      "rally_short": "a0881d82",
+      "pl_frame": 176,
+      "gt_tid": 2,
+      "pl_tid": 2,
+      "bbox_pick": 2,
+      "pose_pick": 2,
+      "pose_evaluable": true,
+      "bbox_correct": true,
+      "pose_correct": true,
+      "same_team_bbox_dists": {
+        "2": 0.052017557769997835,
+        "1": 0.1455463935871276
+      },
+      "pose_wrist_dists": {
+        "2": 0.02136439446647679,
+        "1": 0.1785779569639687
+      },
+      "pose_wrist_xy": {
+        "2": [
+          0.6072368621826172,
+          0.4266272187232971
+        ],
+        "1": [
+          0.5633264183998108,
+          0.5784624814987183
+        ]
+      },
+      "pose_wrist_which": {
+        "2": "right",
+        "1": "left"
+      },
+      "pose_inference_ms": 171.44829197786748,
+      "visual_frame_path": "visual_frames/06_titi_a0881d82_f176.jpg",
+      "error": null,
+      "reason": "titi (cascade rally) ATTACK"
+    },
+    {
+      "idx": 7,
+      "kind": "error",
+      "video": "titi",
+      "rally_short": "caa96651",
+      "pl_frame": 173,
+      "gt_tid": 1,
+      "pl_tid": 1,
+      "bbox_pick": 1,
+      "pose_pick": 1,
+      "pose_evaluable": true,
+      "bbox_correct": true,
+      "pose_correct": true,
+      "same_team_bbox_dists": {
+        "1": 0.06266344096041578,
+        "2": 0.3147782929887423
+      },
+      "pose_wrist_dists": {
+        "1": 0.034285079977921865,
+        "2": 0.33676734293628413
+      },
+      "pose_wrist_xy": {
+        "1": [
+          0.6574357151985168,
+          0.4312165081501007
+        ],
+        "2": [
+          0.3643313944339752,
+          0.5906112790107727
+        ]
+      },
+      "pose_wrist_which": {
+        "1": "right",
+        "2": "right"
+      },
+      "pose_inference_ms": 170.42420781217515,
+      "visual_frame_path": "visual_frames/07_titi_caa96651_f173.jpg",
+      "error": null,
+      "reason": "titi (top C-5 video) ATTACK"
+    },
+    {
+      "idx": 8,
+      "kind": "control",
+      "video": "juju",
+      "rally_short": "57d1327c",
+      "pl_frame": 211,
+      "gt_tid": 1,
+      "pl_tid": 1,
+      "bbox_pick": 1,
+      "pose_pick": 1,
+      "pose_evaluable": true,
+      "bbox_correct": true,
+      "pose_correct": true,
+      "same_team_bbox_dists": {
+        "1": 0.04156299130737394,
+        "2": 0.22645600073544295
+      },
+      "pose_wrist_dists": {
+        "1": 0.01024297873984624,
+        "2": 0.2721245565279054
+      },
+      "pose_wrist_xy": {
+        "1": [
+          0.5050932168960571,
+          0.4933362603187561
+        ],
+        "2": [
+          0.6401475667953491,
+          0.71897953748703
+        ]
+      },
+      "pose_wrist_which": {
+        "1": "right",
+        "2": "right"
+      },
+      "pose_inference_ms": 181.06108391657472,
+      "visual_frame_path": "visual_frames/08_juju_57d1327c_f211.jpg",
+      "error": null,
+      "reason": "juju ATTACK control"
+    },
+    {
+      "idx": 9,
+      "kind": "control",
+      "video": "wawa",
+      "rally_short": "7f0f540a",
+      "pl_frame": 477,
+      "gt_tid": 1,
+      "pl_tid": 2,
+      "bbox_pick": 2,
+      "pose_pick": 2,
+      "pose_evaluable": true,
+      "bbox_correct": false,
+      "pose_correct": false,
+      "same_team_bbox_dists": {
+        "2": 0.07733427768871459,
+        "1": 0.24478067977508416
+      },
+      "pose_wrist_dists": {
+        "2": 0.017680809247719143,
+        "1": 0.23543068598112682
+      },
+      "pose_wrist_xy": {
+        "2": [
+          0.09231589734554291,
+          0.27255159616470337
+        ],
+        "1": [
+          0.22450082004070282,
+          0.4499347507953644
+        ]
+      },
+      "pose_wrist_which": {
+        "2": "right",
+        "1": "left"
+      },
+      "pose_inference_ms": 167.76641691103578,
+      "visual_frame_path": "visual_frames/09_wawa_7f0f540a_f477.jpg",
+      "error": null,
+      "reason": "wawa ATTACK control (tight gap)"
+    },
+    {
+      "idx": 10,
+      "kind": "control",
+      "video": "lili",
+      "rally_short": "879a8cff",
+      "pl_frame": 225,
+      "gt_tid": 2,
+      "pl_tid": 2,
+      "bbox_pick": 2,
+      "pose_pick": 2,
+      "pose_evaluable": true,
+      "bbox_correct": true,
+      "pose_correct": true,
+      "same_team_bbox_dists": {
+        "2": 0.11850253148118084,
+        "1": 0.38555458536595105
+      },
+      "pose_wrist_dists": {
+        "2": 0.06529064422831159,
+        "1": 0.38438774999086994
+      },
+      "pose_wrist_xy": {
+        "2": [
+          0.21170087158679962,
+          0.5542879700660706
+        ],
+        "1": [
+          0.10735659301280975,
+          0.8797047734260559
+        ]
+      },
+      "pose_wrist_which": {
+        "2": "left",
+        "1": "right"
+      },
+      "pose_inference_ms": 174.09420781768858,
+      "visual_frame_path": "visual_frames/10_lili_879a8cff_f225.jpg",
+      "error": null,
+      "reason": "lili ATTACK control"
+    },
+    {
+      "idx": 11,
+      "kind": "f3_extra",
+      "video": "keke",
+      "rally_short": "0144acfb",
+      "pl_frame": 223,
+      "gt_tid": null,
+      "pl_tid": 1,
+      "bbox_pick": 1,
+      "pose_pick": 1,
+      "pose_evaluable": true,
+      "bbox_correct": null,
+      "pose_correct": null,
+      "same_team_bbox_dists": {
+        "1": 0.03830914994816765,
+        "2": 0.32683908140813356
+      },
+      "pose_wrist_dists": {
+        "1": 0.03020428237520555,
+        "2": 0.37789481705452044
+      },
+      "pose_wrist_xy": {
+        "1": [
+          0.22706107795238495,
+          0.4715569317340851
+        ],
+        "2": [
+          0.5477436184883118,
+          0.6493645310401917
+        ]
+      },
+      "pose_wrist_which": {
+        "1": "left",
+        "2": "right"
+      },
+      "pose_inference_ms": 170.79650005325675,
+      "visual_frame_path": "visual_frames/11_keke_0144acfb_f223.jpg",
+      "error": null,
+      "reason": "F3 canonical case (no GT). Logging for visual."
+    }
+  ]
+}</script>
+<script>
+const DATA = JSON.parse(document.getElementById('data').textContent);
+const STORAGE_KEY = 'a2_pose_probe_2026_05_13';
+
+function loadV() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch(_) { return {}; } }
+function saveV(v) { localStorage.setItem(STORAGE_KEY, JSON.stringify(v)); }
+let verdicts = loadV();
+const $ = id => document.getElementById(id);
+
+function emo(v) { return v==='ok'?'✅':v==='bad'?'❌':v==='warn'?'⚠️':'·'; }
+function lbl(v) { return v==='ok'?'pose right':v==='bad'?'pose wrong':v==='warn'?'ambiguous':'—'; }
+
+function aggHtml() {
+  const a = DATA.agg;
+  const verdict = a.verdict;
+  const cls = a.disambiguation_improvement >= 0.5 ? 'ok' : 'bad';
+  return `
+    <dl>
+      <dt>Total cases</dt><dd>${a.n_total}</dd>
+      <dt>GT-anchored (idx 1–10)</dt><dd>${a.n_gt_anchored}</dd>
+      <dt>Pose evaluable</dt><dd>${a.n_pose_evaluable} / ${a.n_gt_anchored}</dd>
+      <dt>bbox correct</dt><dd>${a.bbox_correct} / ${a.n_pose_evaluable}</dd>
+      <dt>pose correct</dt><dd>${a.pose_correct} / ${a.n_pose_evaluable}</dd>
+      <dt>Disambiguation Δ</dt><dd>${a.disambiguation_improvement.toFixed(3)} (threshold ≥ 0.5)</dd>
+      <dt>Mean inference</dt><dd>${a.pose_inference_ms_mean.toFixed(0)} ms / frame</dd>
+    </dl>
+    <div class="verdict ${cls}">Verdict: ${verdict}</div>`;
+}
+
+function cardHtml(r) {
+  const v = verdicts[r.idx] || null;
+  const kindPill = r.kind === 'error' ? 'err' : (r.kind === 'control' ? 'ctrl' : 'f3');
+  let outcomePill = '';
+  if (r.gt_tid !== null) {
+    if (r.bbox_correct && !r.pose_correct) outcomePill = '<span class="pill lose">pose regressed</span>';
+    else if (!r.bbox_correct && r.pose_correct) outcomePill = '<span class="pill win">pose fixed</span>';
+    else if (r.bbox_correct && r.pose_correct)  outcomePill = '<span class="pill tie">both correct</span>';
+    else if (r.pose_correct === null)           outcomePill = '<span class="pill tie">pose unevaluable</span>';
+    else                                        outcomePill = '<span class="pill lose">both wrong</span>';
+  } else {
+    outcomePill = '<span class="pill tie">no GT (F3)</span>';
+  }
+  const frame = r.visual_frame_path ?
+    `<div class="frame"><img src="${r.visual_frame_path}" onclick="zoomImg(this.src)"></div>` :
+    `<div class="frame error">No frame: ${r.error || 'unknown'}</div>`;
+
+  return `
+    <div class="card" id="card-${r.idx}">
+      <div class="card-head">
+        <span class="num">${r.idx}</span>
+        <span class="title">${r.video} / ${r.rally_short} / ATTACK f${r.pl_frame}</span>
+        <span class="pill ${kindPill}">${r.kind}</span>
+        ${outcomePill}
+        <span class="grow"></span>
+        <span class="pill">bbox p${r.bbox_pick} ➝ pose p${r.pose_pick === null ? '—' : r.pose_pick} ${r.gt_tid !== null ? '| GT p'+r.gt_tid : ''}</span>
+      </div>
+      <div class="card-body">
+        ${frame}
+        <div class="sidebar">
+          <div class="group">
+            <dl>
+              <dt>video</dt><dd>${r.video}</dd>
+              <dt>rally</dt><dd>${r.rally_short}</dd>
+              <dt>frame</dt><dd>${r.pl_frame}</dd>
+              <dt>pl_tid (current)</dt><dd>p${r.pl_tid}</dd>
+              <dt>gt_tid</dt><dd>${r.gt_tid === null ? '—' : 'p'+r.gt_tid}</dd>
+            </dl>
+          </div>
+          <div class="group">
+            <dl>
+              <dt>bbox dists</dt><dd>${JSON.stringify(r.same_team_bbox_dists)}</dd>
+              <dt>wrist dists</dt><dd>${JSON.stringify(r.pose_wrist_dists)}</dd>
+              <dt>wrist used</dt><dd>${JSON.stringify(r.pose_wrist_which)}</dd>
+              <dt>pose_evaluable</dt><dd>${r.pose_evaluable}</dd>
+              <dt>bbox_correct</dt><dd>${r.bbox_correct}</dd>
+              <dt>pose_correct</dt><dd>${r.pose_correct}</dd>
+              <dt>latency</dt><dd>${r.pose_inference_ms.toFixed(0)} ms</dd>
+            </dl>
+          </div>
+          <div class="group">
+            <dl>
+              <dt>reason</dt><dd>${r.reason}</dd>
+            </dl>
+          </div>
+          <div class="verdicts" data-idx="${r.idx}">
+            <button class="ok ${v==='ok'?'sel':''}"   data-v="ok">✅ pose right</button>
+            <button class="bad ${v==='bad'?'sel':''}" data-v="bad">❌ pose wrong</button>
+            <button class="warn ${v==='warn'?'sel':''}" data-v="warn">⚠️ ambiguous</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function render() {
+  $('agg-card').innerHTML = aggHtml();
+  const a = DATA.agg;
+  $('agg-pill').textContent =
+    `Δ=${a.disambiguation_improvement.toFixed(2)} bbox=${a.bbox_correct} pose=${a.pose_correct} / ${a.n_pose_evaluable}`;
+  $('agg-pill').className = 'pill ' + (a.disambiguation_improvement >= 0.5 ? 'ok' : 'bad');
+  $('cards').innerHTML = DATA.cases.map(cardHtml).join('');
+  document.querySelectorAll('.verdicts').forEach(div => {
+    const idx = +div.dataset.idx;
+    div.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => setV(idx, btn.dataset.v));
+    });
+  });
+  upd();
+}
+
+function setV(idx, v) {
+  if (verdicts[idx] === v) delete verdicts[idx]; else verdicts[idx] = v;
+  saveV(verdicts);
+  const card = DATA.cases.find(c => c.idx === idx);
+  const el = document.getElementById(`card-${idx}`);
+  if (el && card) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = cardHtml(card);
+    el.replaceWith(tmp.firstElementChild);
+    document.querySelector(`[data-idx="${idx}"]`).querySelectorAll('button').forEach(b => {
+      b.addEventListener('click', () => setV(idx, b.dataset.v));
+    });
+  }
+  upd();
+}
+
+function upd() {
+  const total = DATA.cases.length;
+  let n = 0; for (const k in verdicts) if (verdicts[k]) n++;
+  $('status').textContent = `${n} / ${total} verdicts`;
+}
+
+function compile() {
+  const parts = [];
+  for (const r of DATA.cases) parts.push(`${r.idx}:${emo(verdicts[r.idx])}`);
+  return parts.join(' ') + '\n\n' + DATA.cases.map(r => {
+    const v = verdicts[r.idx];
+    return `  ${r.idx}. ${r.video}/${r.rally_short} f${r.pl_frame} [${r.kind}]: ${emo(v)} ${lbl(v)}`;
+  }).join('\n');
+}
+
+$('copy-btn').addEventListener('click', () => {
+  $('copy-text').textContent = compile();
+  $('copy-modal').classList.add('open');
+});
+$('copy-close').addEventListener('click', () => $('copy-modal').classList.remove('open'));
+$('copy-clipboard').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText($('copy-text').textContent);
+    $('copy-clipboard').textContent = 'Copied!';
+    setTimeout(() => $('copy-clipboard').textContent = 'Copy to clipboard', 1200);
+  } catch(e) { alert('Clipboard copy failed; select manually.'); }
+});
+
+function zoomImg(s) { $('zoom-img').src = s; $('zoom-overlay').classList.add('open'); }
+$('zoom-overlay').addEventListener('click', () => $('zoom-overlay').classList.remove('open'));
+
+render();
+</script>
+</body>
+</html>
