@@ -3315,6 +3315,24 @@ def reattribute_players(
                 n_within_team, len(actions),
             )
 
+    # Pass 2d (A1, 2026-05-13): volleyball-rule attribution.
+    # Enforces the hard rule that consecutive contacts != same player
+    # (block exception). Drops Sub-2.B Phase 2's 2x distance cap;
+    # abstains when no same-team alt is within
+    # _VOLLEYBALL_RULE_ABSTAIN_BOUND. Default OFF; opt-in via env.
+    # Spec: docs/superpowers/specs/2026-05-13-action-attribution-root-causes-design.md
+    if os.environ.get("USE_VOLLEYBALL_RULE_ATTRIBUTION", "0") == "1":
+        n_vb = _attribution_volleyball_rule_pass(
+            actions=actions,
+            contacts=contacts,
+            team_assignments=team_assignments,
+        )
+        if n_vb > 0:
+            logger.info(
+                "Volleyball-rule attribution: re-attributed %d/%d actions",
+                n_vb, len(actions),
+            )
+
     # Pass 3: ReID re-attribution (requires reid_predictions)
     if reid_predictions:
         _reattribute_reid(actions, contact_by_frame, reid_predictions, reid_min_margin)
