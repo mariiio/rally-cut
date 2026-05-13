@@ -1,3 +1,3 @@
-from rallycut.quality.types import CheckResult, Issue, QualityReport, Tier
+from rallycut.quality.types import CheckResult, CourtDetection, Issue, QualityReport, Tier
 
-__all__ = ["Issue", "Tier", "CheckResult", "QualityReport"]
+__all__ = ["CheckResult", "CourtDetection", "Issue", "QualityReport", "Tier"]

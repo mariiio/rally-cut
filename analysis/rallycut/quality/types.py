@@ -47,12 +47,25 @@ class CheckResult:
     metrics: dict[str, float] = field(default_factory=dict)  # raw metrics for debugging
 
 
+@dataclass(frozen=True)
+class CourtDetection:
+    """Court-keypoint detection output for the API's auto-calibration path.
+
+    `corners` follows the courtCalibrationJson convention: 4 points ordered
+    near-left, near-right, far-right, far-left, normalised to [0,1]^2.
+    """
+
+    corners: list[dict[str, float]]
+    confidence: float
+
+
 @dataclass
 class QualityReport:
     issues: list[Issue]
     source: str
     sample_seconds: int | None = None
     duration_ms: int | None = None
+    court: CourtDetection | None = None
 
     @classmethod
     def from_checks(
@@ -61,13 +74,20 @@ class QualityReport:
         source: str,
         sample_seconds: int | None = None,
         duration_ms: int | None = None,
+        court: CourtDetection | None = None,
     ) -> QualityReport:
         flat: list[Issue] = [i for r in results for i in r.issues]
         flat.sort(key=lambda i: (_TIER_ORDER[i.tier], -i.severity, i.id))
-        return cls(issues=flat[:3], source=source, sample_seconds=sample_seconds, duration_ms=duration_ms)
+        return cls(
+            issues=flat[:3],
+            source=source,
+            sample_seconds=sample_seconds,
+            duration_ms=duration_ms,
+            court=court,
+        )
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        d: dict[str, Any] = {
             "version": 2,
             "issues": [i.to_dict() for i in self.issues],
             self.source: {
@@ -76,3 +96,9 @@ class QualityReport:
                 "durationMs": self.duration_ms,
             },
         }
+        if self.court is not None:
+            d["court"] = {
+                "corners": self.court.corners,
+                "confidence": self.court.confidence,
+            }
+        return d

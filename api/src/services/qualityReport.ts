@@ -22,6 +22,11 @@ export interface AutoFix {
   data?: Record<string, number>;
 }
 
+export interface CourtDetection {
+  corners: Array<{ x: number; y: number }>;
+  confidence: number;
+}
+
 export interface QualityReport {
   version: 2;
   issues: Issue[];
@@ -37,6 +42,10 @@ export interface QualityReport {
   autoRotated?: boolean;
   tiltDeg?: number | null;
   linesScored?: number | null;
+  // Raw court-keypoint detection from the preflight CLI. Drives the
+  // auto-save into Video.courtCalibrationJson — `corners` follow the
+  // canonical [near-left, near-right, far-right, far-left] order.
+  court?: CourtDetection | null;
 }
 
 const TIER_ORDER: Record<Tier, number> = { block: 0, gate: 1, advisory: 2 };
@@ -92,6 +101,14 @@ export function mergeQualityReports(reports: Array<Partial<QualityReport>>): Qua
     reports.map((r) => r.tiltDeg).find((v) => v != null) ?? null;
   const linesScored =
     reports.map((r) => r.linesScored).find((v) => v != null) ?? null;
+  // Last non-null wins — opposite of brightness/resolution/preflight.
+  // Court detection is cheap to re-run and reflects what the detector
+  // saw on the latest invocation; carrying forward an old snapshot when
+  // a fresh one is available would lie about current state. The auto-save
+  // in qualityService.ts uses the fresh CLI output directly, so this
+  // merge only affects what shows up in qualityReportJson for inspection.
+  const court =
+    [...reports].reverse().map((r) => r.court).find((v) => v != null) ?? null;
 
   return {
     version: 2,
@@ -103,5 +120,6 @@ export function mergeQualityReports(reports: Array<Partial<QualityReport>>): Qua
     autoRotated,
     tiltDeg,
     linesScored,
+    court,
   };
 }

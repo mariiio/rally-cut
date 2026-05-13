@@ -22,13 +22,17 @@ from __future__ import annotations
 
 from rallycut.quality.camera_geometry import CourtCorners, check_camera_geometry
 from rallycut.quality.metadata import VideoMetadata, check_metadata
-from rallycut.quality.types import QualityReport
+from rallycut.quality.types import CourtDetection, QualityReport
 
 
 def _load_video_inputs(
     video_path: str, sample_seconds: int
-) -> tuple[VideoMetadata, CourtCorners]:
-    """Return (metadata, court_corners).
+) -> tuple[VideoMetadata, CourtCorners, CourtDetection | None]:
+    """Return (metadata, court_corners, court_detection).
+
+    `court_detection` carries the raw detector output in courtCalibrationJson
+    order (near-left, near-right, far-right, far-left) for the API's
+    auto-save path. `None` when the detector failed to find 4 corners.
 
     Integration-only: wraps ffprobe + court-keypoint inference. Unit tests
     patch this.
@@ -60,6 +64,7 @@ def _load_video_inputs(
     # CourtDetectionResult.corners order: [near-left, near-right, far-right, far-left]
     # CourtCorners convention: tl=top-left (far-left), tr=top-right (far-right),
     #                          br=bottom-right (near-right), bl=bottom-left (near-left)
+    court_detection: CourtDetection | None = None
     if raw_result.corners and len(raw_result.corners) == 4:
         c = raw_result.corners
         corners = CourtCorners(
@@ -69,6 +74,7 @@ def _load_video_inputs(
             bl=(c[0]["x"], c[0]["y"]),  # near-left  → bottom-left
             confidence=raw_result.confidence,
         )
+        court_detection = CourtDetection(corners=c, confidence=raw_result.confidence)
     else:
         # No court detected — return zero-confidence corners at image edges
         corners = CourtCorners(
@@ -77,15 +83,19 @@ def _load_video_inputs(
             confidence=0.0,
         )
 
-    return meta, corners
+    return meta, corners, court_detection
 
 
 def run_full_preflight(video_path: str, sample_seconds: int = 60) -> QualityReport:
-    meta, corners = _load_video_inputs(video_path, sample_seconds=sample_seconds)
+    meta, corners, court = _load_video_inputs(video_path, sample_seconds=sample_seconds)
     results = [
         check_metadata(meta),
         check_camera_geometry(corners),
     ]
     return QualityReport.from_checks(
-        results, source="preflight", sample_seconds=sample_seconds, duration_ms=int(meta.duration_s * 1000)
+        results,
+        source="preflight",
+        sample_seconds=sample_seconds,
+        duration_ms=int(meta.duration_s * 1000),
+        court=court,
     )

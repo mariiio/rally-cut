@@ -1,4 +1,4 @@
-from rallycut.quality.types import Issue, Tier, QualityReport, CheckResult
+from rallycut.quality.types import CheckResult, CourtDetection, Issue, QualityReport, Tier
 
 
 def test_issue_serializes_to_user_facing_dict():
@@ -36,3 +36,26 @@ def test_report_preserves_from_source_metadata():
     d = report.to_dict()
     assert d["preflight"]["sampleSeconds"] == 60
     assert d["preflight"]["durationMs"] == 12345
+
+
+def test_report_emits_court_detection_when_present():
+    corners = [
+        {"x": 0.2, "y": 0.8},  # near-left
+        {"x": 0.8, "y": 0.8},  # near-right
+        {"x": 0.7, "y": 0.4},  # far-right
+        {"x": 0.3, "y": 0.4},  # far-left
+    ]
+    report = QualityReport.from_checks(
+        [],
+        source="preflight",
+        court=CourtDetection(corners=corners, confidence=0.87),
+    )
+    d = report.to_dict()
+    assert d["court"]["confidence"] == 0.87
+    assert d["court"]["corners"] == corners
+
+
+def test_report_omits_court_field_when_absent():
+    report = QualityReport.from_checks([], source="preflight")
+    d = report.to_dict()
+    assert "court" not in d
