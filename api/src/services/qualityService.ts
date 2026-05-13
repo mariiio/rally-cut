@@ -19,9 +19,9 @@ import { Prisma, VideoStatus } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { generateDownloadUrl } from '../lib/s3.js';
 import { NotFoundError } from '../middleware/errorHandler.js';
+import { refreshCourtAutoCalibration } from './courtCalibration.js';
 import {
   mergeQualityReports,
-  type CourtDetection,
   type Issue,
   type QualityReport,
 } from './qualityReport.js';
@@ -57,7 +57,7 @@ export async function runPreflightChecks(videoId: string, userId: string): Promi
     // auto-cal when the new run dropped below confidence). Reads `report.court`
     // not `merged.court`, so a low-confidence re-run never inherits the
     // previously-persisted snapshot.
-    await applyCourtAutoSave(videoId, report.court ?? null);
+    await refreshCourtAutoCalibration(videoId, report.court ?? null);
 
     // Sync Video.status with the block-issue state:
     //   - block issue present → mark REJECTED (disables Analyze button)
@@ -83,97 +83,6 @@ export async function runPreflightChecks(videoId: string, userId: string): Promi
   }
 }
 
-// Confidence floor for writing courtCalibrationJson. Matches the threshold
-// used by the pre-refactor assessVideoQuality path (commit 3bbb7a48).
-export const AUTO_CALIBRATION_MIN_CONFIDENCE = 0.7;
-// Per-axis off-screen budget. Beach footage with low camera angles legitimately
-// places corners ~0.15 outside the frame; anything beyond 0.3 is degenerate.
-export const AUTO_CALIBRATION_MAX_OFFSCREEN_MARGIN = 0.3;
-
-export function areCornersReasonable(corners: Array<{ x: number; y: number }>): boolean {
-  if (corners.length !== 4) return false;
-  for (const c of corners) {
-    if (
-      c.x < -AUTO_CALIBRATION_MAX_OFFSCREEN_MARGIN ||
-      c.x > 1 + AUTO_CALIBRATION_MAX_OFFSCREEN_MARGIN ||
-      c.y < -AUTO_CALIBRATION_MAX_OFFSCREEN_MARGIN ||
-      c.y > 1 + AUTO_CALIBRATION_MAX_OFFSCREEN_MARGIN
-    ) {
-      return false;
-    }
-  }
-  return true;
-}
-
-/**
- * Persist a fresh court detection into `Video.courtCalibrationJson` when it
- * clears the confidence + on-screen bars, and clear a stale auto-calibration
- * when it doesn't. Manual calibrations are never overwritten.
- *
- * Wrapped in a transaction so concurrent runs can't TOCTOU a manual save.
- */
-async function applyCourtAutoSave(
-  videoId: string,
-  detection: CourtDetection | null,
-): Promise<void> {
-  const cornersUsable =
-    detection !== null && areCornersReasonable(detection.corners);
-  const passesQualityBar =
-    detection !== null
-    && cornersUsable
-    && detection.confidence >= AUTO_CALIBRATION_MIN_CONFIDENCE;
-
-  await prisma.$transaction(async (tx) => {
-    const current = await tx.video.findUnique({
-      where: { id: videoId },
-      select: { courtCalibrationJson: true, courtCalibrationSource: true },
-    });
-    if (!current) return;
-    if (current.courtCalibrationSource === 'manual') {
-      if (detection !== null) {
-        console.log(
-          `[QUALITY] Skipped auto-save for video ${videoId} — manual calibration exists`,
-        );
-      }
-      return;
-    }
-
-    if (passesQualityBar && detection !== null) {
-      await tx.video.update({
-        where: { id: videoId },
-        data: {
-          courtCalibrationJson:
-            detection.corners as unknown as Prisma.InputJsonValue,
-          courtCalibrationSource: 'auto',
-        },
-      });
-      console.log(
-        `[QUALITY] Auto-saved court calibration for video ${videoId} ` +
-          `(confidence: ${detection.confidence.toFixed(2)})`,
-      );
-      return;
-    }
-
-    // Below the bar — clear any prior auto-calibration so the editor falls
-    // back to defaults instead of a known-bad snapshot.
-    if (current.courtCalibrationJson !== null) {
-      await tx.video.update({
-        where: { id: videoId },
-        data: {
-          courtCalibrationJson: Prisma.DbNull,
-          courtCalibrationSource: null,
-        },
-      });
-      const reason = detection !== null
-        ? `confidence ${detection.confidence.toFixed(2)} < ${AUTO_CALIBRATION_MIN_CONFIDENCE}` +
-          (cornersUsable ? '' : ' or corners off-screen')
-        : 'no detection';
-      console.log(
-        `[QUALITY] Cleared stale auto-calibration for video ${videoId} (${reason})`,
-      );
-    }
-  });
-}
 
 export async function saveUploadReport(videoId: string, report: Partial<QualityReport>) {
   const existing = await prisma.video.findUnique({ where: { id: videoId } });

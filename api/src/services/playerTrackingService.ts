@@ -16,6 +16,7 @@ import { generateDownloadUrl } from '../lib/s3.js';
 import { Prisma, PlayerTrack } from '@prisma/client';
 import { prisma, type PrismaTransaction } from '../lib/prisma.js';
 import { ForbiddenError, NotFoundError, ValidationError } from '../middleware/errorHandler.js';
+import { backfillCourtCalibration } from './courtCalibration.js';
 import { remapSingleRally } from './matchAnalysisService.js';
 import { reresolveRallyGt } from './actionGroundTruthService.js';
 
@@ -281,6 +282,12 @@ interface PlayerTrackerOutput {
   actions?: ActionsData;
   qualityReport?: QualityReport;
   courtDetection?: CourtDetectionInsights;
+  // Raw court detection (corners + confidence) from the tracker's per-rally
+  // `auto_detect_court` call. Used by `backfillCourtCalibration` after the
+  // PlayerTrack write to fill in Video.courtCalibrationJson when it's null —
+  // gives every video a calibration shot even if preflight was skipped.
+  // Fill-only semantics: never overwrites manual or existing auto cal.
+  courtAutoCalibration?: { corners: Array<{ x: number; y: number }>; confidence: number } | null;
 }
 
 /**
@@ -517,6 +524,20 @@ async function runPlayerTracker(
           console.log(`[PLAYER_TRACK] Quality: score=${qualityReport.trackabilityScore.toFixed(2)}, calibration=${qualityReport.calibrationRecommended ? 'recommended' : 'not needed'}`);
         }
 
+        // Raw court detection — populated by track_player.py's extra_data
+        // when auto_detect_court found 4 corners. Used downstream by
+        // backfillCourtCalibration. Validate shape before passing along.
+        const rawCourtAuto = result.courtAutoCalibration as
+          | { corners?: Array<{ x: number; y: number }>; confidence?: number }
+          | undefined;
+        const courtAutoCalibration =
+          rawCourtAuto
+          && Array.isArray(rawCourtAuto.corners)
+          && rawCourtAuto.corners.length === 4
+          && typeof rawCourtAuto.confidence === 'number'
+            ? { corners: rawCourtAuto.corners, confidence: rawCourtAuto.confidence }
+            : undefined;
+
         resolve({
           positions,
           rawPositions,
@@ -532,6 +553,7 @@ async function runPlayerTracker(
           contacts,
           actions,
           qualityReport,
+          courtAutoCalibration,
         });
       } catch (parseError) {
         reject(new Error(`Failed to parse player tracker output: ${parseError}`));
@@ -763,6 +785,16 @@ export async function saveTrackingResult(
     } catch (err) {
       console.log(`[PLAYER_TRACK] Failed to update servingTeam:`, err);
     }
+  }
+
+  // Best-effort court-calibration backfill from the tracker's per-rally
+  // auto_detect_court output. Fill-only — never overwrites manual or
+  // existing auto cal (see courtCalibration.ts). Non-fatal: a DB-level
+  // failure here mustn't block the tracking result from being saved.
+  try {
+    await backfillCourtCalibration(videoId, trackerResult.courtAutoCalibration ?? null);
+  } catch (err) {
+    console.log(`[PLAYER_TRACK] backfillCourtCalibration failed (non-fatal):`, err);
   }
 
 }

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { mergeQualityReports, pickTopIssues, type Issue } from '../src/services/qualityReport.js';
-import { areCornersReasonable } from '../src/services/qualityService.js';
+import { areCornersReasonable } from '../src/services/courtCalibration.js';
 
 describe('mergeQualityReports', () => {
   it('combines upload + preflight issues and sorts by tier then severity', () => {

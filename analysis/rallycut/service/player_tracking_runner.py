@@ -275,6 +275,15 @@ def run_tracking(
         }
         if court_insights is not None:
             webhook_payload["courtDetection"] = court_insights.to_dict()
+        # Raw detection (corners + confidence) so the API can backfill
+        # Video.courtCalibrationJson when the video has no calibration yet.
+        # `auto_result` reflects the final detection used — either the original
+        # CourtDetector output or the player-refined version above.
+        if auto_result is not None and len(auto_result.corners) == 4:
+            webhook_payload["courtAutoCalibration"] = {
+                "corners": auto_result.corners,
+                "confidence": auto_result.confidence,
+            }
 
         print(f"[LOCAL] Tracking complete: {result.unique_track_count} players, {result.frame_count} frames")
         print(f"[LOCAL] Processing time: {processing_time_ms/1000:.1f}s")

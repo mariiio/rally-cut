@@ -1040,6 +1040,17 @@ def _run_tracking(
             if seq:
                 console.print(f"[dim]Actions: {' → '.join(seq)}[/dim]")
 
+    # Raw court detection (corners + confidence) so the API can backfill
+    # Video.courtCalibrationJson when the video has no calibration yet.
+    # Merged into extra_data alongside contacts/actions.
+    if auto_result is not None and len(auto_result.corners) == 4:
+        if actions_data is None:
+            actions_data = {}
+        actions_data["courtAutoCalibration"] = {
+            "corners": auto_result.corners,
+            "confidence": auto_result.confidence,
+        }
+
     # Save results
     result.to_json(output, extra_data=actions_data)
 

@@ -94,6 +94,7 @@ export async function handleTrackingRallyComplete(
       actions: data.actions as PlayerTrackerOutput['actions'],
       qualityReport: data.qualityReport as PlayerTrackerOutput['qualityReport'],
       courtDetection: data.courtDetection as PlayerTrackerOutput['courtDetection'],
+      courtAutoCalibration: data.courtAutoCalibration as PlayerTrackerOutput['courtAutoCalibration'],
     };
 
     // Use the shared save function (same DB write path as local tracking)
