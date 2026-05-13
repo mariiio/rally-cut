@@ -1390,19 +1390,28 @@ class TestRepairDuplicateServe:
         assert repaired[2].action_type == ActionType.SET
         assert repaired[2].confidence <= 0.6
 
-    def test_synthetic_serve_not_touched(self) -> None:
-        """Synthetic duplicate serve is NOT repaired (only real dupes)."""
+    def test_synthetic_serve_anchors_dedupe(self) -> None:
+        """Synthetic serve as anchor: the next real serve becomes receive.
+
+        Pre-2026-05-13 (WS-B) this test asserted the inverse — that a
+        synthetic anchor did NOT trigger Rule 3, leaving a (synth, real)
+        pair to slip through as a double-serve. The F4 pattern (rally
+        88a04529) made this incorrect: a correctly-prepended synth
+        serve followed by a real classifier serve is exactly the
+        case Rule 3 must catch. The anchor is now synthetic-agnostic.
+        """
         actions = [
             _ca(ActionType.SERVE, 10, "near", is_synthetic=True),
-            _ca(ActionType.SERVE, 20, "near"),  # real serve
+            _ca(ActionType.SERVE, 20, "near"),  # real serve → receive
             _ca(ActionType.RECEIVE, 40, "far"),
         ]
         repaired = repair_action_sequence(actions, net_y=0.5)
 
-        # First serve is synthetic (kept), second is the real one (kept)
+        # First serve is the synth anchor (kept); second was real but
+        # now reclassified by symmetric Rule 3.
         assert repaired[0].action_type == ActionType.SERVE
         assert repaired[0].is_synthetic is True
-        assert repaired[1].action_type == ActionType.SERVE
+        assert repaired[1].action_type == ActionType.RECEIVE
         assert repaired[1].is_synthetic is False
 
     def test_three_serves_all_extras_repaired(self) -> None:
@@ -1419,6 +1428,49 @@ class TestRepairDuplicateServe:
         assert repaired[0].action_type == ActionType.SERVE    # original
         assert repaired[1].action_type == ActionType.RECEIVE  # Rule 3
         assert repaired[2].action_type == ActionType.SET      # Rule 3 + Rule 4
+
+    def test_rule_3_dedupes_synth_then_real_serve(self) -> None:
+        """F4: synthetic-prepended serve followed immediately by a real
+        classifier-produced serve. Second serve must become receive.
+
+        Rally 88a04529 (keke) is the canonical fixture: synth serve at
+        f106 for team B (correctly prepended by synthetic-serve placement),
+        then a real action at f111 was classified as serve. The real one
+        is the actual receive.
+        """
+        actions = [
+            _ca(ActionType.SERVE, 106, "far", confidence=0.7, is_synthetic=True),
+            _ca(ActionType.SERVE, 111, "near", confidence=0.85),
+        ]
+
+        repaired = repair_action_sequence(actions, net_y=0.5)
+
+        assert len(repaired) == 2
+        assert repaired[0].action_type == ActionType.SERVE
+        assert repaired[0].is_synthetic is True, "anchor synth serve preserved"
+        assert repaired[1].action_type == ActionType.RECEIVE, (
+            "second serve (real) should be reclassified as receive"
+        )
+
+    def test_rule_3_dedupes_real_then_synth_serve(self) -> None:
+        """Reverse ordering: real serve first, then a synth serve appears
+        later (hypothetically, e.g. from a later placement repair). The
+        second one (synth) should still be reclassified.
+
+        Note: in current pipeline this ordering doesn't occur (synth is
+        always prepended), but Rule 3's symmetry should be order-agnostic
+        to avoid silently re-introducing the bug if placement logic
+        changes later.
+        """
+        actions = [
+            _ca(ActionType.SERVE, 110, "near", confidence=0.9),
+            _ca(ActionType.SERVE, 125, "far", confidence=0.7, is_synthetic=True),
+        ]
+
+        repaired = repair_action_sequence(actions, net_y=0.5)
+
+        assert repaired[0].action_type == ActionType.SERVE
+        assert repaired[1].action_type == ActionType.RECEIVE
 
 
 class TestRepairDuplicateReceive:

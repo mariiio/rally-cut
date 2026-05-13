@@ -51,7 +51,8 @@ logger = logging.getLogger(__name__)
 #          assign_court_side_from_teams, propagate_court_side, the
 #          synthetic-serve placement helpers, or any classifier dependency
 #          that materially changes the serialized output.
-ACTION_PIPELINE_VERSION = "v1"
+# v2 (2026-05-13): Rule 3 dedupes synth+real serve pairs symmetrically (WS-B).
+ACTION_PIPELINE_VERSION = "v2"
 
 # Cached default action type classifier (loaded once from disk on first use)
 _default_action_classifier_cache: dict[str, ActionTypeClassifier | None] = {}
@@ -2437,16 +2438,20 @@ def repair_action_sequence(
         return repaired
 
     # ------------------------------------------------------------------
-    # Rule 3 (pre-pass): Duplicate non-synthetic serves → extras become receive.
-    # The second detected "serve" is almost certainly the serve return.
-    # Only non-synthetic serves count; the first real serve is the anchor.
+    # Rule 3 (pre-pass): Duplicate serves → extras become receive.
+    # Symmetric over synthetic-ness: the FIRST serve found (regardless
+    # of is_synthetic) is the anchor; every subsequent serve becomes
+    # receive. Pre-2026-05-13 this rule only counted non-synthetic
+    # serves as the anchor, which silently allowed a (synth, real)
+    # pair to slip through as a double-serve. Spec WS-B in
+    # docs/superpowers/specs/2026-05-13-action-attribution-root-causes-design.md
     # ------------------------------------------------------------------
-    first_real_serve_found = False
+    first_serve_found = False
     if 3 not in _disabled:
         for i, a in enumerate(repaired):
-            if a.action_type == ActionType.SERVE and not a.is_synthetic:
-                if not first_real_serve_found:
-                    first_real_serve_found = True
+            if a.action_type == ActionType.SERVE:
+                if not first_serve_found:
+                    first_serve_found = True
                 else:
                     if repair_count >= _MAX_SEQUENCE_REPAIRS:
                         break
@@ -2454,8 +2459,8 @@ def repair_action_sequence(
                     repaired[i] = _reclassify(a, ActionType.RECEIVE)
                     repair_count += 1
                     logger.debug(
-                        "Repair rule 3: duplicate serve at f%d → receive",
-                        a.frame,
+                        "Repair rule 3: duplicate serve at f%d (synth=%s) → receive",
+                        a.frame, a.is_synthetic,
                     )
 
     # ------------------------------------------------------------------
