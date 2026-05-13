@@ -33,6 +33,7 @@ class Violation:
     rally_id: str
     detail: str
     severity: Literal["error", "warn"] = "error"
+    payload: dict[str, Any] | None = None
 
 
 def check_i1_primary_set_size(
