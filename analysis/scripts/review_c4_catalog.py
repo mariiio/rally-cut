@@ -40,12 +40,18 @@ ROOT_CAUSE_VOCAB = (
     "unclassified",
 )
 
-# Beach 2v2 pairs where same-player consecutive is OFTEN legal (self-touch).
-_SAFE_BEACH_PAIRS = frozenset({
-    ("receive", "set"),
-    ("set", "attack"),
-    ("receive", "attack"),
-})
+# NOTE: There is NO beach-2v2 exception for same-player consecutive contacts.
+# The volleyball rule is strict: consecutive contacts must be by different
+# players. The only exception is when the previous action was a `block`
+# (the block exception is enforced in the C-4 detector itself, so those
+# pairs never reach this catalog).
+#
+# The auto-classifier therefore does NOT auto-tag any pair as
+# `genuine_double_touch`. That label remains available for hand-
+# classification when a human review concludes the same player legitimately
+# played twice for a non-block reason (e.g., a deflection off a block that
+# was mis-classified as something else, or a ghost contact that the human
+# spot-check decides to dismiss).
 
 
 def _f(row: dict[str, str], key: str) -> float:
@@ -103,25 +109,10 @@ def auto_classify(row: dict[str, str]) -> tuple[str, str]:
             f"geom_prev=violates, alt_prev={alt_prev:.2f}<0.5",
         )
 
-    # Genuine beach-2v2 double-touch: a safe pair AND both geometries clean
-    # AND no closer same-team alt on either side AND confidence not low.
-    pair = (row.get("action_prev_type", ""), row.get("action_curr_type", ""))
-    if (
-        pair in _SAFE_BEACH_PAIRS
-        and geom_prev == "matches" and geom_curr == "matches"
-        and (math.isnan(alt_prev) or alt_prev > 0.9)
-        and (math.isnan(alt_curr) or alt_curr > 0.9)
-        and (math.isnan(conf_prev) or conf_prev >= 0.5)
-        and (math.isnan(conf_curr) or conf_curr >= 0.5)
-    ):
-        return (
-            "genuine_double_touch",
-            f"safe pair {pair}, both geom=matches, no closer same-team alt",
-        )
-
     # Ghost contact: very low confidence on one side AND a double-action-type
     # pair (curr.action == prev.action), which suggests a spurious second
     # contact-detection fire on the same physical event.
+    pair = (row.get("action_prev_type", ""), row.get("action_curr_type", ""))
     if pair[0] == pair[1]:
         if math.isfinite(conf_prev) and conf_prev < 0.4:
             return ("ghost_contact_prev", f"same-type pair {pair}, conf_prev={conf_prev:.2f}<0.4")
