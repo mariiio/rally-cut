@@ -9,6 +9,8 @@ Rules:
        must cross to the other team.
   C-2: Possessions alternate teams.
   C-3: First action of a rally is `serve`.
+  C-4: Consecutive actions must be by different players (exception: prev
+       action is `block`).
 
 Skip semantics: each rule has explicit skip conditions. Additionally, the
 orchestrator (`run_all`) excludes rallies that fail any I-1 / I-3 / I-6
@@ -269,7 +271,7 @@ _UPSTREAM_BLOCKER_INVARIANTS = frozenset({"I-1", "I-3", "I-6"})
 
 
 def run_all(*, video_id: str) -> list[Violation]:
-    """Run all 3 coherence invariants against a video's persisted state.
+    """Run all 4 coherence invariants against a video's persisted state.
 
     Skips rallies that fail upstream PID invariants (I-1 / I-3 / I-6) to
     avoid flagging downstream effects of structural problems.
@@ -327,6 +329,12 @@ def run_all(*, video_id: str) -> list[Violation]:
         violations.extend(
             check_c3_first_action_is_serve(
                 rally_id=rally_id, actions=actions,
+            )
+        )
+        violations.extend(
+            check_c4_no_same_player_back_to_back(
+                rally_id=rally_id, actions=actions,
+                team_assignments=team_assignments,
             )
         )
 

@@ -268,6 +268,37 @@ class TestRunAll:
             violations = run_all(video_id="v1")
         assert violations == []  # Skipped due to upstream I-6
 
+    def test_run_all_dispatches_c4(self) -> None:
+        # A single rally with a same-player back-to-back pair (no block prev)
+        # should produce at least one C-4 violation from run_all.
+        actions = [
+            {"frame": 100, "action": "receive", "playerTrackId": 1},
+            {"frame": 140, "action": "set", "playerTrackId": 1},  # C-4 pair
+        ]
+        team_assignments = {"1": "B"}
+        actions_json = {"actions": actions, "teamAssignments": team_assignments}
+
+        mock_conn = MagicMock()
+        mock_cur = MagicMock()
+        mock_cur.fetchall.return_value = [("rally_xyz", actions_json)]
+        mock_conn.cursor.return_value.__enter__.return_value = mock_cur
+
+        with (
+            patch(
+                "rallycut.tracking.coherence_invariants.get_connection"
+            ) as mock_get_conn,
+            patch(
+                "rallycut.tracking.coherence_invariants.pid_run_all",
+                return_value=[],
+            ),
+        ):
+            mock_get_conn.return_value.__enter__.return_value = mock_conn
+            violations = run_all(video_id="vid_abc")
+
+        c4 = [v for v in violations if v.invariant == "C-4"]
+        assert len(c4) == 1, f"expected one C-4 from run_all, got {c4!r}"
+        assert c4[0].rally_id == "rally_xyz"
+
 
 class TestC4NoSamePlayerBackToBack:
     """C-4: consecutive actions must be by different players.
