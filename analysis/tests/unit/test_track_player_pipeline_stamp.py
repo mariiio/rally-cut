@@ -8,6 +8,7 @@ The version stamps must travel in that JSON.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 
 def test_actions_data_dict_carries_both_pipeline_versions() -> None:
@@ -35,7 +36,7 @@ def test_actions_data_dict_carries_both_pipeline_versions() -> None:
     assert actions_data["actionsPipelineVersion"] != "v0"
 
 
-def test_track_player_json_output_contains_pipeline_versions(tmp_path) -> None:
+def test_track_player_json_output_contains_pipeline_versions(tmp_path: Path) -> None:
     """End-to-end-ish: parse the JSON the CLI produces and assert the fields.
 
     Uses the existing track_player CLI test harness; if none exists,
