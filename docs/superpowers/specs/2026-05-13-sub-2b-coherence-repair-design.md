@@ -1,7 +1,7 @@
 # Sub-2.B: Coherence Repair — C-4 Audit + Measurement-Gated Player Re-attribution
 
 **Date:** 2026-05-13
-**Status:** Design — pending implementation plan
+**Status:** Phase 1 SHIPPED (audit + catalog). **Phase 2 NO-SHIP / PARKED** — see "Outcome (2026-05-13)" at bottom.
 **Workstream context:** Sub-2.B extends [Sub-2.A](2026-05-10-coherence-invariants-v1-design.md) (`audit-coherence-invariants`, shipped 2026-05-10, detection-only) with one new game-rule invariant and a measurement-gated player-attribution repair pass. Sits alongside the recent attribution work whose mechanical-rule ceilings were hit ([joint-attribution PGM](2026-05-12-joint-attribution-pgm-design.md), [contact-detection FN reduction Phase 1+1.5](2026-05-12-contact-detection-fn-reduction-design.md)). The audit-first discipline here is deliberate — design the repair pass from real fleet patterns, not from upfront hypotheses.
 
 ## Goal
@@ -406,3 +406,26 @@ No new integration tests in Phase 1 (matches Sub-2.A pattern). Phase 2 will land
 - [Action attribution team chain (Pass 2 override)](2026-05-11-action-attribution-team-chain-design.md) — shares the 2.0x distance cap pattern.
 - [Synthetic serve placement v1.1](2026-05-10-synthetic-serve-placement-design.md) and the 2026-05-12 dual-signal guard (commit `d26c6e9e`) — the synthetic-serve-cascade root cause this catalog will measure.
 - [Joint attribution PGM 2026-05-12](2026-05-12-joint-attribution-pgm-design.md) and [contact-detection FN Phase 1+1.5](2026-05-12-contact-detection-fn-reduction-design.md) — same architectural lesson (hand-tuned global rules cap fast); Sub-2.B uses measurement-first discipline to avoid the same trap.
+
+## Outcome (2026-05-13)
+
+**Phase 1 shipped:** C-4 invariant in `audit-coherence-invariants`, fleet catalog harness (`scripts/catalog_c4_violations.py`), friendly review helper (`scripts/review_c4_catalog.py`). These remain live infrastructure for post-deploy QA.
+
+**Phase 2 NO-SHIP / PARKED.** Gated-review experimentation revealed:
+
+1. **Stale `actions_json` inflated the baseline.** Pre-redetect catalog reported 328 violations. Fleet-wide `redetect_all_actions.py --apply` (current action classifier on stored tracking) dropped this to 278. F1 (tata `724ead56` 6-step cascade) and F2 (kaka `918275cb` serve mis-attribution) — the two specific user-flagged failures — both cleared on redetect alone.
+2. **Full pipeline refresh on worst video (`2e984c43`)** (match-players --reset-anchors → remap → reattribute → redetect) did **not** reduce C-4 count further (20 → 20). Cross-rally PID refresh isn't the bottleneck for the remaining violations.
+3. **Remaining ~278 violations are dominated by cascade patterns** where the same player is attributed to 3-5+ consecutive contacts in a rally. Their `alt_ratio` for the same-team alternative is typically 2-7x — outside the locked 2x distance cap (constraint #4). Under the locked rule, only ~5-10 violations fleet-wide would actually be repaired.
+4. **A/B on the 22-rally panel would not have statistical power** for a fix that touches ≤10 actions fleet-wide.
+
+The locked 2x distance cap is too strict for the dominant remaining pattern. Alternative paths that could unlock Phase 2 in the future:
+
+- **Sequence-aware rally-level repair** (composes with the joint-attribution-pgm NO-SHIP) — solve the cascade as a permutation problem rotating among same-team players. Heavier build.
+- **Tracking-level improvement** — investigate why the contact detector finds the ball repeatedly closest to one player when the alternation should rotate.
+- **GT expansion** — more labeled rallies would give the panel A/B power even for small subsets of repairs.
+
+**Removed in cleanup:** `_coherence_c4_repair_pass` no-op stub + its env-flag-gated call site in `reattribute_players` + `test_action_classifier_pass2d_stub.py`. Production `reattribute_players` reverts to the pre-Sub-2.B Pass-2c → Pass-3 chain.
+
+**Kept in production:** the C-4 detector + audit CLI wiring (`coherence_invariants.py`) and the catalog tooling (`scripts/catalog_c4_violations.py`, `scripts/review_c4_catalog.py`). The `Violation.payload` field on `pid_invariants.py` also stays — it's used by C-4 and is harmless for C-1/C-2/C-3.
+
+**Known real current-pipeline cascades** (Phase 2 fixture candidates if revisited): `a0881d82` (2e984c43, 4-step), plus 35aec2b6, 01f68711, 4ad457f6 from the same video, all surviving full pipeline refresh.

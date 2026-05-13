@@ -3183,61 +3183,11 @@ def reattribute_players(
                 n_within_team, len(actions),
             )
 
-    # Pass 2d (Sub-2.B, gated, default-OFF): C-4 same-player-back-to-back
-    # repair. Multi-signal evidence-based. Exact rule designed at Phase 1→2
-    # gate from the violation-pattern catalog
-    # (analysis/reports/coherence_c4_catalog/). Flip default-ON only after
-    # A/B passes on the 22-rally panel.
-    # Spec: docs/superpowers/specs/2026-05-13-sub-2b-coherence-repair-design.md
-    if os.environ.get("COHERENCE_C4_REPAIR", "0") == "1":
-        n_c4_repairs = _coherence_c4_repair_pass(
-            actions=actions,
-            contact_by_frame=contact_by_frame,
-            team_assignments=team_assignments,
-            chain_integrity=chain_integrity,
-            expected_teams=expected_teams,
-        )
-        if n_c4_repairs > 0:
-            logger.info(
-                "C-4 repair: re-attributed %d/%d actions",
-                n_c4_repairs, len(actions),
-            )
-
     # Pass 3: ReID re-attribution (requires reid_predictions)
     if reid_predictions:
         _reattribute_reid(actions, contact_by_frame, reid_predictions, reid_min_margin)
 
     return actions
-
-
-def _coherence_c4_repair_pass(
-    *,
-    actions: list[ClassifiedAction],
-    contact_by_frame: dict[int, Contact],
-    team_assignments: dict[int, int] | None,
-    chain_integrity: list[bool],
-    expected_teams: list[int | None],
-) -> int:
-    """Phase 1: no-op stub. Returns 0.
-
-    Phase 2 (gated on Phase 1 pattern-catalog review) fills in the body
-    using the multi-signal evidence rule designed from real fleet
-    patterns. Constraints the eventual rule must respect are documented
-    in the spec (section 'Phase 2 detail (placeholder)'):
-      - skip when action.confidence < 0.3 (mirrors Pass 2c)
-      - skip when action.player_track_id < 0 (mirrors Pass 2c)
-      - strict prev=block exception (matches C-4 detector)
-      - distance cap candidate.dist <= 2.0 * current_player.dist
-      - upstream-error skip: skip when this rally fires C-3 or when
-        either action has is_synthetic=True
-      - multi-signal convergence (>=2 of type_fit / team_geometry /
-        alt_ratio / confidence agree)
-      - default-OFF until A/B passes on the 22-rally panel
-      - forward iteration order; fixed-point pass (re-run is no-op)
-
-    Spec: docs/superpowers/specs/2026-05-13-sub-2b-coherence-repair-design.md
-    """
-    return 0
 
 
 def correct_team_from_propagation(
