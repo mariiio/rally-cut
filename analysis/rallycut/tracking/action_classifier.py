@@ -100,6 +100,13 @@ class ClassifiedAction:
     is_synthetic: bool = False  # True for inferred actions (e.g. missed serve)
     team: str = "unknown"  # "A" (near court), "B" (far court), or "unknown"
 
+    # Attribution uncertainty flag (A1 volleyball-rule pass, 2026-05-13).
+    # Set to True when the A1 pass detects a volleyball-rule violation
+    # (consecutive same-player contacts with prev != BLOCK) but no
+    # plausible same-team alt is available within the abstention bound.
+    # Default False; downstream consumers may surface this for review.
+    attribution_uncertain: bool = False
+
     # Play-level annotations populated by
     # ``rallycut.statistics.play_annotations.annotate_rally_actions`` when a
     # court calibration is available. Left as ``None`` on every path that
@@ -125,6 +132,8 @@ class ClassifiedAction:
         # Omitted when False for backward compatibility with existing stored data
         if self.is_synthetic:
             d["isSynthetic"] = True
+        if self.attribution_uncertain:
+            d["attributionUncertain"] = True
         if self.action_zone is not None:
             d["actionZone"] = self.action_zone
         if self.attack_direction is not None:
