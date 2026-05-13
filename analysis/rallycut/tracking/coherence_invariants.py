@@ -191,6 +191,77 @@ def check_c3_first_action_is_serve(
     ]
 
 
+def check_c4_no_same_player_back_to_back(
+    *,
+    rally_id: str,
+    actions: list[dict[str, Any]],
+    team_assignments: dict[str, str],
+) -> list[Violation]:
+    """C-4: consecutive actions must be by different players.
+
+    Exception: when ``action[i-1].action == 'block'`` the pair is exempt —
+    block→cover by the same player is legal (and so is the rarer
+    block→block by the same player, since the prev is still block).
+
+    Skip pair semantics: if either action's ``playerTrackId`` is missing,
+    -1, or not in ``team_assignments``, the comparison is meaningless and
+    the pair is skipped. This is the *audit* side, which surfaces all
+    same-player pairs regardless of action confidence; the Phase 2 repair
+    pass mirrors Pass 2c's ``confidence < 0.3`` floor instead.
+    """
+    if len(actions) < 2:
+        return []
+    sorted_actions = _actions_sorted_by_frame(actions)
+
+    violations: list[Violation] = []
+    for i in range(1, len(sorted_actions)):
+        prev = sorted_actions[i - 1]
+        curr = sorted_actions[i]
+        prev_pid = prev.get("playerTrackId")
+        curr_pid = curr.get("playerTrackId")
+
+        if prev_pid is None or curr_pid is None:
+            continue
+        if prev_pid == -1 or curr_pid == -1:
+            continue
+        if str(prev_pid) not in team_assignments:
+            continue
+        if str(curr_pid) not in team_assignments:
+            continue
+
+        prev_action = str(prev.get("action", ""))
+        if prev_action == "block":
+            continue  # strict block exception
+
+        if prev_pid != curr_pid:
+            continue
+
+        curr_action = str(curr.get("action", ""))
+        violations.append(
+            Violation(
+                invariant="C-4",
+                rally_id=rally_id,
+                detail=(
+                    f"action[{i - 1}] (frame {prev.get('frame')}, "
+                    f"{prev_action}, player {prev_pid}) and "
+                    f"action[{i}] (frame {curr.get('frame')}, "
+                    f"{curr_action}, player {curr_pid}) "
+                    f"attributed to same player; max is 1 unless prev is block"
+                ),
+                payload={
+                    "prev_index": i - 1,
+                    "curr_index": i,
+                    "prev_frame": int(prev.get("frame", 0)),
+                    "curr_frame": int(curr.get("frame", 0)),
+                    "prev_action": prev_action,
+                    "curr_action": curr_action,
+                    "player_id": int(prev_pid),
+                },
+            )
+        )
+    return violations
+
+
 # PID invariants whose failures should exclude a rally from coherence checks.
 # These directly affect action attribution / team labeling, so coherence
 # violations on these rallies would be downstream noise.
