@@ -840,9 +840,20 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
           const existing = state.actionGroundTruth[rallyId] ?? [];
           const updated = existing.map(l => {
             if (l.frame !== frame) return l;
-            // Update resolvedTrackId optimistically so the overlay reflects the
-            // new attribution immediately (before the save round-trip).
-            return { ...l, resolvedTrackId: trackId };
+            // Update BOTH:
+            //  - resolvedTrackId so the overlay re-renders immediately
+            //    (before the save round-trip).
+            //  - the input `trackId` field carried under the
+            //    ActionGroundTruthInput cast so the save payload
+            //    (which reads input.trackId FIRST) actually carries
+            //    the user's '1'-'4' override to the server. Previously
+            //    only resolvedTrackId updated → save sent the
+            //    auto-detected nearest player instead of the user's pick.
+            return {
+              ...l,
+              resolvedTrackId: trackId,
+              ...({ trackId } as Partial<ActionGroundTruthInput>),
+            } as ActionGroundTruthLabel;
           });
           return {
             actionGroundTruth: { ...state.actionGroundTruth, [rallyId]: updated },

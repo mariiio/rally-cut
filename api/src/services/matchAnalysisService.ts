@@ -815,42 +815,15 @@ async function applyRemapToRally(
     },
   });
 
-  // Canonicalize resolved_track_id on action GT rows in the same mapping pass.
-  // After saveTrackingResult.reresolveRallyGt runs, resolved_track_id holds a
-  // RAW BoT-SORT id from the new tracking. The match-analysis remap canonicalizes
-  // positions_json's track IDs to 1-4; without this step, the GT row's
-  // resolved_track_id keeps the raw value and the UI must route through
-  // appliedFullMapping for display — which goes wrong if the mapping is stale
-  // for any reason. Translate raw → canonical here so display reads
-  // resolved_track_id directly.
-  //
-  // CRITICAL: must be a single atomic UPDATE keyed on the row's ORIGINAL
-  // resolved_track_id, not a loop of per-pair UPDATEs. A loop has a swap-chain
-  // hazard when the mapping flips IDs (e.g., {1→2, 2→1}): the second pass
-  // would re-update rows that the first pass already changed. The VALUES
-  // join evaluates each row against its current value exactly once.
-  //
-  // Skips MANUAL pins (labeler intent should never be overwritten by an
-  // automatic remap pass) and entries where raw == canonical (no-op).
-  const remapEntries = [...mapping.entries()].filter(([raw, canonical]) => raw !== canonical);
-  if (remapEntries.length > 0) {
-    // Build VALUES clause as a raw SQL fragment so we can interpolate a
-    // variable-length list of (raw, canonical) pairs. The values come from
-    // the canonical-pid mapping we computed above (integers), so this is
-    // injection-safe.
-    const valuesFragment = remapEntries
-      .map(([raw, canonical]) => `(${raw}, ${canonical})`)
-      .join(', ');
-    await prisma.$executeRawUnsafe(
-      `UPDATE rally_action_ground_truth
-          SET resolved_track_id = m.new_pid, updated_at = NOW()
-         FROM (VALUES ${valuesFragment}) AS m(raw_id, new_pid)
-        WHERE rally_action_ground_truth.rally_id::text = $1
-          AND rally_action_ground_truth.resolved_track_id = m.raw_id
-          AND rally_action_ground_truth.resolved_source <> 'MANUAL'`,
-      rallyId,
-    );
-  }
+  // Note: we deliberately do NOT canonicalize rally_action_ground_truth
+  // .resolved_track_id here. The display path (web/src/utils/canonicalPid.ts
+  // resolveCanonicalPid) routes resolved_track_id through appliedFullMapping
+  // to get the canonical pid. Canonicalizing the column in place would cause
+  // double-translation: the new "canonical" value would be routed AGAIN
+  // through afm at display time, mapping it as if it were still a raw id.
+  // Stale-afm risk remains: if a retrack runs without a subsequent
+  // match-analysis, displays of GT badges can show wrong pids. The UI
+  // workflow is "Retrack & analyze" which avoids this.
 
   // Update matchAnalysisJson: store appliedFullMapping + set trackToPlayer to identity
   const rallyEntry = matchResult.rallies.find((r) => r.rallyId === rallyId);

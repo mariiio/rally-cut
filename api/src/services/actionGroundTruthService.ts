@@ -224,9 +224,20 @@ export async function saveActionGroundTruth(
 
       const trackId = label.trackId ?? null;
 
-      // Find the position for this trackId at this frame
+      // Find the position for this trackId at this frame.
+      // Prefer rawPositionsJson because ActionLabelingMode resolves the
+      // labeler's '1'-'4' press through appliedFullMapping to a RAW BoT-SORT
+      // id (post-Task-16). positionsJson holds post-remap canonical pids 1-4
+      // and would miss any raw id not in that range. Fall back to positionsJson
+      // for legacy clients that still send canonical pids directly.
       const posAtFrame = trackId !== null
-        ? positions.find(p => p.trackId === trackId && p.frameNumber === label.frame)
+        ? (
+            (rawPositions
+              ? rawPositions.find(p => p.trackId === trackId && p.frameNumber === label.frame) as
+                  unknown as PlayerPosition | undefined
+              : undefined)
+            ?? positions.find(p => p.trackId === trackId && p.frameNumber === label.frame)
+          )
         : undefined;
 
       // Find ball at this frame
