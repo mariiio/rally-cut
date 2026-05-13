@@ -92,6 +92,8 @@ export async function handleTrackingRallyComplete(
       ballPositions: data.ballPositions as PlayerTrackerOutput['ballPositions'],
       contacts: data.contacts as PlayerTrackerOutput['contacts'],
       actions: data.actions as PlayerTrackerOutput['actions'],
+      contactsPipelineVersion: (data.contactsPipelineVersion as string | null | undefined) ?? null,
+      actionsPipelineVersion: (data.actionsPipelineVersion as string | null | undefined) ?? null,
       qualityReport: data.qualityReport as PlayerTrackerOutput['qualityReport'],
       courtDetection: data.courtDetection as PlayerTrackerOutput['courtDetection'],
       courtAutoCalibration: data.courtAutoCalibration as PlayerTrackerOutput['courtAutoCalibration'],

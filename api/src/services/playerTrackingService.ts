@@ -141,6 +141,8 @@ export interface TrackPlayersResult {
   // Contact detection and action classification
   contacts?: ContactsData;
   actions?: ActionsData;
+  contactsPipelineVersion?: string | null;
+  actionsPipelineVersion?: string | null;
   qualityReport?: QualityReport;
 }
 
@@ -159,6 +161,8 @@ export interface GetPlayerTrackResult {
   ballPositions?: BallPosition[];
   contacts?: ContactsData;
   actions?: ActionsData;
+  contactsPipelineVersion?: string | null;
+  actionsPipelineVersion?: string | null;
   qualityReport?: QualityReport;
   error?: string;
 }
@@ -280,6 +284,8 @@ interface PlayerTrackerOutput {
   ballPositions?: BallPosition[];
   contacts?: ContactsData;
   actions?: ActionsData;
+  contactsPipelineVersion?: string | null;
+  actionsPipelineVersion?: string | null;
   qualityReport?: QualityReport;
   courtDetection?: CourtDetectionInsights;
   // Raw court detection (corners + confidence) from the tracker's per-rally
@@ -724,6 +730,8 @@ export async function saveTrackingResult(
         ballPositionsJson: trackerResult.ballPositions as unknown as object[],
         contactsJson: trackerResult.contacts as unknown as object,
         actionsJson: trackerResult.actions as unknown as object,
+        contactsPipelineVersion: trackerResult.contacts ? (trackerResult.contactsPipelineVersion ?? null) : null,
+        actionsPipelineVersion: trackerResult.actions ? (trackerResult.actionsPipelineVersion ?? null) : null,
         qualityReportJson: trackerResult.qualityReport as unknown as object,
         processingTimeMs,
         modelVersion: 'yolo11s',
@@ -745,6 +753,8 @@ export async function saveTrackingResult(
         ballPositionsJson: trackerResult.ballPositions as unknown as object[],
         contactsJson: trackerResult.contacts as unknown as object,
         actionsJson: trackerResult.actions as unknown as object,
+        contactsPipelineVersion: trackerResult.contacts ? (trackerResult.contactsPipelineVersion ?? null) : null,
+        actionsPipelineVersion: trackerResult.actions ? (trackerResult.actionsPipelineVersion ?? null) : null,
         qualityReportJson: trackerResult.qualityReport as unknown as object,
         processingTimeMs,
         modelVersion: 'yolo11s',
