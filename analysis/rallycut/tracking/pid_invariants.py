@@ -387,12 +387,19 @@ def run_all(*, video_id: str) -> tuple[list[Violation], StaleVersionReport]:
         observed_actions[a_key] = observed_actions.get(a_key, 0) + 1
         observed_contacts[c_key] = observed_contacts.get(c_key, 0) + 1
 
-        # A rally is "stale" if its column has a value AND that value is
-        # not the current constant. A NULL column (no content) is not
-        # stale — content-absent rallies skip the content-dependent
-        # checks for other reasons (e.g., empty actions_list).
-        actions_stale = actions_pv is not None and actions_pv != ACTION_PIPELINE_VERSION
-        contacts_stale = contacts_pv is not None and contacts_pv != CONTACT_PIPELINE_VERSION
+        # A rally is "stale" if it has content AND its version doesn't
+        # match the current constant. The check is gated on content
+        # (not on column presence) so that:
+        #   - content + matching version  → not stale ✓
+        #   - content + older version     → stale ✓
+        #   - content + NULL version      → stale (mixed-vintage merge
+        #     output, or a producer-side regression that forgot to stamp;
+        #     either way the audit needs to surface it)
+        #   - no content + NULL version   → not stale (nothing to check)
+        has_actions_content = actions_json is not None
+        has_contacts_content = contacts_json is not None
+        actions_stale = has_actions_content and actions_pv != ACTION_PIPELINE_VERSION
+        contacts_stale = has_contacts_content and contacts_pv != CONTACT_PIPELINE_VERSION
         if actions_stale:
             skipped_stale_actions.add(rally_id)
         if contacts_stale:

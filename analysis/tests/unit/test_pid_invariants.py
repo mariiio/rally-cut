@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
+from rallycut.tracking.action_classifier import ACTION_PIPELINE_VERSION
+from rallycut.tracking.contact_detector import CONTACT_PIPELINE_VERSION
 from rallycut.tracking.pid_invariants import (
     check_i1_primary_set_size,
     check_i2_positions_in_primary,
@@ -360,8 +362,8 @@ class TestRunAll:
                     "teamAssignments": {"3": "A", "7": "A", "12": "B", "15": "B"},
                 },  # actions_json
                 [{"playerTrackId": 3, "frame": 5}],  # contacts_json
-                None,  # actions_pipeline_version
-                None,  # contacts_pipeline_version
+                ACTION_PIPELINE_VERSION,  # actions_pipeline_version
+                CONTACT_PIPELINE_VERSION,  # contacts_pipeline_version
             ),
         ]
         match_analysis = {
@@ -390,8 +392,8 @@ class TestRunAll:
                     "teamAssignments": {"3": "A", "7": "A"},  # I-6: 12 missing
                 },
                 [{"playerTrackId": 88, "frame": 5}],  # I-4: 88 not in primary
-                None,  # actions_pipeline_version
-                None,  # contacts_pipeline_version
+                ACTION_PIPELINE_VERSION,  # actions_pipeline_version
+                CONTACT_PIPELINE_VERSION,  # contacts_pipeline_version
             ),
         ]
         match_analysis = {
@@ -429,8 +431,8 @@ class TestRunAll:
                     "teamAssignments": {"3": "A", "7": "A", "12": "B", "15": "B"},
                 },
                 [{"playerTrackId": 3, "frame": 5}],
-                None,  # actions_pipeline_version
-                None,  # contacts_pipeline_version
+                ACTION_PIPELINE_VERSION,  # actions_pipeline_version
+                CONTACT_PIPELINE_VERSION,  # contacts_pipeline_version
             ),
         ]
         match_analysis = {

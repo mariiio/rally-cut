@@ -546,6 +546,11 @@ async function runPlayerTracker(
             ? { corners: rawCourtAuto.corners, confidence: rawCourtAuto.confidence }
             : undefined;
 
+        const contactsPipelineVersion =
+          typeof result.contactsPipelineVersion === 'string' ? result.contactsPipelineVersion : null;
+        const actionsPipelineVersion =
+          typeof result.actionsPipelineVersion === 'string' ? result.actionsPipelineVersion : null;
+
         resolve({
           positions,
           rawPositions,
@@ -560,6 +565,8 @@ async function runPlayerTracker(
           ballPositions,
           contacts,
           actions,
+          contactsPipelineVersion,
+          actionsPipelineVersion,
           qualityReport,
           courtAutoCalibration,
         });

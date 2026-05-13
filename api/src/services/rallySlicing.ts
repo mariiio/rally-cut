@@ -16,6 +16,8 @@ export type SlicePlayerTrackInput = {
   ballPositionsJson: AnyFrameEntry[] | null;
   contactsJson: AnyFrameEntry[] | null;
   actionsJson: AnyFrameEntry[] | null;
+  contactsPipelineVersion: string | null;
+  actionsPipelineVersion: string | null;
   groundTruthJson: AnyFrameEntry[] | null;
   qualityReportJson: unknown;
 };
@@ -116,6 +118,14 @@ export function concatPlayerTracks(
     mergedPrimaryTrackIds = b.primaryTrackIds ?? null;
   }
 
+  // Pipeline-version stamp: preserve when both halves agree; null when they
+  // differ so a mixed-vintage merge is visibly unstamped (no content lies
+  // about its vintage). Same row's contacts and actions are tracked separately.
+  const mergedContactsPipelineVersion =
+    a.contactsPipelineVersion === b.contactsPipelineVersion ? a.contactsPipelineVersion : null;
+  const mergedActionsPipelineVersion =
+    a.actionsPipelineVersion === b.actionsPipelineVersion ? a.actionsPipelineVersion : null;
+
   return {
     fps: a.fps,
     courtSplitY: a.courtSplitY,
@@ -132,6 +142,8 @@ export function concatPlayerTracks(
     ballPositionsJson,
     contactsJson,
     actionsJson,
+    contactsPipelineVersion: mergedContactsPipelineVersion,
+    actionsPipelineVersion: mergedActionsPipelineVersion,
     groundTruthJson,
   };
 }
@@ -163,6 +175,10 @@ export function slicePlayerTrack(
     needsRetrack: pt.needsRetrack,
     primaryTrackIds: pt.primaryTrackIds,
     qualityReportJson: pt.qualityReportJson,
+    // Pipeline-version stamp: split-derived rows inherit the parent's
+    // vintage (no classifier re-run means no version change).
+    contactsPipelineVersion: pt.contactsPipelineVersion,
+    actionsPipelineVersion: pt.actionsPipelineVersion,
   };
 
   return {
