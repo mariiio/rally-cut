@@ -18,6 +18,7 @@ import {
   getActionGroundTruth,
   reattachActionGroundTruth,
   reresolveRallyGt,
+  reresolveVideoGtAgainstCanonical,
 } from '../src/services/actionGroundTruthService';
 
 const videoId  = 'agt00000-0000-0000-0000-000000000001';
@@ -261,6 +262,51 @@ describe('actionGroundTruthService', () => {
     const row = await prisma.rallyActionGroundTruth.findFirstOrThrow({ where: { rallyId } });
     expect(row.resolvedTrackId).toBe(99);
     expect(row.resolvedSource).toBe('MANUAL');
+  });
+
+  // ------------------------------------------------------------------
+  // Test 8b (2026-05-13 fix): reresolveVideoGtAgainstCanonical rewrites a
+  // stale-raw SNAPSHOT_EXACT row to the canonical pid post-remap.
+  //
+  // Scenario: backfill (or save-time at raw) wrote resolvedTrackId=7 with
+  // resolvedSource=SNAPSHOT_EXACT. Subsequent `remap-track-ids` rewrote the
+  // canonical positionsJson so the player whose snapshot bbox matches now
+  // sits at trackId=3. The canonical re-resolver must overwrite the stale
+  // 7 with the canonical 3.
+  // ------------------------------------------------------------------
+  it('reresolveVideoGtAgainstCanonical rewrites stale-raw SNAPSHOT_EXACT to canonical id', async () => {
+    // Snapshot: bbox at (0.1,0.1,0.2,0.3), tagged as raw trackId 7. Existing
+    // positionsJson in the rally already has trackId 7 at frame 50 with the
+    // same bbox (matches the test fixture). After we simulate a remap, that
+    // canonical entry becomes trackId 3 with the same bbox.
+    await saveActionGroundTruth(rallyId, userId, [{ frame: 50, action: 'serve', trackId: 7 }]);
+
+    // Sanity: row was stamped SNAPSHOT_EXACT with raw 7.
+    let row = await prisma.rallyActionGroundTruth.findFirstOrThrow({ where: { rallyId, frame: 50 } });
+    expect(row.resolvedTrackId).toBe(7);
+    expect(row.resolvedSource).toBe('SNAPSHOT_EXACT');
+
+    // Simulate `remap-track-ids` rewriting positionsJson 7 → 3 (canonical).
+    await prisma.playerTrack.update({
+      where: { rallyId },
+      data: {
+        positionsJson: [
+          makePosition(1, 10, 0.25, 0.30, 0.08, 0.18),
+          makePosition(2, 10, 0.75, 0.70, 0.08, 0.18),
+          // Same bbox as the snapshot; new canonical id is 3.
+          makePosition(3, 50, 0.1, 0.1, 0.1, 0.2),
+        ] as unknown as object,
+      },
+    });
+
+    const stats = await reresolveVideoGtAgainstCanonical(videoId);
+    expect(stats.ralliesProcessed).toBe(1);
+
+    row = await prisma.rallyActionGroundTruth.findFirstOrThrow({ where: { rallyId, frame: 50 } });
+    expect(row.snapshotTrackId).toBe(7); // snapshot anchor preserved
+    // resolved_track_id must now point to a canonical id present in positionsJson.
+    expect(row.resolvedTrackId).toBe(3);
+    expect(row.resolvedSource).toBe('IOU_MATCH');
   });
 
   // ------------------------------------------------------------------

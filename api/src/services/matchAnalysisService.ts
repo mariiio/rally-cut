@@ -22,6 +22,7 @@ import { prisma } from '../lib/prisma.js';
 import { ForbiddenError, NotFoundError } from '../middleware/errorHandler.js';
 import { consumePendingEdits } from './pendingAnalysisEdits.js';
 import { planStages } from './matchAnalysisPlanning.js';
+import { reresolveRallyGt, reresolveVideoGtAgainstCanonical } from './actionGroundTruthService.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -341,6 +342,24 @@ export async function runMatchAnalysis(
           console.error(`[MATCH_ANALYSIS] Track ID remapping failed (non-fatal):`, remapError);
         }
 
+        // Stage 4b: Re-resolve action GT rows against canonical positions
+        // (post-remap). saveTrackingResult resolves at raw-id time, but
+        // remap-track-ids rewrites the trackIds afterward — without this
+        // step, `resolved_track_id` carries stale raw ids that don't
+        // appear in positionsJson, contaminating any downstream consumer
+        // that joins on the canonical id space. (best-effort)
+        try {
+          await timed('stage4b_reresolve_gt', async () => {
+            const stats = await reresolveVideoGtAgainstCanonical(videoId);
+            console.log(
+              `[MATCH_ANALYSIS] Re-resolved GT for video ${videoId}: ` +
+              `${stats.ralliesProcessed} rallies, ${stats.rowsUpdated} rows`
+            );
+          });
+        } catch (reresolveError) {
+          console.error(`[MATCH_ANALYSIS] GT re-resolve failed (non-fatal):`, reresolveError);
+        }
+
         // Stage 5: Re-attribute player actions using match-level team identity
         // (best-effort — don't fail the whole pipeline)
         report('Classifying actions...', 5, 6);
@@ -366,6 +385,22 @@ export async function runMatchAnalysis(
           await timed('stage4_remap', () => remapTrackIds(videoId, { rallyIds: changedRallyIds }));
         } catch (remapError) {
           console.error(`[MATCH_ANALYSIS] Track ID remapping failed (non-fatal):`, remapError);
+        }
+
+        // Stage 4b: Re-resolve action GT for changed rallies against canonical
+        // positions. Walks all rallies (cheap relative to remap; per-rally
+        // filter happens inside `reresolveVideoGtAgainstCanonical` via the
+        // per-rally tx).
+        try {
+          await timed('stage4b_reresolve_gt', async () => {
+            const stats = await reresolveVideoGtAgainstCanonical(videoId);
+            console.log(
+              `[MATCH_ANALYSIS] Re-resolved GT for video ${videoId}: ` +
+              `${stats.ralliesProcessed} rallies, ${stats.rowsUpdated} rows`
+            );
+          });
+        } catch (reresolveError) {
+          console.error(`[MATCH_ANALYSIS] GT re-resolve failed (non-fatal):`, reresolveError);
         }
 
         report('Reattributing changed rallies...', 5, 6);
@@ -804,26 +839,33 @@ async function applyRemapToRally(
   // Remap primaryTrackIds
   const newPrimaryIds = primaryIds.map((tid) => mapping.get(tid) ?? tid);
 
-  // Update DB
-  await prisma.playerTrack.update({
-    where: { rallyId },
-    data: {
-      positionsJson: positions as unknown as Prisma.InputJsonValue,
-      contactsJson: contactsData as unknown as Prisma.InputJsonValue,
-      actionsJson: actionsData as unknown as Prisma.InputJsonValue,
-      primaryTrackIds: newPrimaryIds as unknown as Prisma.InputJsonValue,
-    },
+  // Update DB + re-resolve action GT in a single transaction. The GT
+  // re-resolve uses the just-canonicalized positionsJson so
+  // `resolved_track_id` lands in canonical id space (the contract the
+  // web display layer + analysis eval consumers depend on).
+  const canonicalTeamAssignments: Record<string, 'A' | 'B'> | undefined =
+    actionsData.teamAssignments as Record<string, 'A' | 'B'> | undefined;
+  await prisma.$transaction(async (tx) => {
+    await tx.playerTrack.update({
+      where: { rallyId },
+      data: {
+        positionsJson: positions as unknown as Prisma.InputJsonValue,
+        contactsJson: contactsData as unknown as Prisma.InputJsonValue,
+        actionsJson: actionsData as unknown as Prisma.InputJsonValue,
+        primaryTrackIds: newPrimaryIds as unknown as Prisma.InputJsonValue,
+      },
+    });
+    await reresolveRallyGt(
+      tx,
+      rallyId,
+      positions as unknown as Array<{
+        frameNumber: number; trackId: number;
+        x: number; y: number; width: number; height: number;
+        confidence?: number; embedding?: number[] | null;
+      }>,
+      canonicalTeamAssignments ?? null,
+    );
   });
-
-  // Note: we deliberately do NOT canonicalize rally_action_ground_truth
-  // .resolved_track_id here. The display path (web/src/utils/canonicalPid.ts
-  // resolveCanonicalPid) routes resolved_track_id through appliedFullMapping
-  // to get the canonical pid. Canonicalizing the column in place would cause
-  // double-translation: the new "canonical" value would be routed AGAIN
-  // through afm at display time, mapping it as if it were still a raw id.
-  // Stale-afm risk remains: if a retrack runs without a subsequent
-  // match-analysis, displays of GT badges can show wrong pids. The UI
-  // workflow is "Retrack & analyze" which avoids this.
 
   // Update matchAnalysisJson: store appliedFullMapping + set trackToPlayer to identity
   const rallyEntry = matchResult.rallies.find((r) => r.rallyId === rallyId);

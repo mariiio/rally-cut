@@ -459,23 +459,31 @@ export async function reattachActionGroundTruth(
 // ---------------------------------------------------------------------------
 
 /**
- * Re-resolve all GT rows for a rally against new tracking data.
+ * Re-resolve all GT rows for a rally against current tracking positions.
  *
- * Called by saveTrackingResult after writing a new PlayerTrack.
+ * The `positions` array is whatever the caller wants to match against —
+ * `positionsJson` (canonical, post-remap) is the production choice so
+ * `resolved_track_id` always lands in the canonical id space that
+ * downstream consumers query (`{1, 2, 3, 4, 101+}` after remap). Passing
+ * `rawPositionsJson` works too but produces stale raw ids after
+ * `remap-track-ids` rewrites `positionsJson`, which contaminates any
+ * consumer that joins on canonical ids.
+ *
  * Iterates each GT row, calls resolveGtRow to find the best matching
  * current track, and writes the resolved fields.
  *
  * Rows with resolvedSource=MANUAL are left untouched.
  *
- * @param tx      Prisma transaction client
+ * @param tx       Prisma transaction client
  * @param rallyId  Rally whose GT rows to re-resolve
- * @param rawPositions  Array of {frameNumber, trackId, x, y, width, height}
- *                      from the new PlayerTrack (raw positions).
+ * @param positions  Array of {frameNumber, trackId, x, y, width, height}
+ *                   from the new PlayerTrack. Prefer canonical positions
+ *                   (post-remap) so resolved_track_id is consumer-ready.
  */
 export async function reresolveRallyGt(
   tx: PrismaTransaction,
   rallyId: string,
-  rawPositions: Array<{
+  positions: Array<{
     frameNumber: number;
     trackId: number;
     x: number;
@@ -497,7 +505,7 @@ export async function reresolveRallyGt(
 
   // Build a frame → Candidate[] index for fast lookup
   const byFrame = new Map<number, Candidate[]>();
-  for (const p of rawPositions) {
+  for (const p of positions) {
     const list = byFrame.get(p.frameNumber) ?? [];
     const team = teamAssignments ? (teamAssignments[String(p.trackId)] ?? null) : null;
     const candidate: Candidate = {
@@ -554,4 +562,67 @@ export async function reresolveRallyGt(
       },
     });
   }
+}
+
+// ---------------------------------------------------------------------------
+// reresolveVideoGtAgainstCanonical
+// ---------------------------------------------------------------------------
+
+/**
+ * Re-resolve every GT row across every rally of a video against the
+ * **canonical** positions (post-`remap-track-ids`). Intended to be invoked
+ * by `matchAnalysisService` after the remap stage so `resolved_track_id`
+ * lands in the canonical id space (`{1, 2, 3, 4, 101+}`) that downstream
+ * eval and analytics consumers query.
+ *
+ * The save-time hook inside `saveTrackingResult` runs the resolver against
+ * `rawPositionsJson` (pre-remap), which is correct at that moment. But by
+ * the time match-analysis remaps the per-rally trackIds, those raw ids no
+ * longer match `positionsJson` — leaving `resolved_track_id` stale. This
+ * helper closes that gap.
+ *
+ * Returns per-rally counts for observability.
+ */
+export async function reresolveVideoGtAgainstCanonical(
+  videoId: string,
+): Promise<{ ralliesProcessed: number; rowsUpdated: number }> {
+  const rallies = await prisma.rally.findMany({
+    where: { videoId },
+    include: {
+      playerTrack: {
+        select: { positionsJson: true, actionsJson: true },
+      },
+    },
+  });
+
+  let ralliesProcessed = 0;
+  let rowsUpdated = 0;
+
+  for (const rally of rallies) {
+    if (!rally.playerTrack?.positionsJson) continue;
+    const canonicalPositions = rally.playerTrack.positionsJson as unknown as Array<{
+      frameNumber: number;
+      trackId: number;
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+      confidence?: number;
+      embedding?: number[] | null;
+    }>;
+    if (!Array.isArray(canonicalPositions) || canonicalPositions.length === 0) continue;
+
+    const teamAssignments = readTeamAssignments(rally.playerTrack.actionsJson);
+
+    await prisma.$transaction(async (tx: PrismaTransaction) => {
+      const before = await tx.rallyActionGroundTruth.count({
+        where: { rallyId: rally.id, NOT: { resolvedSource: 'MANUAL' } },
+      });
+      await reresolveRallyGt(tx, rally.id, canonicalPositions, teamAssignments);
+      rowsUpdated += before;
+    });
+    ralliesProcessed++;
+  }
+
+  return { ralliesProcessed, rowsUpdated };
 }
