@@ -24,3 +24,15 @@ export function planStages(edits: PendingEditsJson): StagePlan {
   }
   return { fullRerun: false, changedRallyIds: [...changed] };
 }
+
+/**
+ * Partial-rerun is only meaningful when there's an existing matchAnalysisJson
+ * to incrementally update. If it's missing (first-ever analysis, or it was
+ * nulled by a structural edit), we MUST run match-players and repair-identities
+ * — otherwise player IDs stay inconsistent across rallies.
+ *
+ * Returns true when caller should override `plan.fullRerun` to true.
+ */
+export function shouldForceFullRerun(plan: StagePlan, hasMatchAnalysisJson: boolean): boolean {
+  return !plan.fullRerun && !hasMatchAnalysisJson;
+}

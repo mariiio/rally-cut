@@ -21,7 +21,7 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../lib/prisma.js';
 import { ForbiddenError, NotFoundError } from '../middleware/errorHandler.js';
 import { consumePendingEdits } from './pendingAnalysisEdits.js';
-import { planStages } from './matchAnalysisPlanning.js';
+import { planStages, shouldForceFullRerun } from './matchAnalysisPlanning.js';
 import { reresolveRallyGt, reresolveVideoGtAgainstCanonical } from './actionGroundTruthService.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -268,6 +268,23 @@ export async function runMatchAnalysis(
 
     const edits = await consumePendingEdits(videoId);
     plan = planStages(edits);
+
+    // Override: partial-rerun assumes an existing matchAnalysisJson to update
+    // against. If it's null (first-ever analysis, or cleared by a recent edit),
+    // partial-rerun would skip match-players (stage 2) + repair-identities
+    // (stage 3) and player IDs stay inconsistent across rallies. Force full.
+    if (!plan.fullRerun) {
+      const v = await prisma.video.findUnique({
+        where: { id: videoId },
+        select: { matchAnalysisJson: true },
+      });
+      if (shouldForceFullRerun(plan, v?.matchAnalysisJson != null)) {
+        console.warn(
+          `[MATCH_ANALYSIS] Forcing fullRerun for video ${videoId}: matchAnalysisJson is missing (partial-rerun would skip match-players)`,
+        );
+        plan = { fullRerun: true, changedRallyIds: [] };
+      }
+    }
 
     const report = onProgress ?? (() => {});
 
