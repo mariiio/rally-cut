@@ -65,6 +65,10 @@ export async function syncState(
 
   const videoIds = new Set(session.sessionVideos.map((sv) => sv.videoId));
 
+  // Default Prisma interactive-tx timeout is 5s, which is tight for syncs
+  // that hit reindexTrackingData (shifts positions/raw/ball/contacts/actions
+  // JSON arrays on a single PlayerTrack row). Bump to 30s so a slow disk
+  // or DB under load doesn't poison an otherwise valid sync.
   await prisma.$transaction(async (tx) => {
     // Sync rallies for each video (only if user can edit)
     if (canEditRallies) {
@@ -496,7 +500,7 @@ export async function syncState(
       where: { id: sessionId },
       data: { updatedAt: new Date() },
     });
-  });
+  }, { maxWait: 5_000, timeout: 30_000 });
 
   return { success: true, syncedAt: new Date().toISOString() };
 }
