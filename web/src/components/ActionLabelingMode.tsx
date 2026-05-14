@@ -1,12 +1,10 @@
 'use client';
 
-import { useEffect, useCallback, RefObject, useMemo } from 'react';
+import { useEffect, useCallback, RefObject } from 'react';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { usePlayerStore } from '@/stores/playerStore';
 import { useEditorStore } from '@/stores/editorStore';
 import type { ActionGroundTruthLabel, ActionGroundTruthInput } from '@/services/api';
-import { pidToTrackId as resolveDisplayPidToTrackId } from '@/utils/canonicalPid';
-import { rallyMatchEntry } from '@/utils/gtLabelDisplay';
 
 const ACTION_KEYS: Record<string, ActionGroundTruthLabel['action']> = {
   s: 'serve',
@@ -28,67 +26,20 @@ export function ActionLabelingMode({ videoRef, onLabelAdded }: ActionLabelingMod
   const updateActionLabelPlayer = usePlayerTrackingStore((s) => s.updateActionLabelPlayer);
   const setIsLabelingActions = usePlayerTrackingStore((s) => s.setIsLabelingActions);
   const playerTracks = usePlayerTrackingStore((s) => s.playerTracks);
-  const matchAnalysis = usePlayerTrackingStore((s) => s.matchAnalysis);
-  const loadMatchAnalysis = usePlayerTrackingStore((s) => s.loadMatchAnalysis);
   const seek = usePlayerStore((s) => s.seek);
 
   const selectedRallyId = useEditorStore((s) => s.selectedRallyId);
   const rallies = useEditorStore((s) => s.rallies);
-  const activeMatchId = useEditorStore((s) => s.activeMatchId);
 
   const selectedRally = rallies.find((r) => r.id === selectedRallyId);
   const backendRallyId = selectedRally?._backendId ?? null;
   const trackData = backendRallyId ? playerTracks[backendRallyId]?.tracksJson : null;
-
-  // Lazy-load match analysis when labeling begins — gives us the per-rally
-  // appliedFullMapping we need to anchor GT to raw BoT-SORT track ids.
-  useEffect(() => {
-    if (!isLabelingActions || !activeMatchId) return;
-    if (matchAnalysis[activeMatchId]) return;
-    void loadMatchAnalysis(activeMatchId);
-  }, [isLabelingActions, activeMatchId, matchAnalysis, loadMatchAnalysis]);
-
-  const currentAnalysis = activeMatchId ? matchAnalysis[activeMatchId] : undefined;
-  const currentRallyEntry = useMemo(
-    () => rallyMatchEntry(currentAnalysis, backendRallyId),
-    [currentAnalysis, backendRallyId],
-  );
-  const sortedTracks = useMemo(
-    () => (trackData ? [...trackData.tracks].sort((a, b) => a.trackId - b.trackId) : []),
-    [trackData],
-  );
-  const sortOrderMap = useMemo(() => {
-    const m = new Map<number, number>();
-    sortedTracks.forEach((t, idx) => m.set(t.trackId, idx + 1));
-    return m;
-  }, [sortedTracks]);
-
-  /** Reverse a visible display pid (1-4) into the raw BoT-SORT id to anchor
-   *  the GT row. Priority: appliedFullMapping (Hungarian) → sort-order. */
-  const resolveRawTrackIdForPid = useCallback(
-    (displayPid: number): number | null =>
-      resolveDisplayPidToTrackId(
-        displayPid,
-        currentRallyEntry?.appliedFullMapping,
-        sortOrderMap,
-      ),
-    [currentRallyEntry, sortOrderMap],
-  );
-
-  /** Visible trackId could be either a canonical pid (post-remap rallies)
-   *  or a raw BoT-SORT id (pre-remap). When it falls in {1..4} we invert
-   *  through the same priority chain to recover the raw id; otherwise it's
-   *  already raw. */
-  const resolveRawTrackId = useCallback(
-    (visibleTrackId: number): number => {
-      if (visibleTrackId >= 1 && visibleTrackId <= 4) {
-        const raw = resolveRawTrackIdForPid(visibleTrackId);
-        if (raw !== null) return raw;
-      }
-      return visibleTrackId;
-    },
-    [resolveRawTrackIdForPid],
-  );
+  // Note: post-remap, trackData.tracks[].trackId IS the canonical pid 1-4.
+  // The labeler writes canonical pid as the GT row's trackId; the server
+  // looks it up in positionsJson (canonical) and stores resolved_track_id
+  // canonical. This keeps the entire flow canonical end-to-end and removes
+  // the half-canonical state where a freshly-saved row's raw value got
+  // mis-read as canonical by gtLabelDisplay (pre-2026-05-14 bug).
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
     if (!isLabelingActions || !backendRallyId || !trackData || !selectedRally) return;
@@ -133,17 +84,14 @@ export function ActionLabelingMode({ videoRef, onLabelAdded }: ActionLabelingMod
       const labelAtFrame = gtLabels.find(l => l.frame === frame);
       if (!labelAtFrame) return;
 
-      // Resolve "Player N" to a raw BoT-SORT track id. Priority:
-      // appliedFullMapping (Hungarian) → sort-order over visible tracks.
-      const rawTrackId = resolveRawTrackIdForPid(num);
-      if (rawTrackId === null) {
-        console.warn(
-          `[ActionLabelingMode] Could not resolve Player ${num} to a raw track id ` +
-          'on this rally; skipping label.',
-        );
-        return;
-      }
-      updateActionLabelPlayer(backendRallyId, frame, rawTrackId);
+      // Send the canonical pid (1-4) as the trackId. The server save path
+      // looks up bbox in positionsJson which holds canonical pids post-remap,
+      // and reresolveVideoGtAgainstCanonical also writes canonical. Keeping
+      // the value canonical end-to-end means the display (gtLabelDisplay)
+      // can read resolved_track_id directly without routing through
+      // appliedFullMapping — and avoids the half-canonical state where a
+      // freshly-saved row's raw value gets mis-read as canonical.
+      updateActionLabelPlayer(backendRallyId, frame, num);
       return;
     }
 
@@ -194,17 +142,20 @@ export function ActionLabelingMode({ videoRef, onLabelAdded }: ActionLabelingMod
       }
     }
 
+    // Auto-detected trackId from nearest-to-ball heuristic. trackData.tracks
+    // is sourced from positionsJson which is canonical post-remap, so
+    // nearestTrackId is already a canonical pid — no conversion needed.
     const label: ActionGroundTruthInput = {
       frame,
       action,
-      trackId: nearestTrackId >= 0 ? resolveRawTrackId(nearestTrackId) : undefined,
+      trackId: nearestTrackId >= 0 ? nearestTrackId : undefined,
       ballX,
       ballY,
     };
 
     addActionLabel(backendRallyId, label);
     onLabelAdded?.(action, frame);
-  }, [isLabelingActions, backendRallyId, trackData, selectedRally, videoRef, addActionLabel, updateActionLabelPlayer, setIsLabelingActions, onLabelAdded, seek, resolveRawTrackId, resolveRawTrackIdForPid]);
+  }, [isLabelingActions, backendRallyId, trackData, selectedRally, videoRef, addActionLabel, updateActionLabelPlayer, setIsLabelingActions, onLabelAdded, seek]);
 
   useEffect(() => {
     if (!isLabelingActions) return;

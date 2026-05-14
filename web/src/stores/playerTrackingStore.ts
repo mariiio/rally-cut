@@ -805,7 +805,21 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
           // The local store holds ActionGroundTruthLabel[] (full server shape) but
           // new labels are created as ActionGroundTruthInput before they're saved;
           // cast here so the optimistic list stays sortable by frame.
-          const updated = [...filtered, label as unknown as ActionGroundTruthLabel].sort((a, b) => a.frame - b.frame);
+          //
+          // Pre-populate the resolver-attributed fields so gtLabelDisplay treats
+          // the optimistic entry as canonical (resolved_source !== UNRESOLVED).
+          // Without this, the overlay sees resolvedSource == null and falls back
+          // to AFM-routing, mapping the canonical pid (e.g., 3) as if it were
+          // raw → afm["3"] returns the wrong display pid.
+          const optimisticLabel: ActionGroundTruthLabel = {
+            ...(label as unknown as ActionGroundTruthLabel),
+            // Pid 1-4 from the labeler is canonical; mark as SNAPSHOT_EXACT
+            // so display reads it directly. Server canonicalises on save and
+            // overwrites these on next load.
+            resolvedTrackId: label.trackId ?? null,
+            resolvedSource: label.trackId != null ? 'SNAPSHOT_EXACT' : 'UNRESOLVED',
+          };
+          const updated = [...filtered, optimisticLabel].sort((a, b) => a.frame - b.frame);
           return {
             actionGroundTruth: { ...state.actionGroundTruth, [rallyId]: updated },
             actionGtDirty: { ...state.actionGtDirty, [rallyId]: true },
@@ -840,18 +854,22 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
           const existing = state.actionGroundTruth[rallyId] ?? [];
           const updated = existing.map(l => {
             if (l.frame !== frame) return l;
-            // Update BOTH:
+            // Update all three of:
             //  - resolvedTrackId so the overlay re-renders immediately
             //    (before the save round-trip).
+            //  - resolvedSource = SNAPSHOT_EXACT so gtLabelDisplay reads
+            //    resolvedTrackId directly instead of routing through AFM.
+            //    The trackId we're storing here is canonical pid 1-4 (post-
+            //    2026-05-14 fix in ActionLabelingMode); routing through AFM
+            //    would treat it as raw and double-translate.
             //  - the input `trackId` field carried under the
-            //    ActionGroundTruthInput cast so the save payload
-            //    (which reads input.trackId FIRST) actually carries
-            //    the user's '1'-'4' override to the server. Previously
-            //    only resolvedTrackId updated → save sent the
-            //    auto-detected nearest player instead of the user's pick.
+            //    ActionGroundTruthInput cast so the save payload (which reads
+            //    input.trackId first) actually carries the user's '1'-'4'
+            //    override to the server.
             return {
               ...l,
               resolvedTrackId: trackId,
+              resolvedSource: 'SNAPSHOT_EXACT',
               ...({ trackId } as Partial<ActionGroundTruthInput>),
             } as ActionGroundTruthLabel;
           });

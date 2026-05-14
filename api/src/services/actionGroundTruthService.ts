@@ -225,20 +225,24 @@ export async function saveActionGroundTruth(
       const trackId = label.trackId ?? null;
 
       // Find the position for this trackId at this frame.
-      // Prefer rawPositionsJson because ActionLabelingMode resolves the
-      // labeler's '1'-'4' press through appliedFullMapping to a RAW BoT-SORT
-      // id (post-Task-16). positionsJson holds post-remap canonical pids 1-4
-      // and would miss any raw id not in that range. Fall back to positionsJson
-      // for legacy clients that still send canonical pids directly.
-      const posAtFrame = trackId !== null
-        ? (
-            (rawPositions
-              ? rawPositions.find(p => p.trackId === trackId && p.frameNumber === label.frame) as
-                  unknown as PlayerPosition | undefined
-              : undefined)
-            ?? positions.find(p => p.trackId === trackId && p.frameNumber === label.frame)
-          )
-        : undefined;
+      // Prefer positionsJson (canonical post-remap, trackIds 1-4) because the
+      // labeler sends canonical pid directly (post-2026-05-14 fix in
+      // ActionLabelingMode). Fall back to rawPositionsJson for two cases:
+      //   (a) pre-remap rallies where positionsJson still has raw ids; the
+      //       labeler's "canonical" pid happens to coincide with a raw id.
+      //   (b) legacy clients still sending raw BoT-SORT ids.
+      // Keeping positionsJson first means resolved_track_id stores the
+      // canonical pid end-to-end, matching what reresolveVideoGtAgainstCanonical
+      // writes and what gtLabelDisplay reads directly — no AFM hop, no
+      // half-canonical confusion.
+      let posAtFrame: PlayerPosition | undefined;
+      if (trackId !== null) {
+        posAtFrame = positions.find(p => p.trackId === trackId && p.frameNumber === label.frame);
+        if (!posAtFrame && rawPositions) {
+          const rawHit = rawPositions.find(p => p.trackId === trackId && p.frameNumber === label.frame);
+          posAtFrame = rawHit as unknown as PlayerPosition | undefined;
+        }
+      }
 
       // Find ball at this frame
       const ballAtFrame = ballPositions.find(b => b.frameNumber === label.frame);
