@@ -1,5 +1,17 @@
 """A3 — BLOCK type reclassification heuristic.
 
+USED BY PROBE ONLY, NO PRODUCTION HOOK.
+
+A3 was NO-SHIP'd 2026-05-14 by a clean-GT fleet measurement (1/49 = 2.0%
+precision, far below the 92% spec gate). The action_classifier.py wiring
+was removed in the same commit that updated this notice. This module is
+retained as evidence + reusable infrastructure for any future revisit
+with cleaner GT and/or a more selective gate. The probe + fleet-rate
+measurement script (``scripts/probe_a3_block_reclassification.py`` and
+``scripts/measure_a3_block_reclass_rate.py``) continue to import
+``should_reclassify_to_block`` and the per-condition checks below; no
+other call sites exist.
+
 Spec: ``docs/superpowers/specs/2026-05-13-action-attribution-root-causes-design.md``,
 section A3.
 
