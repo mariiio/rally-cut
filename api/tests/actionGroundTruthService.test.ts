@@ -378,4 +378,75 @@ describe('actionGroundTruthService', () => {
     });
     expect(rows).toHaveLength(2);
   });
+
+  // ------------------------------------------------------------------
+  // Replace semantic: save deletes server rows that are NOT in the payload
+  // ------------------------------------------------------------------
+  it('replace semantic: deletes server rows missing from the save payload', async () => {
+    // First save: 3 labels.
+    await saveActionGroundTruth(rallyId, userId, [
+      { frame: 10, action: 'serve',  trackId: 1 },
+      { frame: 30, action: 'attack', trackId: 1 },
+      { frame: 50, action: 'dig',    trackId: 2 },
+    ]);
+    expect(await prisma.rallyActionGroundTruth.count({ where: { rallyId } })).toBe(3);
+
+    // Second save: only 2 of those, plus 1 new. The "attack" at frame=30 is
+    // omitted, simulating the user deleting it locally and re-saving.
+    await saveActionGroundTruth(rallyId, userId, [
+      { frame: 10, action: 'serve', trackId: 1 },
+      { frame: 50, action: 'dig',   trackId: 2 },
+      { frame: 70, action: 'block', trackId: 2 },
+    ]);
+
+    const rows = await prisma.rallyActionGroundTruth.findMany({
+      where: { rallyId },
+      orderBy: { frame: 'asc' },
+    });
+    const summary = rows.map(r => `${r.frame}:${r.action}`).sort();
+    expect(summary).toEqual(['10:SERVE', '50:DIG', '70:BLOCK']);  // attack@30 gone
+  });
+
+  // ------------------------------------------------------------------
+  // Replace semantic safety: empty payload + non-empty server → SKIP delete
+  // ------------------------------------------------------------------
+  it('replace semantic: empty payload on a rally with rows is a no-op (refuses to wipe)', async () => {
+    await saveActionGroundTruth(rallyId, userId, [
+      { frame: 10, action: 'serve', trackId: 1 },
+      { frame: 30, action: 'attack', trackId: 1 },
+    ]);
+    expect(await prisma.rallyActionGroundTruth.count({ where: { rallyId } })).toBe(2);
+
+    // Empty payload → server should refuse to delete (likely a client that
+    // never loaded). The 2 existing rows survive.
+    await saveActionGroundTruth(rallyId, userId, []);
+    expect(await prisma.rallyActionGroundTruth.count({ where: { rallyId } })).toBe(2);
+  });
+
+  // ------------------------------------------------------------------
+  // Replace semantic: MANUAL pins are never auto-deleted
+  // ------------------------------------------------------------------
+  it('replace semantic: MANUAL pins are preserved even if missing from payload', async () => {
+    const saved = await saveActionGroundTruth(rallyId, userId, [
+      { frame: 10, action: 'serve', trackId: 1 },
+    ]);
+    await reattachActionGroundTruth(saved.labels[0].id, userId, 2);
+
+    // Verify it's now MANUAL
+    let row = await prisma.rallyActionGroundTruth.findUniqueOrThrow({
+      where: { id: saved.labels[0].id },
+    });
+    expect(row.resolvedSource).toBe('MANUAL');
+
+    // Save a different label — the MANUAL row must NOT be deleted.
+    await saveActionGroundTruth(rallyId, userId, [
+      { frame: 50, action: 'attack', trackId: 1 },
+    ]);
+
+    row = await prisma.rallyActionGroundTruth.findUnique({
+      where: { id: saved.labels[0].id },
+    });
+    expect(row).not.toBeNull();
+    expect(row!.resolvedSource).toBe('MANUAL');
+  });
 });

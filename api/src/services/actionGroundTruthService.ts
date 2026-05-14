@@ -210,6 +210,48 @@ export async function saveActionGroundTruth(
   const savedLabels = await prisma.$transaction(async (tx) => {
     const results: Array<{ id: string }> = [];
 
+    // Replace semantic: the client always sends the COMPLETE intended state
+    // for this rally (loadActionGroundTruth replaces the in-memory list with
+    // server state; all mutations update that list; save sends the full list).
+    // So labels that exist on the server but are NOT in this payload were
+    // explicitly removed by the user and should be deleted.
+    //
+    // Safety guards:
+    //  - Skip the delete entirely if the incoming payload is empty AND the
+    //    server has rows (suggests the client never loaded; deleting would
+    //    be destructive). The upsert loop is still a no-op in this case.
+    //  - Never delete MANUAL pins (labeler explicitly attached them; treated
+    //    as a stronger signal than the live in-memory list, which doesn't
+    //    distinguish manual from optimistic).
+    const existingRows = await tx.rallyActionGroundTruth.findMany({
+      where: { rallyId },
+      select: { id: true, frame: true, action: true, resolvedSource: true },
+    });
+    if (existingRows.length > 0 && dedupedLabels.length === 0) {
+      console.warn(
+        `[saveActionGroundTruth] Skipping replace-delete on rally ${rallyId}: ` +
+        `server has ${existingRows.length} rows but client sent 0. ` +
+        `This usually means loadActionGroundTruth never ran; refusing to wipe.`,
+      );
+    } else {
+      const keysInPayload = new Set(
+        dedupedLabels.map(l => `${l.frame}:${toActionLabel(l.action)}`),
+      );
+      const toDelete = existingRows.filter(r =>
+        r.resolvedSource !== 'MANUAL' &&
+        !keysInPayload.has(`${r.frame}:${r.action}`),
+      );
+      if (toDelete.length > 0) {
+        await tx.rallyActionGroundTruth.deleteMany({
+          where: { id: { in: toDelete.map(r => r.id) } },
+        });
+        console.log(
+          `[saveActionGroundTruth] Deleted ${toDelete.length} stale labels on rally ${rallyId} ` +
+          `(client list omitted them): ${toDelete.map(r => `${r.frame}:${r.action}`).join(', ')}`,
+        );
+      }
+    }
+
     for (const label of dedupedLabels) {
       const actionEnum = toActionLabel(label.action);
 
