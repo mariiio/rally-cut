@@ -237,8 +237,14 @@ export async function saveActionGroundTruth(
       const keysInPayload = new Set(
         dedupedLabels.map(l => `${l.frame}:${toActionLabel(l.action)}`),
       );
+      // Delete any server row not in the incoming payload — including MANUAL.
+      // MANUAL is a signal to the auto-resolver (reresolveVideoGtAgainstCanonical
+      // skips it), NOT a signal to the explicit-delete path. When the user
+      // removes a label in the UI and re-saves, the missing row is gone
+      // regardless of how it was previously attributed. Without this, the
+      // offscreen-player case (which lands MANUAL on save) would create
+      // un-deletable labels.
       const toDelete = existingRows.filter(r =>
-        r.resolvedSource !== 'MANUAL' &&
         !keysInPayload.has(`${r.frame}:${r.action}`),
       );
       if (toDelete.length > 0) {
@@ -277,9 +283,20 @@ export async function saveActionGroundTruth(
       // canonical pid end-to-end, matching what reresolveVideoGtAgainstCanonical
       // writes and what gtLabelDisplay reads directly — no AFM hop, no
       // half-canonical confusion.
+      // Lookup order:
+      //  1. positionsJson at exact frame (canonical post-remap, normal case).
+      //  2. positionsJson at frame±1 (covers 60fps stride-2 parity flips where
+      //     the labeler steps to an odd frame the tracker doesn't write to).
+      //  3. rawPositionsJson at exact frame (legacy/raw client fallback).
+      // Each step only fires if the previous one missed.
       let posAtFrame: PlayerPosition | undefined;
       if (trackId !== null) {
         posAtFrame = positions.find(p => p.trackId === trackId && p.frameNumber === label.frame);
+        if (!posAtFrame) {
+          posAtFrame = positions.find(p =>
+            p.trackId === trackId && Math.abs(p.frameNumber - label.frame) === 1,
+          );
+        }
         if (!posAtFrame && rawPositions) {
           const rawHit = rawPositions.find(p => p.trackId === trackId && p.frameNumber === label.frame);
           posAtFrame = rawHit as unknown as PlayerPosition | undefined;
@@ -300,7 +317,8 @@ export async function saveActionGroundTruth(
       let resolvedTrackId: number | null = null;
 
       if (pt && posAtFrame) {
-        // SNAPSHOT_EXACT: PlayerTrack present AND trackId has a position at frame
+        // SNAPSHOT_EXACT: PlayerTrack present AND trackId has a position at
+        // frame (or ±1 via stride-2 fallback). Capture bbox + team.
         const bbox = positionToBbox(posAtFrame);
         snapshotBboxX1 = bbox.x1;
         snapshotBboxY1 = bbox.y1;
@@ -312,9 +330,22 @@ export async function saveActionGroundTruth(
         snapshotTeam = (teamChar === 'A' ? 'A' : teamChar === 'B' ? 'B' : null) as ServingTeam | null;
         resolvedSource = 'SNAPSHOT_EXACT';
         resolvedTrackId = trackId;
+      } else if (trackId !== null) {
+        // MANUAL: user gave an explicit trackId but the player isn't tracked
+        // at this frame (off-screen player, e.g., the server before they enter
+        // the frame). Preserve the user's intent: resolved_track_id = trackId
+        // so the display renders the right pid, and resolvedSource = MANUAL
+        // so the auto-resolver doesn't override on the next match-analysis.
+        // No bbox snapshot is possible here; ReID re-anchoring on retrack
+        // also won't work for these. That's OK — the label is a user
+        // assertion, not a tracking-derived attribution.
+        snapshotBallX = ballAtFrame?.x ?? (label.ballX ?? null);
+        snapshotBallY = ballAtFrame?.y ?? (label.ballY ?? null);
+        resolvedSource = 'MANUAL';
+        resolvedTrackId = trackId;
       } else {
-        // UNRESOLVED: PlayerTrack absent OR trackId not present at frame
-        // Still record ball if available
+        // UNRESOLVED: no trackId given (user labeled an action but didn't
+        // assign a player; or auto-detect found nothing). Render as ghost.
         snapshotBallX = ballAtFrame?.x ?? (label.ballX ?? null);
         snapshotBallY = ballAtFrame?.y ?? (label.ballY ?? null);
         resolvedSource = 'UNRESOLVED';
@@ -355,6 +386,12 @@ export async function saveActionGroundTruth(
           createdBy: userId,
         },
         update: {
+          // Snapshot bbox/ball/team always reflect the current save's lookup.
+          // If the user re-saved at the same (frame, action), they presumably
+          // re-clicked or re-verified — overwriting the snapshot with the
+          // freshest data is correct, including writing null when the lookup
+          // missed (e.g., re-save against a rally that's since been retracked
+          // and now lacks the player at this frame).
           snapshotBboxX1,
           snapshotBboxY1,
           snapshotBboxX2,
@@ -362,16 +399,16 @@ export async function saveActionGroundTruth(
           snapshotBallX,
           snapshotBallY,
           snapshotTeam,
-          // Defensive: when incoming trackId is null (e.g., a re-save from
-          // a client that lost the original choice), pass `undefined` to
-          // Prisma so the existing snapshot is preserved. Only overwrite
-          // when a real value is provided. Same protection for the
-          // resolver fields.
+          // Resolver fields: when the user provided a trackId, that's an
+          // explicit assertion — overwrite any stale auto-resolved value.
+          // When trackId is null (no explicit player), preserve the existing
+          // resolver decision (don't wipe a SNAPSHOT_EXACT to UNRESOLVED
+          // just because a partial re-save came in).
           snapshotTrackId: trackId !== null ? trackId : undefined,
           snapshotReidEmbedding: snapshotReidEmbedding ?? undefined,
-          resolvedSource: resolvedSource !== 'UNRESOLVED' ? resolvedSource : undefined,
-          resolvedTrackId: resolvedTrackId !== null ? resolvedTrackId : undefined,
-          resolvedAt: resolvedSource !== 'UNRESOLVED' ? new Date() : undefined,
+          resolvedSource: trackId !== null ? resolvedSource : undefined,
+          resolvedTrackId: trackId !== null ? resolvedTrackId : undefined,
+          resolvedAt: trackId !== null ? new Date() : undefined,
         },
         select: { id: true },
       });

@@ -128,9 +128,13 @@ describe('actionGroundTruthService', () => {
   });
 
   // ------------------------------------------------------------------
-  // Test 2: UNRESOLVED when trackId is not present at the labeled frame
+  // Test 2: MANUAL when user provides an explicit trackId but the player
+  // isn't tracked at the labeled frame (off-screen player / coverage gap).
+  // The user's intent is preserved as resolved_track_id so the display
+  // renders the right pid; resolved_source = MANUAL signals the
+  // auto-resolver to leave the row alone on the next match-analysis.
   // ------------------------------------------------------------------
-  it('saves an UNRESOLVED row when trackId is not present at the labeled frame', async () => {
+  it('saves a MANUAL row when trackId is provided but not tracked at the labeled frame', async () => {
     // trackId=99 does not appear in positionsJson
     const result = await saveActionGroundTruth(rallyId, userId, [
       { frame: 10, action: 'serve', trackId: 99 },
@@ -145,9 +149,30 @@ describe('actionGroundTruthService', () => {
     // bbox should be null (no position for trackId=99 at frame=10)
     expect(row!.snapshotBboxX1).toBeNull();
     expect(row!.snapshotBboxY1).toBeNull();
-    // snapshotTrackId should record the hint
+    // snapshotTrackId records the hint
     expect(row!.snapshotTrackId).toBe(99);
-    // resolvedSource must be UNRESOLVED
+    // resolved_track_id IS the user's explicit choice — display will render
+    // pid 99 (or whatever 99 maps to). resolved_source = MANUAL freezes it.
+    expect(row!.resolvedTrackId).toBe(99);
+    expect(row!.resolvedSource).toBe('MANUAL');
+  });
+
+  // ------------------------------------------------------------------
+  // Test 2b: UNRESOLVED when no trackId is provided (auto-detect failed
+  // and user didn't override). Distinct from the MANUAL-no-bbox case.
+  // ------------------------------------------------------------------
+  it('saves an UNRESOLVED row when no trackId is provided at all', async () => {
+    const result = await saveActionGroundTruth(rallyId, userId, [
+      { frame: 10, action: 'serve' },  // no trackId
+    ]);
+
+    const row = await prisma.rallyActionGroundTruth.findUnique({
+      where: { id: result.labels[0].id },
+    });
+    expect(row).toBeTruthy();
+    expect(row!.snapshotBboxX1).toBeNull();
+    expect(row!.snapshotTrackId).toBeNull();
+    expect(row!.resolvedTrackId).toBeNull();
     expect(row!.resolvedSource).toBe('UNRESOLVED');
   });
 
@@ -380,23 +405,30 @@ describe('actionGroundTruthService', () => {
   });
 
   // ------------------------------------------------------------------
-  // Replace semantic: save deletes server rows that are NOT in the payload
+  // Replace semantic: save deletes server rows that are NOT in the payload,
+  // including MANUAL-by-save rows (offscreen-player labels). MANUAL is a
+  // signal to the auto-resolver, not to the explicit-delete path: the user
+  // can always remove their own labels by omitting them from the next save.
   // ------------------------------------------------------------------
   it('replace semantic: deletes server rows missing from the save payload', async () => {
     // First save: 3 labels.
+    //  - frame 10 + trackId 1: positions has (1, 10) → SNAPSHOT_EXACT.
+    //  - frame 30 + trackId 1: positions has no row at 30 → MANUAL (off-frame).
+    //  - frame 50 + trackId 7: positions has (7, 50) → SNAPSHOT_EXACT.
     await saveActionGroundTruth(rallyId, userId, [
       { frame: 10, action: 'serve',  trackId: 1 },
       { frame: 30, action: 'attack', trackId: 1 },
-      { frame: 50, action: 'dig',    trackId: 2 },
+      { frame: 50, action: 'dig',    trackId: 7 },
     ]);
     expect(await prisma.rallyActionGroundTruth.count({ where: { rallyId } })).toBe(3);
 
     // Second save: only 2 of those, plus 1 new. The "attack" at frame=30 is
-    // omitted, simulating the user deleting it locally and re-saving.
+    // omitted — and even though it's MANUAL (because trackId 1 isn't at
+    // frame 30), the replace-delete must remove it. User intent: deleted.
     await saveActionGroundTruth(rallyId, userId, [
       { frame: 10, action: 'serve', trackId: 1 },
-      { frame: 50, action: 'dig',   trackId: 2 },
-      { frame: 70, action: 'block', trackId: 2 },
+      { frame: 50, action: 'dig',   trackId: 7 },
+      { frame: 70, action: 'block', trackId: 1 },
     ]);
 
     const rows = await prisma.rallyActionGroundTruth.findMany({
@@ -424,29 +456,31 @@ describe('actionGroundTruthService', () => {
   });
 
   // ------------------------------------------------------------------
-  // Replace semantic: MANUAL pins are never auto-deleted
+  // Replace semantic: the user CAN delete a previously-reattached MANUAL row
+  // by omitting it from the save. MANUAL is a signal to the auto-resolver,
+  // not an immortality flag against the user's own delete intent.
+  // (This used to be inverted; the prior behavior made offscreen-player
+  // labels un-deletable from the UI.)
   // ------------------------------------------------------------------
-  it('replace semantic: MANUAL pins are preserved even if missing from payload', async () => {
+  it('replace semantic: MANUAL rows (incl. reattached) are deletable by omission', async () => {
     const saved = await saveActionGroundTruth(rallyId, userId, [
       { frame: 10, action: 'serve', trackId: 1 },
     ]);
     await reattachActionGroundTruth(saved.labels[0].id, userId, 2);
 
-    // Verify it's now MANUAL
     let row = await prisma.rallyActionGroundTruth.findUniqueOrThrow({
       where: { id: saved.labels[0].id },
     });
     expect(row.resolvedSource).toBe('MANUAL');
 
-    // Save a different label — the MANUAL row must NOT be deleted.
+    // Save without the MANUAL row → it should be deleted.
     await saveActionGroundTruth(rallyId, userId, [
-      { frame: 50, action: 'attack', trackId: 1 },
+      { frame: 50, action: 'attack', trackId: 7 },
     ]);
 
-    row = await prisma.rallyActionGroundTruth.findUnique({
+    const survivor = await prisma.rallyActionGroundTruth.findUnique({
       where: { id: saved.labels[0].id },
     });
-    expect(row).not.toBeNull();
-    expect(row!.resolvedSource).toBe('MANUAL');
+    expect(survivor).toBeNull();
   });
 });
