@@ -12,6 +12,9 @@ from rallycut.cli.commands.cleanup_team_assignments import cleanup_team_assignme
 from rallycut.cli.commands.cleanup_team_labels_by_majority import (
     cleanup_team_labels_by_majority_cmd,
 )
+from rallycut.cli.commands.cleanup_team_partition_outliers import (
+    cleanup_team_partition_outliers_cmd,
+)
 from rallycut.cli.commands.compare_tracking import compare_tracking as compare_tracking_command
 from rallycut.cli.commands.compute_match_stats import compute_match_stats_cmd
 from rallycut.cli.commands.cut import cut as cut_command
@@ -25,6 +28,9 @@ from rallycut.cli.commands.preflight import preflight as preflight_command
 from rallycut.cli.commands.preview_check import preview_check as preview_check_command
 from rallycut.cli.commands.profile import profile as profile_command
 from rallycut.cli.commands.reattribute_actions import reattribute_actions_cmd
+from rallycut.cli.commands.reconcile_serving_team import (
+    reconcile_serving_team_cmd,
+)
 from rallycut.cli.commands.reinterpolate_primary import reinterpolate_primary_cmd
 from rallycut.cli.commands.remap_track_ids import remap_track_ids_cmd
 from rallycut.cli.commands.repair_identities import repair_identities_cmd
@@ -62,6 +68,8 @@ app.command(name="migrate-action-gt")(migrate_action_gt_cmd)
 app.command(name="cleanup-team-assignments")(cleanup_team_assignments_cmd)
 app.command(name="cleanup-stale-attribution")(cleanup_stale_attribution_cmd)
 app.command(name="cleanup-team-labels-by-majority")(cleanup_team_labels_by_majority_cmd)
+app.command(name="cleanup-team-partition-outliers")(cleanup_team_partition_outliers_cmd)
+app.command(name="reconcile-serving-team")(reconcile_serving_team_cmd)
 app.add_typer(evaluate_tracking_app, name="evaluate-tracking")
 app.add_typer(label_app, name="label")
 app.add_typer(evaluate_app, name="evaluate")

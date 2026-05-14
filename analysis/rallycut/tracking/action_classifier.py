@@ -3601,6 +3601,90 @@ def _interpolate_ball_position_for_synthetic(
     return (0.5, 0.5)
 
 
+def _apply_dynamic_scorer_attribution(
+    actions: list[ClassifiedAction],
+    contacts: list[Contact],
+    player_positions: list[PlayerPosition],
+) -> int:
+    """Re-attribute actions using the per-action-type dynamic-feature scorer.
+
+    Default-OFF behind env flag `USE_DYNAMIC_ATTRIBUTION_SCORER`. When the
+    scorer is available + flag is set:
+      - For each action with confidence >= 0.3 and player_track_id >= 0,
+        score the contact's primary-track candidates using the per-action
+        GBM and override `action.player_track_id` if argmax differs.
+
+    Scorer is loaded lazily on first call. If models are missing or flag
+    is OFF, this is a no-op (returns 0).
+
+    Returns: number of attributions re-assigned by the scorer.
+    """
+    try:
+        from rallycut.tracking.dynamic_attribution_scorer import (
+            CandidateFeatures,
+            PlayerPositionLike,
+            extract_features,
+            get_scorer,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Dynamic-attribution scorer module not importable: %s", exc)
+        return 0
+    scorer = get_scorer()
+    if scorer is None:
+        return 0
+    # Build a per-frame, per-track lookup for fast feature extraction.
+    # The scorer's extract_features uses PlayerPositionLike (which mirrors
+    # contact_detector.PlayerPosition's relevant fields).
+    pp_like: list[PlayerPositionLike] = []
+    for p in player_positions:
+        pp_like.append(PlayerPositionLike(
+            frame_number=p.frame_number,
+            track_id=p.track_id,
+            x=p.x,
+            y=p.y,
+            width=p.width,
+            height=p.height,
+        ))
+    contact_by_frame = {c.frame: c for c in contacts}
+    n_swapped = 0
+    for action in actions:
+        if action.confidence < 0.3:
+            continue
+        if action.player_track_id < 0:
+            continue
+        if action.action_type == ActionType.UNKNOWN:
+            continue
+        contact = contact_by_frame.get(action.frame)
+        if contact is None or not contact.player_candidates:
+            continue
+        # Build CandidateFeatures for each primary track in candidates.
+        feats: list[CandidateFeatures] = []
+        for tid, _dist in contact.player_candidates:
+            f = extract_features(pp_like, int(tid), action.frame,
+                                 action.ball_x, action.ball_y)
+            if f is not None:
+                feats.append(f)
+        if len(feats) < 2:
+            continue
+        result = scorer.pick(action.action_type.value.upper(), feats)
+        if result is None:
+            continue
+        if result != action.player_track_id:
+            logger.info(
+                "dynamic_scorer_swap frame=%d action=%s old_pid=%d new_pid=%d",
+                action.frame, action.action_type.value,
+                action.player_track_id, result,
+            )
+            action.player_track_id = result
+            n_swapped += 1
+    if n_swapped > 0:
+        logger.info(
+            "Dynamic-attribution scorer re-attributed %d/%d actions",
+            n_swapped, len(actions),
+        )
+    return n_swapped
+
+
 def classify_rally_actions(
     contact_sequence: ContactSequence,
     rally_id: str = "",
@@ -3818,6 +3902,20 @@ def classify_rally_actions(
         result.actions, contact_sequence.contacts, reattrib_teams,
         max_distance_ratio=1.5,
         reid_predictions=reid_predictions,
+    )
+
+    # Dynamic-feature scorer attribution (env-flag gated; default OFF).
+    # Per-action-type GBM trained on production-matched data (pipeline
+    # frame + ballX/ballY at GT contacts). Lifts attribution accuracy by
+    # ~+15pp on user-flagged hard cases (2026-05-14). When the env flag
+    # is OFF or models are unavailable, behavior is byte-identical to
+    # the prior pipeline.
+    #
+    # Spec: docs/superpowers/specs/2026-05-14-dynamic-attribution-scorer-design.md
+    # Models: analysis/weights/dynamic_attribution_scorer/
+    _apply_dynamic_scorer_attribution(
+        result.actions, contact_sequence.contacts,
+        contact_sequence.player_positions,
     )
 
     # Visual attribution pass (overrides proximity-based attribution)
