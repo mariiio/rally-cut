@@ -3578,6 +3578,142 @@ def viterbi_decode_actions(
     return result
 
 
+# A3 BLOCK reclassification env flag (ship-1, 2026-05-14).
+# Default "0" until smoke test + fleet rate gate pass; flipped to "1" by
+# step 5 of the ship plan once rate ≤ 3%.
+USE_BLOCK_RECLASSIFICATION_ENV = "USE_BLOCK_RECLASSIFICATION"
+
+
+def _block_reclassification_pass(
+    actions: list[ClassifiedAction],
+    contacts: list[Contact],
+    positions_by_frame: dict[int, list[PlayerPosition]] | None,
+    net_y_image: float | None,
+    pose_wrist_by_frame_tid: dict[tuple[int, int], float] | None,
+    rally_id: str = "",
+) -> int:
+    """A3 pass: reclassify ATTACK → BLOCK when the firm gate fires.
+
+    Iterates over `actions`, looking for `ATTACK`. For each, builds the
+    helper-compatible action dicts + lookups (head bbox, ball-y, prev,
+    direction-change-deg, wrist) and calls
+    ``should_reclassify_to_block``. On True, replaces the action with
+    a copy whose ``action_type=BLOCK`` (via ``_reclassify``, capping
+    confidence to 0.6) and logs the change.
+
+    Runs BEFORE ``reattribute_players`` so downstream re-attribution +
+    visual passes see the corrected action types.
+
+    Args:
+        actions: Action list (mutated by replacement at the matching index).
+        contacts: ContactSequence.contacts list — used for
+            direction-change-deg lookup by frame.
+        positions_by_frame: ``{frame: [PlayerPosition, ...]}`` — used to
+            locate the suspect player's bbox-top y. May be None when no
+            positions are available; the (a)′ check then falls back to
+            ball-y-vs-net.
+        net_y_image: Normalized image-y of the court midline ground
+            projection. None when court calibration is missing.
+        pose_wrist_by_frame_tid: ``{(frame, track_id): wrist_y_image}`` —
+            the higher-wrist normalized image-y for the suspect player.
+            None or missing entry ⇒ wrist Unknown ⇒ firm gate REJECTS.
+        rally_id: Optional ID for log lines.
+
+    Returns:
+        Count of reclassifications applied.
+    """
+    if not actions:
+        return 0
+
+    # Index contacts by frame for direction-change lookup.
+    contacts_by_frame: dict[int, Contact] = {}
+    for c in contacts:
+        contacts_by_frame[c.frame] = c
+
+    # Sort actions by frame so "prev_action" is well-defined.
+    sorted_indices = sorted(
+        range(len(actions)), key=lambda i: actions[i].frame,
+    )
+
+    n_changed = 0
+    # Walk in time order, tracking the previous action.
+    for pos_in_sorted, idx in enumerate(sorted_indices):
+        a = actions[idx]
+        if a.action_type != ActionType.ATTACK:
+            continue
+        prev_idx = (
+            sorted_indices[pos_in_sorted - 1] if pos_in_sorted > 0 else None
+        )
+        prev_a = actions[prev_idx] if prev_idx is not None else None
+
+        contact_at_frame = contacts_by_frame.get(a.frame)
+        if contact_at_frame is None:
+            continue
+        dc = float(contact_at_frame.direction_change_deg)
+
+        # Locate the suspect player's bbox top at this frame.
+        head_y: float | None = None
+        if positions_by_frame is not None:
+            for pp in positions_by_frame.get(a.frame, []):
+                if int(pp.track_id) == int(a.player_track_id):
+                    head_y = float(pp.y) - float(pp.height) / 2.0
+                    break
+
+        wrist_y: float | None = None
+        if pose_wrist_by_frame_tid is not None:
+            wrist_y = pose_wrist_by_frame_tid.get(
+                (int(a.frame), int(a.player_track_id))
+            )
+
+        # Build dict-shaped action / prev for the helper.
+        a_dict = {
+            "action": a.action_type.value,
+            "frame": a.frame,
+            "team": a.team,
+            "playerTrackId": a.player_track_id,
+        }
+        prev_dict = None
+        if prev_a is not None:
+            prev_dict = {
+                "action": prev_a.action_type.value,
+                "frame": prev_a.frame,
+                "team": prev_a.team,
+                "playerTrackId": prev_a.player_track_id,
+            }
+
+        from rallycut.tracking.block_reclassification import (
+            should_reclassify_to_block,
+        )
+        if should_reclassify_to_block(
+            action=a_dict,
+            prev_action=prev_dict,
+            direction_change_deg=dc,
+            ball_y_image=float(a.ball_y),
+            player_bbox_top_y_image=head_y,
+            net_y_image=net_y_image,
+            wrist_y_image=wrist_y,
+            require_firm_wrist=True,
+            use_strict_d=False,
+        ):
+            actions[idx] = _reclassify(a, ActionType.BLOCK)
+            n_changed += 1
+            logger.info(
+                "A3 reclassify ATTACK→BLOCK rally=%s frame=%d tid=%d team=%s "
+                "dc=%.1f° head_y=%s wrist_y=%s net_y=%s "
+                "prev=%s(%s)@f%s",
+                rally_id, a.frame, a.player_track_id, a.team,
+                dc,
+                f"{head_y:.3f}" if head_y is not None else "None",
+                f"{wrist_y:.3f}" if wrist_y is not None else "None",
+                f"{net_y_image:.3f}" if net_y_image is not None else "None",
+                prev_a.action_type.value if prev_a else "None",
+                prev_a.team if prev_a else "None",
+                prev_a.frame if prev_a else "None",
+            )
+
+    return n_changed
+
+
 def _interpolate_ball_position_for_synthetic(
     ball_positions: list[BallPosition],
     frame: int,
@@ -3620,6 +3756,8 @@ def classify_rally_actions(
     formation_semantic_flip: bool = False,
     camera_height: float = 0.0,
     sequence_probs: np.ndarray | None = None,
+    net_y_image: float | None = None,
+    pose_wrist_by_frame_tid: dict[tuple[int, int], float] | None = None,
     decoder_contacts: list[DecodedContact] | None = None,
 ) -> RallyActions:
     """Convenience function to classify actions in a rally.
@@ -3637,6 +3775,13 @@ def classify_rally_actions(
     5. assign_court_side_from_teams() — overwrite court_side from match teams
     6. reattribute_players() — server exclusion + server-seeded team chain
        for player re-attribution
+    7. apply_sequence_override() — MS-TCN++ argmax override (non-serve actions)
+    8. _block_reclassification_pass() — A3 ATTACK → BLOCK reclassification
+       when ``USE_BLOCK_RECLASSIFICATION=1``. Requires ``net_y_image`` and
+       ``pose_wrist_by_frame_tid`` (computed by caller from the source
+       video). Runs LAST so MS-TCN++ doesn't demote the reclassified
+       block back to attack. No-op when env flag is "0" (default for
+       ship-1) OR when inputs are missing.
 
     Args:
         contact_sequence: Contacts detected by ContactDetector.
@@ -3874,6 +4019,30 @@ def classify_rally_actions(
     if sequence_probs is not None:
         from rallycut.tracking.sequence_action_runtime import apply_sequence_override
         apply_sequence_override(result, sequence_probs)
+
+    # A3 BLOCK reclassification pass (ship-1, 2026-05-14).
+    # Reclassifies ATTACK → BLOCK when the firm wrist-above-net + at-net
+    # head + ball-deflection + cross-team-prev gate fires. Runs LAST
+    # (after apply_sequence_override) so MS-TCN++ doesn't silently demote
+    # block→attack (MS-TCN++ has no block-preserve guard). The previous
+    # passes already set player_track_id correctly because we don't
+    # modify attribution — only action_type. See block_reclassification.py.
+    if os.getenv(USE_BLOCK_RECLASSIFICATION_ENV, "0") == "1":
+        # Build positions_by_frame from contact_sequence.player_positions
+        # (the canonical source carried through the rally pipeline).
+        positions_by_frame: dict[int, list[PlayerPosition]] | None = None
+        if contact_sequence.player_positions:
+            positions_by_frame = {}
+            for pp in contact_sequence.player_positions:
+                positions_by_frame.setdefault(pp.frame_number, []).append(pp)
+        _block_reclassification_pass(
+            result.actions,
+            contact_sequence.contacts,
+            positions_by_frame,
+            net_y_image,
+            pose_wrist_by_frame_tid,
+            rally_id=rally_id,
+        )
 
     if decoder_contacts is not None:
         from rallycut.tracking.decoder_overlay import apply_decoder_labels

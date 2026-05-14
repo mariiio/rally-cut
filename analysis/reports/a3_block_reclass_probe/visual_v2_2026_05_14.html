@@ -1,0 +1,1050 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>A3 BLOCK Reclass Probe — 2026-05-13</title>
+<style>
+  :root {
+    --bg:#0f0f10; --fg:#eaeaea; --muted:#9c9c9c; --card:#1a1a1c;
+    --border:#2a2a2e; --accent:#f0a83b;
+    --ok:#2bb673; --bad:#e3534b; --warn:#f0a83b;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+         line-height:1.45; }
+  header { position:sticky; top:0; background:#000; border-bottom:1px solid #222;
+           padding:14px 22px; display:flex; gap:18px; align-items:center; z-index:20; }
+  header h1 { margin:0; font-size:17px; }
+  header .status { color:var(--muted); font-size:13px; }
+  header .grow { flex:1; }
+  header .pill { padding:5px 12px; border-radius:12px; background:#1d1d1d;
+                 color:#cfcfcf; font-size:12px;
+                 font-family:ui-monospace,Menlo,monospace; }
+  header .pill.ok   { background:#13361f; color:#9bdbb3; }
+  header .pill.bad  { background:#3a1414; color:#f0a59f; }
+
+  .container { max-width:1500px; margin:0 auto; padding:24px 22px 60px; }
+  .agg { background:var(--card); border:1px solid var(--border); border-radius:10px;
+         padding:18px 22px; margin-bottom:22px; }
+  .agg dl { display:grid; grid-template-columns:auto 1fr; gap:6px 16px; margin:0; }
+  .agg dt { color:var(--muted); }
+  .agg dd { margin:0; font-family:ui-monospace,Menlo,monospace; }
+  .verdict { margin-top:10px; font-size:18px; font-weight:700; }
+  .verdict.ok  { color:var(--ok); }
+  .verdict.bad { color:var(--bad); }
+
+  .card { background:var(--card); border:1px solid var(--border); border-radius:10px;
+          margin-bottom:22px; overflow:hidden; }
+  .card-head { padding:13px 20px; display:flex; gap:12px; align-items:center;
+               background:#161617; border-bottom:1px solid var(--border); }
+  .card-head .num { font-size:20px; font-weight:700; color:var(--accent); min-width:34px; }
+  .card-head .title { font-size:15px; font-weight:600; }
+  .card-head .pill { font-size:11px; padding:3px 9px; border-radius:12px;
+                     background:#222; color:#cfcfcf; }
+  .card-head .pill.f5 { background:#2a210e; color:#f0c98a; }
+  .card-head .pill.strict { background:#13361f; color:#9bdbb3; }
+  .card-head .pill.loose-only { background:#2a210e; color:#f0c98a; }
+  .card-head .pill.neither { background:#3a1414; color:#f0a59f; }
+  .card-head .grow { flex:1; }
+
+  .card-body { display:grid; grid-template-columns:minmax(0,2.3fr) minmax(280px,1fr);
+               gap:18px; padding:18px 20px; }
+  @media (max-width:1000px) { .card-body { grid-template-columns:1fr; } }
+  .frame { background:#000; border-radius:6px; overflow:hidden; }
+  .frame img { display:block; width:100%; max-height:70vh; object-fit:contain;
+               background:#000; cursor:zoom-in; }
+  .frame.error { aspect-ratio:16/9; display:flex; align-items:center;
+                 justify-content:center; color:var(--bad); padding:20px;
+                 background:#1f0f0f; }
+
+  .sidebar { font-size:13px; }
+  .sidebar dl { margin:0; display:grid; grid-template-columns:auto 1fr;
+                column-gap:10px; row-gap:5px; }
+  .sidebar dt { color:var(--muted); }
+  .sidebar dd { margin:0; font-family:ui-monospace,Menlo,monospace;
+                font-size:12px; word-break:break-word; }
+  .sidebar .group + .group { margin-top:12px; padding-top:12px;
+                              border-top:1px dashed #2a2a2a; }
+  .cond-pass { color:#9bdbb3; }
+  .cond-fail { color:#f0a59f; }
+  .cond-unk  { color:#f0c98a; }
+
+  .verdicts { display:grid; grid-template-columns:repeat(3,1fr); gap:8px;
+              margin-top:16px; }
+  .verdicts button { background:#1f1f22; color:#eee; border:2px solid #2a2a2e;
+                     border-radius:8px; padding:14px 8px; font-size:14px;
+                     font-weight:600; cursor:pointer; }
+  .verdicts button:hover { transform:translateY(-1px); }
+  .verdicts button.block.sel { border-color:#5b8def;   background:#0f1c33; }
+  .verdicts button.attack.sel { border-color:var(--warn); background:#2a210e; }
+  .verdicts button.ambig.sel  { border-color:#888;        background:#222; }
+
+  #zoom-overlay { display:none; position:fixed; inset:0;
+                  background:rgba(0,0,0,.94); z-index:99;
+                  align-items:center; justify-content:center; cursor:zoom-out; }
+  #zoom-overlay.open { display:flex; }
+  #zoom-overlay img { max-width:96vw; max-height:96vh; }
+
+  #copy-modal { display:none; position:fixed; inset:0;
+                background:rgba(0,0,0,.7); z-index:99;
+                align-items:center; justify-content:center; }
+  #copy-modal.open { display:flex; }
+  #copy-modal .box { background:#1a1a1c; border:1px solid #333; border-radius:10px;
+                     padding:20px; max-width:680px; width:90%; }
+  #copy-modal pre { background:#0a0a0a; color:#eaeaea; padding:14px;
+                    border-radius:6px; font-size:14px; max-height:60vh;
+                    overflow:auto; user-select:all; }
+  #copy-modal .row { display:flex; gap:10px; margin-top:12px;
+                     justify-content:flex-end; }
+  #copy-modal button { background:#222; color:#eee; border:1px solid #333;
+                       padding:8px 16px; border-radius:6px; cursor:pointer; }
+  #copy-modal button.primary { background:var(--accent); color:#000;
+                                border-color:transparent; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>A3 BLOCK Reclass Probe — 10 candidates</h1>
+  <span class="status" id="status">0 / 10 verdicts</span>
+  <span class="grow"></span>
+  <span class="pill" id="agg-pill">…</span>
+  <button id="copy-btn" style="background:#222;color:#eee;border:1px solid #333;padding:8px 14px;border-radius:6px;font-weight:600;cursor:pointer;">Copy verdicts</button>
+</header>
+
+<div class="container">
+  <div class="agg" id="agg-card"></div>
+  <div id="cards"></div>
+</div>
+
+<div id="zoom-overlay"><img id="zoom-img"></div>
+
+<div id="copy-modal">
+  <div class="box">
+    <h3 style="margin-top:0">Verdicts — copy/paste back to Claude</h3>
+    <pre id="copy-text"></pre>
+    <div class="row">
+      <button id="copy-clipboard" class="primary">Copy to clipboard</button>
+      <button id="copy-close">Close</button>
+    </div>
+  </div>
+</div>
+
+<script id="data" type="application/json">{
+  "agg": {
+    "triage_count": 60,
+    "strict_count": 52,
+    "all_pass_strict_count": 4,
+    "all_pass_loose_count": 10,
+    "selected_strict_count": 5,
+    "selected_loose_count": 10,
+    "n_total": 10,
+    "n_strict_picks": 5,
+    "n_loose_only_picks": 5,
+    "by_variant": {
+      "strict": {
+        "n": 5,
+        "block": 4,
+        "attack": 1,
+        "ambig": 0,
+        "unset": 0
+      },
+      "loose-only": {
+        "n": 5,
+        "block": 3,
+        "attack": 2,
+        "ambig": 0,
+        "unset": 0
+      }
+    },
+    "by_confidence_tier": {
+      "strong": {
+        "n": 7,
+        "block": 7,
+        "attack": 0,
+        "ambig": 0,
+        "unset": 0
+      },
+      "moderate": {
+        "n": 3,
+        "block": 0,
+        "attack": 3,
+        "ambig": 0,
+        "unset": 0
+      },
+      "weak": {
+        "n": 0,
+        "block": 0,
+        "attack": 0,
+        "ambig": 0,
+        "unset": 0
+      },
+      "none": {
+        "n": 0,
+        "block": 0,
+        "attack": 0,
+        "ambig": 0,
+        "unset": 0
+      }
+    },
+    "claude_tally": {
+      "block": 7,
+      "attack": 3,
+      "ambig": 0,
+      "unset": 0
+    },
+    "claude_block_count": 7,
+    "ship_threshold": 7,
+    "verdict": "SHIP A3"
+  },
+  "cases": [
+    {
+      "idx": 1,
+      "is_f5": true,
+      "video": "keke",
+      "rally_short": "99091ec6",
+      "rally_id": "99091ec6-9fa1-4950-999d-4b9bed0121db",
+      "pl_frame": 184,
+      "pl_tid": 2,
+      "pl_team": "A",
+      "prev_frame": 150,
+      "prev_action": "receive",
+      "prev_team": "B",
+      "prev_pid": 3,
+      "direction_change_deg": 13.191230649829638,
+      "confidence": 0.694477712853298,
+      "variant": "loose-only",
+      "confidence_tier": "strong",
+      "a_passes": true,
+      "a_source": "head-near-ball-at-net",
+      "b_passes": true,
+      "b_reason": "ok",
+      "c_passes": true,
+      "d_strict_passes": false,
+      "d_strict_reason": "prev-type-receive",
+      "d_loose_passes": true,
+      "d_loose_reason": "ok",
+      "all_pass_strict": false,
+      "all_pass_loose": true,
+      "selected_strict": false,
+      "selected_loose": true,
+      "player_court_xy": [
+        4.467877726027082,
+        5.339587978022004
+      ],
+      "head_y_image": 0.4775607277690793,
+      "net_y_image": 0.7283611878563798,
+      "wrist_y_image": 0.507104218006134,
+      "wrist_xy_image": [
+        0.507055401802063,
+        0.507104218006134
+      ],
+      "wrist_which": "right",
+      "ball_xy": [
+        0.5107019583308109,
+        0.4321063827767054
+      ],
+      "source_frame": 2650,
+      "fps": 30.0,
+      "source_time_sec": 88.33333333333333,
+      "source_time_str": "1:28.33",
+      "rally_start_ms": 82200,
+      "visual_frame_path": "visual_frames_v2/01_keke_99091ec6_f184.jpg",
+      "error": null,
+      "claude_verdict": "block",
+      "claude_verdict_note": "F5 canonical (loose-only, strong). Suspect p2(A) at the net with arms reaching up; ball directly above his hands. Team B player (p1 blue) adjacent. Classic net duel \u2014 wrist at net height. (a)\u2032 pass head-near-ball; pose detected wrist above net.",
+      "same_team_tracked": [
+        1,
+        2
+      ],
+      "pose_inference_ms": 238.92795899882913,
+      "team_assignments": {
+        "1": "A",
+        "2": "A",
+        "3": "B",
+        "4": "B"
+      }
+    },
+    {
+      "idx": 2,
+      "is_f5": false,
+      "video": "caco",
+      "rally_short": "cfc464a7",
+      "rally_id": "cfc464a7-423f-4c65-aa9b-0f0484d1da20",
+      "pl_frame": 151,
+      "pl_tid": 1,
+      "pl_team": "A",
+      "prev_frame": 121,
+      "prev_action": "set",
+      "prev_team": "B",
+      "prev_pid": 4,
+      "direction_change_deg": 35.63221222914881,
+      "confidence": 0.670885714731853,
+      "variant": "strict",
+      "confidence_tier": "strong",
+      "a_passes": true,
+      "a_source": "head-near-ball-at-net",
+      "b_passes": true,
+      "b_reason": "ok",
+      "c_passes": true,
+      "d_strict_passes": true,
+      "d_strict_reason": "ok",
+      "d_loose_passes": true,
+      "d_loose_reason": "ok",
+      "all_pass_strict": true,
+      "all_pass_loose": true,
+      "selected_strict": true,
+      "selected_loose": true,
+      "player_court_xy": [
+        1.5659580672517923,
+        5.223524386137371
+      ],
+      "head_y_image": 0.4203216392039197,
+      "net_y_image": 0.6703223147476646,
+      "wrist_y_image": 0.4342047870159149,
+      "wrist_xy_image": [
+        0.2523380517959595,
+        0.4342047870159149
+      ],
+      "wrist_which": "right",
+      "ball_xy": [
+        0.2399456521624792,
+        0.3763512514685834
+      ],
+      "source_frame": 1822,
+      "fps": 30.0,
+      "source_time_sec": 60.733333333333334,
+      "source_time_str": "1:00.73",
+      "rally_start_ms": 55700,
+      "visual_frame_path": "visual_frames_v2/02_caco_cfc464a7_f151.jpg",
+      "error": null,
+      "claude_verdict": "block",
+      "claude_verdict_note": "STRICT, strong. p1(A) jumping high at the left side of the net with arms above the net plane; ball at wrist level. Team B player ducking right at the net opposite him. Textbook block.",
+      "same_team_tracked": [
+        1,
+        2
+      ],
+      "pose_inference_ms": 175.09587481617928,
+      "team_assignments": {
+        "1": "A",
+        "2": "A",
+        "3": "B",
+        "4": "B"
+      }
+    },
+    {
+      "idx": 3,
+      "is_f5": false,
+      "video": "cece",
+      "rally_short": "5c35e049",
+      "rally_id": "5c35e049-1395-455f-a426-3b101a446391",
+      "pl_frame": 242,
+      "pl_tid": 3,
+      "pl_team": "B",
+      "prev_frame": 209,
+      "prev_action": "attack",
+      "prev_team": "A",
+      "prev_pid": 2,
+      "direction_change_deg": 10.907034239457458,
+      "confidence": 0.8461224823274678,
+      "variant": "strict",
+      "confidence_tier": "moderate",
+      "a_passes": true,
+      "a_source": "head-near-ball-at-net",
+      "b_passes": null,
+      "b_reason": "no-wrist-detected",
+      "c_passes": true,
+      "d_strict_passes": true,
+      "d_strict_reason": "ok",
+      "d_loose_passes": true,
+      "d_loose_reason": "ok",
+      "all_pass_strict": false,
+      "all_pass_loose": true,
+      "selected_strict": true,
+      "selected_loose": true,
+      "player_court_xy": [
+        3.749267705343599,
+        12.81741072141872
+      ],
+      "head_y_image": 0.4266969973393587,
+      "net_y_image": 0.5737377606610319,
+      "wrist_y_image": null,
+      "wrist_xy_image": null,
+      "wrist_which": null,
+      "ball_xy": [
+        0.438540559982202,
+        0.4428220988352564
+      ],
+      "source_frame": 1508,
+      "fps": 30.0,
+      "source_time_sec": 50.266666666666666,
+      "source_time_str": "0:50.27",
+      "rally_start_ms": 42200,
+      "visual_frame_path": "visual_frames_v2/03_cece_5c35e049_f242.jpg",
+      "error": null,
+      "claude_verdict": "attack",
+      "claude_verdict_note": "STRICT, moderate (b unknown). p3(B) is a small distant figure on back court holding ball at face level. NOT at net \u2014 the net is far in the background. dc=11\u00b0 but no jump, no above-net arms. False positive \u2014 not a block.",
+      "same_team_tracked": [
+        3,
+        4
+      ],
+      "pose_inference_ms": 177.18708305619657,
+      "team_assignments": {
+        "1": "A",
+        "2": "A",
+        "3": "B",
+        "4": "B"
+      }
+    },
+    {
+      "idx": 4,
+      "is_f5": false,
+      "video": "cuco",
+      "rally_short": "f127f3d5",
+      "rally_id": "f127f3d5-17ed-4641-8f5a-cbc76a09bdab",
+      "pl_frame": 205,
+      "pl_tid": 1,
+      "pl_team": "A",
+      "prev_frame": 162,
+      "prev_action": "set",
+      "prev_team": "B",
+      "prev_pid": 2,
+      "direction_change_deg": 50.519166820481196,
+      "confidence": 0.8838854883797937,
+      "variant": "strict",
+      "confidence_tier": "strong",
+      "a_passes": true,
+      "a_source": "head-near-ball-at-net",
+      "b_passes": true,
+      "b_reason": "ok",
+      "c_passes": true,
+      "d_strict_passes": true,
+      "d_strict_reason": "ok",
+      "d_loose_passes": true,
+      "d_loose_reason": "ok",
+      "all_pass_strict": true,
+      "all_pass_loose": true,
+      "selected_strict": true,
+      "selected_loose": true,
+      "player_court_xy": [
+        7.192719904333646,
+        9.692518722234304
+      ],
+      "head_y_image": 0.2440843903479729,
+      "net_y_image": 0.5535156361277368,
+      "wrist_y_image": 0.2724480628967285,
+      "wrist_xy_image": [
+        0.7547956705093384,
+        0.2724480628967285
+      ],
+      "wrist_which": "right",
+      "ball_xy": [
+        0.705413418314385,
+        0.2549036970759847
+      ],
+      "source_frame": 2287,
+      "fps": 30.0,
+      "source_time_sec": 76.23333333333333,
+      "source_time_str": "1:16.23",
+      "rally_start_ms": 69400,
+      "visual_frame_path": "visual_frames_v2/04_cuco_f127f3d5_f205.jpg",
+      "error": null,
+      "claude_verdict": "block",
+      "claude_verdict_note": "STRICT, strong. p1(A) at right side of net jumping with arms raised above the net plane; ball at hand at top of net. Team B red player adjacent at net opposite. Classic block, ball deflected (dc=50.5\u00b0).",
+      "same_team_tracked": [
+        1,
+        2
+      ],
+      "pose_inference_ms": 178.11962496489286,
+      "team_assignments": {
+        "1": "A",
+        "2": "A",
+        "3": "B",
+        "4": "B"
+      }
+    },
+    {
+      "idx": 5,
+      "is_f5": false,
+      "video": "cucu",
+      "rally_short": "7d5fbfb2",
+      "rally_id": "7d5fbfb2-0158-463e-bddc-0c38f077688f",
+      "pl_frame": 218,
+      "pl_tid": 1,
+      "pl_team": "A",
+      "prev_frame": 179,
+      "prev_action": "set",
+      "prev_team": "B",
+      "prev_pid": 3,
+      "direction_change_deg": 7.303586488698573,
+      "confidence": 0.6012445877387366,
+      "variant": "strict",
+      "confidence_tier": "strong",
+      "a_passes": true,
+      "a_source": "head-near-ball-at-net",
+      "b_passes": true,
+      "b_reason": "ok",
+      "c_passes": true,
+      "d_strict_passes": true,
+      "d_strict_reason": "ok",
+      "d_loose_passes": true,
+      "d_loose_reason": "ok",
+      "all_pass_strict": true,
+      "all_pass_loose": true,
+      "selected_strict": true,
+      "selected_loose": true,
+      "player_court_xy": [
+        1.9268427653496736,
+        6.550145476909062
+      ],
+      "head_y_image": 0.4064328880272555,
+      "net_y_image": 0.6157764112757514,
+      "wrist_y_image": 0.4097815752029419,
+      "wrist_xy_image": [
+        0.29652515053749084,
+        0.4097815752029419
+      ],
+      "wrist_which": "right",
+      "ball_xy": [
+        0.29841731237573976,
+        0.29763289311607877
+      ],
+      "source_frame": 1676,
+      "fps": 30.0,
+      "source_time_sec": 55.86666666666667,
+      "source_time_str": "0:55.87",
+      "rally_start_ms": 48600,
+      "visual_frame_path": "visual_frames_v2/05_cucu_7d5fbfb2_f218.jpg",
+      "error": null,
+      "claude_verdict": "block",
+      "claude_verdict_note": "STRICT, strong. p2(A) jumping at the net with both arms raised high above net; ball directly above hands. Teammate p1(A) jumping with him (double block). dc=7\u00b0 tight deflection.",
+      "same_team_tracked": [
+        1,
+        2
+      ],
+      "pose_inference_ms": 179.977040970698,
+      "team_assignments": {
+        "1": "A",
+        "2": "A",
+        "3": "B",
+        "4": "B"
+      }
+    },
+    {
+      "idx": 6,
+      "is_f5": false,
+      "video": "dark",
+      "rally_short": "ca026ea3",
+      "rally_id": "ca026ea3-9520-45f4-ba70-f92c19a95210",
+      "pl_frame": 171,
+      "pl_tid": 1,
+      "pl_team": "A",
+      "prev_frame": 118,
+      "prev_action": "set",
+      "prev_team": "B",
+      "prev_pid": 3,
+      "direction_change_deg": 81.71813814734007,
+      "confidence": 0.8981821669683713,
+      "variant": "strict",
+      "confidence_tier": "strong",
+      "a_passes": true,
+      "a_source": "head-near-ball-at-net",
+      "b_passes": true,
+      "b_reason": "ok",
+      "c_passes": true,
+      "d_strict_passes": true,
+      "d_strict_reason": "ok",
+      "d_loose_passes": true,
+      "d_loose_reason": "ok",
+      "all_pass_strict": true,
+      "all_pass_loose": true,
+      "selected_strict": true,
+      "selected_loose": true,
+      "player_court_xy": [
+        2.601936274889072,
+        10.451898006703267
+      ],
+      "head_y_image": 0.3222132623195649,
+      "net_y_image": 0.6259139430025088,
+      "wrist_y_image": 0.3453868329524994,
+      "wrist_xy_image": [
+        0.4550066888332367,
+        0.3453868329524994
+      ],
+      "wrist_which": "right",
+      "ball_xy": [
+        0.4482153370258444,
+        0.3266301482771645
+      ],
+      "source_frame": 3438,
+      "fps": 30.0,
+      "source_time_sec": 114.6,
+      "source_time_str": "1:54.60",
+      "rally_start_ms": 108888,
+      "visual_frame_path": "visual_frames_v2/06_dark_ca026ea3_f171.jpg",
+      "error": null,
+      "claude_verdict": "block",
+      "claude_verdict_note": "STRICT, strong. p1(A) jumping HIGH at the net with arms straight up, ball at hands at top of jump. Classic block pose. dc=82\u00b0 is near the 90\u00b0 boundary but consistent with a hard-hit block where the ball reverses sharply at the net. prev=set(B) means team B's setter set their teammate; team A's blocker intercepted at net.",
+      "same_team_tracked": [
+        1,
+        2
+      ],
+      "pose_inference_ms": 182.39949992857873,
+      "team_assignments": {
+        "1": "A",
+        "2": "A",
+        "3": "B",
+        "4": "B"
+      }
+    },
+    {
+      "idx": 7,
+      "is_f5": false,
+      "video": "gigi",
+      "rally_short": "3e07342a",
+      "rally_id": "3e07342a-e598-4088-8b14-767ae9e0ceb8",
+      "pl_frame": 126,
+      "pl_tid": 1,
+      "pl_team": "A",
+      "prev_frame": 97,
+      "prev_action": "receive",
+      "prev_team": "B",
+      "prev_pid": 3,
+      "direction_change_deg": 0.07120517891717762,
+      "confidence": 0.627812783194737,
+      "variant": "loose-only",
+      "confidence_tier": "moderate",
+      "a_passes": true,
+      "a_source": "head-near-ball-at-net",
+      "b_passes": null,
+      "b_reason": "no-wrist-detected",
+      "c_passes": true,
+      "d_strict_passes": false,
+      "d_strict_reason": "prev-type-receive",
+      "d_loose_passes": true,
+      "d_loose_reason": "ok",
+      "all_pass_strict": false,
+      "all_pass_loose": true,
+      "selected_strict": false,
+      "selected_loose": true,
+      "player_court_xy": [
+        2.1048595983146985,
+        12.15418817844729
+      ],
+      "head_y_image": 0.44406162202358246,
+      "net_y_image": 0.5995549134969612,
+      "wrist_y_image": null,
+      "wrist_xy_image": null,
+      "wrist_which": null,
+      "ball_xy": [
+        0.4237880408069066,
+        0.3965800192968845
+      ],
+      "source_frame": 5871,
+      "fps": 30.0,
+      "source_time_sec": 195.7,
+      "source_time_str": "3:15.70",
+      "rally_start_ms": 191500,
+      "visual_frame_path": "visual_frames_v2/07_gigi_3e07342a_f126.jpg",
+      "error": null,
+      "claude_verdict": "attack",
+      "claude_verdict_note": "LOOSE-only, moderate (b unknown). p1(A) is small figure at far back-left near net, bent over with arms forward \u2014 receive/dig posture, not block. dc=0.1\u00b0 means ball did NOT deflect (block would deflect). Mis-typed attack; not a block.",
+      "same_team_tracked": [
+        1,
+        2
+      ],
+      "pose_inference_ms": 180.95808289945126,
+      "team_assignments": {
+        "1": "A",
+        "2": "A",
+        "3": "B",
+        "4": "B"
+      }
+    },
+    {
+      "idx": 8,
+      "is_f5": false,
+      "video": "kiki",
+      "rally_short": "fb6e23ff",
+      "rally_id": "fb6e23ff-e5bb-400f-9c2d-4e1df0967e5d",
+      "pl_frame": 796,
+      "pl_tid": 1,
+      "pl_team": "A",
+      "prev_frame": 720,
+      "prev_action": "dig",
+      "prev_team": "B",
+      "prev_pid": 4,
+      "direction_change_deg": 19.41271119329548,
+      "confidence": 0.6,
+      "variant": "loose-only",
+      "confidence_tier": "strong",
+      "a_passes": true,
+      "a_source": "head-near-ball-at-net",
+      "b_passes": true,
+      "b_reason": "ok",
+      "c_passes": true,
+      "d_strict_passes": false,
+      "d_strict_reason": "prev-type-dig",
+      "d_loose_passes": true,
+      "d_loose_reason": "ok",
+      "all_pass_strict": false,
+      "all_pass_loose": true,
+      "selected_strict": false,
+      "selected_loose": true,
+      "player_court_xy": [
+        3.543732687523094,
+        7.728159350351707
+      ],
+      "head_y_image": 0.4324673022604143,
+      "net_y_image": 0.7158696001886077,
+      "wrist_y_image": 0.4468136131763458,
+      "wrist_xy_image": [
+        0.47745999693870544,
+        0.4468136131763458
+      ],
+      "wrist_which": "right",
+      "ball_xy": [
+        0.4702054434015842,
+        0.4345438269300746
+      ],
+      "source_frame": 14129,
+      "fps": 59.94005994005994,
+      "source_time_sec": 235.71881666666667,
+      "source_time_str": "3:55.72",
+      "rally_start_ms": 222438,
+      "visual_frame_path": "visual_frames_v2/08_kiki_fb6e23ff_f796.jpg",
+      "error": null,
+      "claude_verdict": "block",
+      "claude_verdict_note": "LOOSE-only, strong. p1(A) jumping high at center net with arms raised; ball at wrist at top of net. Three team B players stacked at net below \u2014 solo blocker against multiple opponents. Classic block.",
+      "same_team_tracked": [
+        1,
+        2
+      ],
+      "pose_inference_ms": 209.38087510876358,
+      "team_assignments": {
+        "1": "A",
+        "2": "A",
+        "3": "B",
+        "4": "B",
+        "5": "B"
+      }
+    },
+    {
+      "idx": 9,
+      "is_f5": false,
+      "video": "lele",
+      "rally_short": "8c00e2cc",
+      "rally_id": "8c00e2cc-2a0d-420d-8a4b-e0c256f64cf0",
+      "pl_frame": 114,
+      "pl_tid": 2,
+      "pl_team": "B",
+      "prev_frame": 73,
+      "prev_action": "receive",
+      "prev_team": "A",
+      "prev_pid": 1,
+      "direction_change_deg": 1.2090063487547569,
+      "confidence": 0.6866178619754882,
+      "variant": "loose-only",
+      "confidence_tier": "moderate",
+      "a_passes": true,
+      "a_source": "head-near-ball-at-net",
+      "b_passes": null,
+      "b_reason": "no-wrist-detected",
+      "c_passes": true,
+      "d_strict_passes": false,
+      "d_strict_reason": "prev-type-receive",
+      "d_loose_passes": true,
+      "d_loose_reason": "ok",
+      "all_pass_strict": false,
+      "all_pass_loose": true,
+      "selected_strict": false,
+      "selected_loose": true,
+      "player_court_xy": [
+        3.0101798708804233,
+        11.995441126752098
+      ],
+      "head_y_image": 0.4987778449399354,
+      "net_y_image": 0.6783241446299115,
+      "wrist_y_image": null,
+      "wrist_xy_image": null,
+      "wrist_which": null,
+      "ball_xy": [
+        0.4515662137455633,
+        0.3819982564515229
+      ],
+      "source_frame": 16703,
+      "fps": 29.435,
+      "source_time_sec": 567.4537115678614,
+      "source_time_str": "9:27.45",
+      "rally_start_ms": 563595,
+      "visual_frame_path": "visual_frames_v2/09_lele_8c00e2cc_f114.jpg",
+      "error": null,
+      "claude_verdict": "attack",
+      "claude_verdict_note": "LOOSE-only, moderate (b unknown). p2(B) small distant figure at back, ball is well ABOVE him (not contacting). dc=1.2\u00b0 \u2014 no deflection. Likely no real contact at all; mis-classified attack. Not a block.",
+      "same_team_tracked": [
+        2
+      ],
+      "pose_inference_ms": 187.5958340242505,
+      "team_assignments": {
+        "1": "B",
+        "2": "B",
+        "3": "A",
+        "4": "A"
+      }
+    },
+    {
+      "idx": 10,
+      "is_f5": false,
+      "video": "lili",
+      "rally_short": "05f7dae1",
+      "rally_id": "05f7dae1-287e-4292-89f9-3060fa90c2bc",
+      "pl_frame": 238,
+      "pl_tid": 3,
+      "pl_team": "A",
+      "prev_frame": 170,
+      "prev_action": "dig",
+      "prev_team": "B",
+      "prev_pid": 1,
+      "direction_change_deg": 13.380394710351995,
+      "confidence": 0.5662165525162012,
+      "variant": "loose-only",
+      "confidence_tier": "strong",
+      "a_passes": true,
+      "a_source": "head-near-ball-at-net",
+      "b_passes": true,
+      "b_reason": "ok",
+      "c_passes": true,
+      "d_strict_passes": false,
+      "d_strict_reason": "prev-type-dig",
+      "d_loose_passes": true,
+      "d_loose_reason": "ok",
+      "all_pass_strict": false,
+      "all_pass_loose": true,
+      "selected_strict": false,
+      "selected_loose": true,
+      "player_court_xy": [
+        5.418505165225556,
+        5.705629697365002
+      ],
+      "head_y_image": 0.4554875719646899,
+      "net_y_image": 0.7000879346670833,
+      "wrist_y_image": 0.47565025091171265,
+      "wrist_xy_image": [
+        0.6556916832923889,
+        0.47565025091171265
+      ],
+      "wrist_which": "right",
+      "ball_xy": [
+        0.655500193635118,
+        0.414322880192756
+      ],
+      "source_frame": 4157,
+      "fps": 29.97002997002997,
+      "source_time_sec": 138.70523333333333,
+      "source_time_str": "2:18.71",
+      "rally_start_ms": 130763,
+      "visual_frame_path": "visual_frames_v2/10_lili_05f7dae1_f238.jpg",
+      "error": null,
+      "claude_verdict": "block",
+      "claude_verdict_note": "LOOSE-only, strong. p3(A) at right side of net jumping with arm extended upward; wrist at the top of the net. Ball at hand level. Two team B players (red) on opposing side of net in front of him. Single blocker. dc=13.4\u00b0 clean deflection.",
+      "same_team_tracked": [
+        3,
+        4
+      ],
+      "pose_inference_ms": 174.59966614842415,
+      "team_assignments": {
+        "1": "B",
+        "2": "B",
+        "3": "A",
+        "4": "A"
+      }
+    }
+  ]
+}</script>
+<script>
+const DATA = JSON.parse(document.getElementById('data').textContent);
+const STORAGE_KEY = 'a3_block_reclass_probe_2026_05_13';
+
+function loadV() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || {}; } catch(_) { return {}; } }
+function saveV(v) { localStorage.setItem(STORAGE_KEY, JSON.stringify(v)); }
+let verdicts = loadV();
+const $ = id => document.getElementById(id);
+
+function emo(v) { return v==='block'?'🟦':v==='attack'?'🟧':v==='ambig'?'⚠️':'·'; }
+function lbl(v) { return v==='block'?'actually block':v==='attack'?'actually attack':v==='ambig'?'ambiguous':'—'; }
+
+function condIcon(b) { if (b===true) return '<span class="cond-pass">YES</span>'; if (b===false) return '<span class="cond-fail">no</span>'; return '<span class="cond-unk">?</span>'; }
+
+function aggHtml() {
+  const a = DATA.agg;
+  const claudeTally = a.claude_tally || {block:0, attack:0, ambig:0, unset:0};
+  const claudeShip = a.claude_block_count >= 7 ? 'SHIP A3' : 'NO-SHIP A3';
+  const claudeCls = a.claude_block_count >= 7 ? 'ok' : 'bad';
+  const bv = a.by_variant || {};
+  const bc = a.by_confidence_tier || {};
+  const rowV = (k) => bv[k] ? `${bv[k].block}🟦 ${bv[k].attack}🟧 ${bv[k].ambig}⚠️ (n=${bv[k].n})` : '—';
+  const rowC = (k) => bc[k] ? `${bc[k].block}🟦 ${bc[k].attack}🟧 ${bc[k].ambig}⚠️ (n=${bc[k].n})` : '—';
+  return `
+    <dl>
+      <dt>v2 triage (a′ ∧ c ∧ d_loose-v2) fleet count</dt><dd>${a.triage_count}</dd>
+      <dt>v2 strict (a′ ∧ c ∧ d_strict) fleet count</dt><dd>${a.strict_count}</dd>
+      <dt>Candidates picked</dt><dd>${DATA.cases.length} (strict=${a.n_strict_picks}, loose-only=${a.n_loose_only_picks})</dd>
+      <dt>selected_strict picks</dt><dd>${a.selected_strict_count}</dd>
+      <dt>selected_loose picks</dt><dd>${a.selected_loose_count}</dd>
+      <dt>Variant: strict picks</dt><dd>${rowV('strict')}</dd>
+      <dt>Variant: loose-only picks</dt><dd>${rowV('loose-only')}</dd>
+      <dt>Confidence: strong</dt><dd>${rowC('strong')}</dd>
+      <dt>Confidence: moderate</dt><dd>${rowC('moderate')}</dd>
+      <dt>Confidence: weak</dt><dd>${rowC('weak')}</dd>
+      <dt>Confidence: none</dt><dd>${rowC('none')}</dd>
+      <dt>Claude vision: 🟦 block</dt><dd>${claudeTally.block}</dd>
+      <dt>Claude vision: 🟧 attack</dt><dd>${claudeTally.attack}</dd>
+      <dt>Claude vision: ⚠️ ambiguous</dt><dd>${claudeTally.ambig}</dd>
+      <dt>Claude vision: unset</dt><dd>${claudeTally.unset}</dd>
+    </dl>
+    <div class="verdict ${claudeCls}">Claude first-pass verdict: ${claudeShip} (${a.claude_block_count} / 10 blocks; threshold ≥ 7)</div>`;
+}
+
+function cardHtml(r) {
+  const v = verdicts[r.idx] || null;
+  let bucketPill;
+  if (r.variant === 'strict') bucketPill = '<span class="pill strict">STRICT-(d)</span>';
+  else bucketPill = '<span class="pill loose-only">LOOSE-only-(d)</span>';
+  const confPill = `<span class="pill">conf: ${r.confidence_tier}</span>`;
+  const selPill = (r.selected_strict || r.selected_loose)
+    ? '<span class="pill strict">selected</span>'
+    : '<span class="pill neither">not-selected</span>';
+  const f5Pill = r.is_f5 ? '<span class="pill f5">F5 canonical</span>' : '';
+  const claudePill = r.claude_verdict
+    ? `<span class="pill">${emo(r.claude_verdict)} Claude: ${lbl(r.claude_verdict)}</span>`
+    : '';
+
+  const frame = r.visual_frame_path ?
+    `<div class="frame"><img src="${r.visual_frame_path}" onclick="zoomImg(this.src)"></div>` :
+    `<div class="frame error">No frame: ${r.error || 'unknown'}</div>`;
+
+  return `
+    <div class="card" id="card-${r.idx}">
+      <div class="card-head">
+        <span class="num">${r.idx}</span>
+        <span class="title">${r.video} / ${r.rally_short} / ATTACK f${r.pl_frame} (p${r.pl_tid} ${r.pl_team})</span>
+        ${f5Pill}
+        ${bucketPill}
+        ${confPill}
+        ${selPill}
+        ${claudePill}
+        <span class="grow"></span>
+        <span class="pill">${r.source_time_str}</span>
+      </div>
+      <div class="card-body">
+        ${frame}
+        <div class="sidebar">
+          <div class="group">
+            <dl>
+              <dt>video</dt><dd>${r.video}</dd>
+              <dt>rally</dt><dd>${r.rally_short}</dd>
+              <dt>frame</dt><dd>${r.pl_frame}</dd>
+              <dt>source frame</dt><dd>${r.source_frame} @ ${r.fps.toFixed(2)} fps</dd>
+              <dt>source time</dt><dd>${r.source_time_str}</dd>
+              <dt>suspect</dt><dd>p${r.pl_tid} (${r.pl_team})</dd>
+              <dt>confidence</dt><dd>${r.confidence.toFixed(3)}</dd>
+            </dl>
+          </div>
+          <div class="group">
+            <dl>
+              <dt>prev frame</dt><dd>${r.prev_frame}</dd>
+              <dt>prev action</dt><dd>${r.prev_action} (p${r.prev_pid} ${r.prev_team})</dd>
+              <dt>direction_change_deg</dt><dd>${r.direction_change_deg.toFixed(1)}°</dd>
+              <dt>player court (x,y)</dt><dd>${r.player_court_xy ? '['+r.player_court_xy[0].toFixed(2)+', '+r.player_court_xy[1].toFixed(2)+']' : '—'}</dd>
+              <dt>net_y_image</dt><dd>${r.net_y_image !== null ? r.net_y_image.toFixed(3) : '—'}</dd>
+              <dt>wrist_y_image</dt><dd>${r.wrist_y_image !== null ? r.wrist_y_image.toFixed(3) : '—'} (${r.wrist_which || '—'})</dd>
+            </dl>
+          </div>
+          <div class="group">
+            <dl>
+              <dt>(a) at-net</dt><dd>${condIcon(r.a_passes)} (${r.a_source})</dd>
+              <dt>(b) wrist > net</dt><dd>${condIcon(r.b_passes)} (${r.b_reason})</dd>
+              <dt>(c) dc ≤ 90°</dt><dd>${condIcon(r.c_passes)}</dd>
+              <dt>(d) strict</dt><dd>${condIcon(r.d_strict_passes)} (${r.d_strict_reason})</dd>
+              <dt>(d) loose</dt><dd>${condIcon(r.d_loose_passes)} (${r.d_loose_reason})</dd>
+            </dl>
+          </div>
+          ${r.claude_verdict ? `<div class="group"><dl><dt>Claude vision call</dt><dd>${emo(r.claude_verdict)} ${lbl(r.claude_verdict)}</dd>${r.claude_verdict_note ? '<dt>note</dt><dd>'+r.claude_verdict_note+'</dd>' : ''}</dl></div>` : ''}
+          <div class="verdicts" data-idx="${r.idx}">
+            <button class="block ${v==='block'?'sel':''}"   data-v="block">🟦 actually a block</button>
+            <button class="attack ${v==='attack'?'sel':''}" data-v="attack">🟧 actually an attack</button>
+            <button class="ambig ${v==='ambig'?'sel':''}"   data-v="ambig">⚠️ ambiguous</button>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function render() {
+  $('agg-card').innerHTML = aggHtml();
+  const a = DATA.agg;
+  $('agg-pill').textContent =
+    `claude blocks: ${a.claude_block_count} / 10 (need ≥7)`;
+  $('agg-pill').className = 'pill ' + (a.claude_block_count >= 7 ? 'ok' : 'bad');
+  $('cards').innerHTML = DATA.cases.map(cardHtml).join('');
+  document.querySelectorAll('.verdicts').forEach(div => {
+    const idx = +div.dataset.idx;
+    div.querySelectorAll('button').forEach(btn => {
+      btn.addEventListener('click', () => setV(idx, btn.dataset.v));
+    });
+  });
+  upd();
+}
+
+function setV(idx, v) {
+  if (verdicts[idx] === v) delete verdicts[idx]; else verdicts[idx] = v;
+  saveV(verdicts);
+  const card = DATA.cases.find(c => c.idx === idx);
+  const el = document.getElementById(`card-${idx}`);
+  if (el && card) {
+    const tmp = document.createElement('div');
+    tmp.innerHTML = cardHtml(card);
+    el.replaceWith(tmp.firstElementChild);
+    document.querySelector(`[data-idx="${idx}"]`).querySelectorAll('button').forEach(b => {
+      b.addEventListener('click', () => setV(idx, b.dataset.v));
+    });
+  }
+  upd();
+}
+
+function upd() {
+  const total = DATA.cases.length;
+  let n = 0; for (const k in verdicts) if (verdicts[k]) n++;
+  $('status').textContent = `${n} / ${total} verdicts`;
+}
+
+function compile() {
+  const parts = [];
+  for (const r of DATA.cases) parts.push(`${r.idx}:${emo(verdicts[r.idx])}`);
+  return parts.join(' ') + '\n\n' + DATA.cases.map(r => {
+    const v = verdicts[r.idx];
+    return `  ${r.idx}. ${r.video}/${r.rally_short} f${r.pl_frame}: ${emo(v)} ${lbl(v)}`;
+  }).join('\n');
+}
+
+$('copy-btn').addEventListener('click', () => {
+  $('copy-text').textContent = compile();
+  $('copy-modal').classList.add('open');
+});
+$('copy-close').addEventListener('click', () => $('copy-modal').classList.remove('open'));
+$('copy-clipboard').addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText($('copy-text').textContent);
+    $('copy-clipboard').textContent = 'Copied!';
+    setTimeout(() => $('copy-clipboard').textContent = 'Copy to clipboard', 1200);
+  } catch(e) { alert('Clipboard copy failed; select manually.'); }
+});
+
+function zoomImg(s) { $('zoom-img').src = s; $('zoom-overlay').classList.add('open'); }
+$('zoom-overlay').addEventListener('click', () => $('zoom-overlay').classList.remove('open'));
+
+render();
+</script>
+</body>
+</html>
