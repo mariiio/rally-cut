@@ -143,11 +143,12 @@ export async function saveActionGroundTruth(
   userId: string,
   labels: ActionGtLabel[],
 ): Promise<{ savedCount: number; labels: Array<{ id: string }> }> {
-  // 1. Load rally with its video (for ownership) and playerTrack (for snapshot).
+  // 1. Load rally with its video (for ownership + appliedFullMapping) and
+  //    playerTrack (for snapshot lookup).
   const rally = await prisma.rally.findUnique({
     where: { id: rallyId },
     include: {
-      video: { select: { userId: true } },
+      video: { select: { userId: true, matchAnalysisJson: true } },
       playerTrack: {
         select: {
           frameCount: true,
@@ -177,6 +178,35 @@ export async function saveActionGroundTruth(
   const rawPositions = (pt?.rawPositionsJson ?? null) as unknown as RawPos[] | null;
   const ballPositions = (pt?.ballPositionsJson ?? []) as unknown as BallPosition[];
   const teamAssignments = readTeamAssignments(pt?.actionsJson);
+
+  // Extract this rally's appliedFullMapping (raw BoT-SORT id → canonical pid).
+  // Used to canonicalize the incoming trackId so resolved_track_id is always
+  // in canonical pid space (1..4). gtLabelDisplay reads it directly without
+  // an AFM hop — anything outside 1..4 would render as a raw number (e.g.,
+  // "p7") which is the bug we're closing here.
+  let appliedFullMapping: Record<string, number> | null = null;
+  const mAJ = rally.video.matchAnalysisJson as
+    | { rallies?: Array<{ rallyId?: string; appliedFullMapping?: Record<string, number> }> }
+    | null;
+  if (mAJ?.rallies) {
+    const entry = mAJ.rallies.find((r) => r.rallyId === rallyId);
+    if (entry?.appliedFullMapping) {
+      appliedFullMapping = entry.appliedFullMapping;
+    }
+  }
+
+  /** Canonicalize a track id to a canonical pid (1..4) when possible.
+   *  Already-canonical values pass through; raw ids are looked up in afm.
+   *  Returns null if no canonical mapping exists. */
+  const toCanonicalPid = (tid: number | null): number | null => {
+    if (tid === null) return null;
+    if (tid >= 1 && tid <= 4) return tid;
+    if (appliedFullMapping) {
+      const mapped = appliedFullMapping[String(tid)];
+      if (typeof mapped === 'number' && mapped >= 1 && mapped <= 4) return mapped;
+    }
+    return null;
+  };
 
   // Defensive dedup of the incoming batch. Same semantics as the web client
   // (web/src/stores/playerTrackingStore.ts addActionLabel):
@@ -316,6 +346,14 @@ export async function saveActionGroundTruth(
       let resolvedSource: ResolveSource;
       let resolvedTrackId: number | null = null;
 
+      // Canonicalize the incoming trackId for storage. If the client sent a
+      // canonical pid (1..4), pass through. If raw (legacy or auto-detected
+      // from a non-canonical track), look up via appliedFullMapping. The
+      // stored resolved_track_id is ALWAYS in 1..4 (or null) so the display
+      // can read it directly. snapshot_track_id keeps the raw hint untouched
+      // as an audit trail.
+      const canonicalPid = toCanonicalPid(trackId);
+
       if (pt && posAtFrame) {
         // SNAPSHOT_EXACT: PlayerTrack present AND trackId has a position at
         // frame (or ±1 via stride-2 fallback). Capture bbox + team.
@@ -329,20 +367,20 @@ export async function saveActionGroundTruth(
         const teamChar = teamAssignments?.[String(trackId)];
         snapshotTeam = (teamChar === 'A' ? 'A' : teamChar === 'B' ? 'B' : null) as ServingTeam | null;
         resolvedSource = 'SNAPSHOT_EXACT';
-        resolvedTrackId = trackId;
+        resolvedTrackId = canonicalPid ?? trackId;
       } else if (trackId !== null) {
         // MANUAL: user gave an explicit trackId but the player isn't tracked
         // at this frame (off-screen player, e.g., the server before they enter
-        // the frame). Preserve the user's intent: resolved_track_id = trackId
-        // so the display renders the right pid, and resolvedSource = MANUAL
-        // so the auto-resolver doesn't override on the next match-analysis.
-        // No bbox snapshot is possible here; ReID re-anchoring on retrack
-        // also won't work for these. That's OK — the label is a user
-        // assertion, not a tracking-derived attribution.
+        // the frame). Preserve the user's intent in CANONICAL pid space so
+        // the display renders the right pid; resolvedSource = MANUAL so the
+        // auto-resolver doesn't override on the next match-analysis. No
+        // bbox snapshot is possible here; ReID re-anchoring on retrack also
+        // won't work for these. That's OK — the label is a user assertion,
+        // not a tracking-derived attribution.
         snapshotBallX = ballAtFrame?.x ?? (label.ballX ?? null);
         snapshotBallY = ballAtFrame?.y ?? (label.ballY ?? null);
         resolvedSource = 'MANUAL';
-        resolvedTrackId = trackId;
+        resolvedTrackId = canonicalPid ?? trackId;
       } else {
         // UNRESOLVED: no trackId given (user labeled an action but didn't
         // assign a player; or auto-detect found nothing). Render as ghost.
