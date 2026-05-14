@@ -128,6 +128,25 @@ End-to-end after `redetect_all_actions` with flag OFF vs ON:
 
 Per-video: 12 wins, 1 same, 1 regression (wawa −17.9pp).
 
+**Post-fix A/B (with widened tolerance + coverage gate):**
+
+| Metric | Baseline (OFF) | Scorer (ON) | Δ |
+|---|---|---|---|
+| Total | 446/571 (78.1%) | **497/571 (87.0%)** | **+51 correct (+8.9pp)** |
+
+Per-video: 13 wins, only wawa still regresses (−7.1pp, recovered +10.7pp from initial measurement).
+
+**Coherence audit (C-1..C-5 violation counts) — neutral:**
+
+| Aspect | OFF | ON | Δ |
+|---|---|---|---|
+| Total violations across trusted-14 | 291 | 292 | **+1** (neutral) |
+| Videos with fewer violations | — | titi −15, kiki −12, juju −7, lulu −4, cici −3 | |
+| Videos with more violations | — | toto +11, yeye +7, cuco +3, cece +2, gaga +2 | |
+| keke outlier | 18 | 35 | +17 (baseline muddied by earlier Stages 1+2 changes; not a clean before/after) |
+
+No broad coherence regression — scorer doesn't break sequence-rule integrity.
+
 ## Risk assessment
 
 - **Env-flag gated, default OFF** → zero risk for current users.
@@ -141,10 +160,32 @@ Per-video: 12 wins, 1 same, 1 regression (wawa −17.9pp).
 1. ✅ Train + save models (production-matched, full corpus)
 2. ✅ Inference module + env-flag integration
 3. ✅ End-to-end A/B on trusted-14 corpus (+8.2pp, 12/14 video wins)
-4. ⏳ Investigate wawa regression before default-on
-5. ⏳ Coherence-audit baseline diff (C-1..C-5 violation deltas)
-6. ⏳ Bump `ACTION_PIPELINE_VERSION` v2→v3 + fleet refresh when defaulting ON
-7. ⏳ Periodic retraining as new GT is added (every ~100 new GT rows)
+4. ✅ Investigate wawa regression — root cause identified (feature-window mismatch; see below)
+5. ⏳ Fix `_find_pos` tolerance (widen 2→5) + retrain → closes most wawa regression
+6. ⏳ Add `weights/dynamic_attribution_scorer/` to `rallycut train push-weights` pattern list
+7. ⏳ Coherence-audit baseline diff (C-1..C-5 violation deltas)
+8. ⏳ Bump `ACTION_PIPELINE_VERSION` v2→v3 + fleet refresh when defaulting ON
+9. ⏳ Periodic retraining as new GT is added (every ~100 new GT rows)
+
+## Wawa regression root cause (added 2026-05-14 post-A/B)
+
+5 contacts regressed in wawa (−17.9pp). Investigation showed:
+- **3 of 5: feature-window mismatch.** Scorer uses `_find_pos(tolerance=2)`
+  in feature extraction; pipeline's `contact.player_candidates` uses ±15
+  frames. When GT player has positions at ±3..±15 of contact but not ±2,
+  pipeline's Pass 2 can swap to them, scorer drops them from its candidate
+  set entirely. These are unrecoverable cases at current tolerance.
+- **1 of 5: close-call (r9 f395 SET).** GT=P2 in candidates with prob=0.445
+  vs P3 prob=0.467 — scorer's choice is genuinely close. May resolve with
+  better features or more training data.
+- **1 of 5: stale earlier comparison** — re-running showed r6 f623 ATTACK
+  is actually correct (scorer picks GT=P3). So real regression is 4/45, not
+  5/45.
+
+Fix: widen `_find_pos` tolerance from 2 to 5 in both `extract_features`
+(inference) and `_compute_features` (training). Must retrain to match
+distribution. Estimated lift recovery on wawa: ~+3-4 contacts (from
+75.0% → ~85%).
 
 ## Future work
 
