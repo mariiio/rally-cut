@@ -40,7 +40,7 @@ fully fixed (4/4 actions correct end-to-end).
    - `analysis/scripts/probe_scorer_on_user_flagged_2026_05_14.py` —
      per-user-rally verification
 
-## Feature space (9 features per candidate)
+## Feature space (10 features per candidate)
 
 | Feature | Type | Description |
 |---|---|---|
@@ -53,6 +53,7 @@ fully fixed (4/4 actions correct end-to-end).
 | `top_y_at_contact` | **dynamic** | Bbox top-y at contact (smaller = higher in image = jumping) |
 | `top_y_change` | **dynamic** | `y - y(f-5)` (negative = rising) |
 | `height_change` | **dynamic** | `height(f+3) - height(f-3)` (positive = extending) |
+| `same_as_prev` | **sequence** | 1.0 if candidate.tid == previous action's playerTrackId else 0.0 — discourages C-4 violations |
 
 Feature importance varies by action type:
 - SERVE: dominated by `bbox_aspect_ratio` (0.45) — penalizes degenerate
