@@ -104,6 +104,16 @@ WEIGHT_GROUPS: dict[str, list[str]] = {
         "reid/general_reid.pt",
         "visual_attribution/visual_attribution.pkl",
         "pose_attribution/pose_attribution.joblib",
+        # Dynamic attribution scorer (2026-05-14): per-action-type GBMs +
+        # manifest. Loaded by `tracking/dynamic_attribution_scorer.py` when
+        # `USE_DYNAMIC_ATTRIBUTION_SCORER=1`.
+        "dynamic_attribution_scorer/manifest.json",
+        "dynamic_attribution_scorer/SERVE_v1.joblib",
+        "dynamic_attribution_scorer/RECEIVE_v1.joblib",
+        "dynamic_attribution_scorer/SET_v1.joblib",
+        "dynamic_attribution_scorer/ATTACK_v1.joblib",
+        "dynamic_attribution_scorer/DIG_v1.joblib",
+        "dynamic_attribution_scorer/BLOCK_v1.joblib",
     ],
     "external": [
         "videomae/game_state_classifier/model.safetensors",
