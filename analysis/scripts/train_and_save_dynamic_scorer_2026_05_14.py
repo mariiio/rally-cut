@@ -41,6 +41,7 @@ FEATURE_NAMES = [
     "bbox_dist", "bbox_area", "bbox_aspect_ratio", "bbox_inside_frame",
     "velocity_mag", "velocity_toward_ball",
     "top_y_at_contact", "top_y_change", "height_change",
+    "same_as_prev",  # 1.0 if candidate.tid == previous action's playerTrackId else 0.0
 ]
 ACTION_TYPES = ["SERVE", "RECEIVE", "SET", "ATTACK", "DIG", "BLOCK"]
 MODEL_VERSION = "v1"
@@ -75,6 +76,7 @@ def _find_pos(positions: list[dict], tid: int, frame: int, tolerance: int = 5) -
 def _compute_features(
     positions: list[dict], tid: int, contact_frame: int,
     ball_x: float, ball_y: float,
+    prev_action_tid: int = -1,
 ) -> list[float] | None:
     p_at = _find_pos(positions, tid, contact_frame, tolerance=5)
     if p_at is None:
@@ -113,10 +115,12 @@ def _compute_features(
         height_change = float(p_post_extend.get("height", h)) - float(p_pre_extend.get("height", h))
     else:
         height_change = 0.0
+    same_as_prev = 1.0 if (prev_action_tid >= 0 and tid == prev_action_tid) else 0.0
     return [
         bbox_dist, bbox_area, bbox_aspect_ratio, inside,
         velocity_mag, velocity_toward_ball,
         y, top_y_change, height_change,
+        same_as_prev,
     ]
 
 
@@ -207,12 +211,26 @@ def build_dataset() -> list[CandidateRow]:
                 if pipe_ball_x is None or pipe_ball_y is None:
                     n_gt_skipped_no_match += 1
                     continue
+                # Find the previous action's playerTrackId for the
+                # same_as_prev feature. Skips UNKNOWN actions and those
+                # with player_track_id < 0.
+                prev_action_tid = -1
+                for j in range(best_idx - 1, -1, -1):
+                    pa = actions[j]
+                    pa_at = (pa.get("action") or "").upper()
+                    if pa_at == "UNKNOWN":
+                        continue
+                    pa_tid = int(pa.get("playerTrackId", -1))
+                    if pa_tid >= 0:
+                        prev_action_tid = pa_tid
+                        break
                 n_gt_matched += 1
                 # Use PIPELINE's frame + ball position (production-matched).
                 for tid in primary_tids:
                     feats = _compute_features(
                         positions, tid, pipe_frame,
                         float(pipe_ball_x), float(pipe_ball_y),
+                        prev_action_tid=prev_action_tid,
                     )
                     if feats is None:
                         continue

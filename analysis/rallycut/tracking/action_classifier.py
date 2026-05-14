@@ -3647,7 +3647,7 @@ def _apply_dynamic_scorer_attribution(
         ))
     contact_by_frame = {c.frame: c for c in contacts}
     n_swapped = 0
-    for action in actions:
+    for i, action in enumerate(actions):
         if action.confidence < 0.3:
             continue
         if action.player_track_id < 0:
@@ -3657,11 +3657,22 @@ def _apply_dynamic_scorer_attribution(
         contact = contact_by_frame.get(action.frame)
         if contact is None or not contact.player_candidates:
             continue
+        # Find previous valid action's player_track_id for the
+        # same_as_prev feature (discourages same-player back-to-back).
+        prev_action_tid = -1
+        for j in range(i - 1, -1, -1):
+            pa = actions[j]
+            if pa.action_type == ActionType.UNKNOWN:
+                continue
+            if pa.player_track_id >= 0:
+                prev_action_tid = pa.player_track_id
+                break
         # Build CandidateFeatures for each primary track in candidates.
         feats: list[CandidateFeatures] = []
         for tid, _dist in contact.player_candidates:
             f = extract_features(pp_like, int(tid), action.frame,
-                                 action.ball_x, action.ball_y)
+                                 action.ball_x, action.ball_y,
+                                 prev_action_tid=prev_action_tid)
             if f is not None:
                 feats.append(f)
         # Coverage gate: only override when the scorer has features for at

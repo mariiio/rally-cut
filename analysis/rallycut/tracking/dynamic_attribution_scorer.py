@@ -42,6 +42,7 @@ FEATURE_NAMES = (
     "top_y_at_contact",
     "top_y_change",
     "height_change",
+    "same_as_prev",  # 1.0 if candidate.tid == previous action's playerTrackId else 0.0
 )
 
 # Default location of trained models relative to repo root.
@@ -64,6 +65,7 @@ class CandidateFeatures:
     top_y_at_contact: float
     top_y_change: float
     height_change: float
+    same_as_prev: float = 0.0
 
     def as_vector(self) -> list[float]:
         return [
@@ -76,6 +78,7 @@ class CandidateFeatures:
             self.top_y_at_contact,
             self.top_y_change,
             self.height_change,
+            self.same_as_prev,
         ]
 
 
@@ -139,6 +142,7 @@ def extract_features(
     contact_frame: int,
     ball_x: float,
     ball_y: float,
+    prev_action_tid: int = -1,
 ) -> CandidateFeatures | None:
     """Compute the 9-feature vector for one candidate at one contact.
 
@@ -193,6 +197,7 @@ def extract_features(
     else:
         height_change = 0.0
 
+    same_as_prev = 1.0 if (prev_action_tid >= 0 and track_id == prev_action_tid) else 0.0
     return CandidateFeatures(
         track_id=track_id,
         bbox_dist=bbox_dist,
@@ -204,6 +209,7 @@ def extract_features(
         top_y_at_contact=y,
         top_y_change=top_y_change,
         height_change=height_change,
+        same_as_prev=same_as_prev,
     )
 
 
