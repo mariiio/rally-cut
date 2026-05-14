@@ -54,6 +54,11 @@ def _ball_dist_upper_quarter(p: dict, ball_x: float, ball_y: float) -> float:
 
 
 def _find_pos(positions: list[dict], tid: int, frame: int, tolerance: int = 5) -> dict | None:
+    """Note: tolerance widened from 2 to 5 on 2026-05-14 to address wawa
+    regression (3 of 5 wawa regressions were cases where the GT player was
+    tracked at ±3..±5 of contact but not ±2, making the scorer unable to
+    pick GT). Must stay in lockstep with dynamic_attribution_scorer.py's
+    _find_pos tolerance."""
     best = None
     best_delta = tolerance + 1
     for p in positions:
@@ -71,13 +76,13 @@ def _compute_features(
     positions: list[dict], tid: int, contact_frame: int,
     ball_x: float, ball_y: float,
 ) -> list[float] | None:
-    p_at = _find_pos(positions, tid, contact_frame, tolerance=2)
+    p_at = _find_pos(positions, tid, contact_frame, tolerance=5)
     if p_at is None:
         return None
-    p_prev = _find_pos(positions, tid, contact_frame - 5, tolerance=2)
-    p_next = _find_pos(positions, tid, contact_frame + 5, tolerance=2)
-    p_pre_extend = _find_pos(positions, tid, contact_frame - 3, tolerance=2)
-    p_post_extend = _find_pos(positions, tid, contact_frame + 3, tolerance=2)
+    p_prev = _find_pos(positions, tid, contact_frame - 5, tolerance=5)
+    p_next = _find_pos(positions, tid, contact_frame + 5, tolerance=5)
+    p_pre_extend = _find_pos(positions, tid, contact_frame - 3, tolerance=5)
+    p_post_extend = _find_pos(positions, tid, contact_frame + 3, tolerance=5)
     x = float(p_at.get("x", 0))
     y = float(p_at.get("y", 0))
     w = float(p_at.get("width", 0))

@@ -3664,7 +3664,18 @@ def _apply_dynamic_scorer_attribution(
                                  action.ball_x, action.ball_y)
             if f is not None:
                 feats.append(f)
-        if len(feats) < 2:
+        # Coverage gate: only override when the scorer has features for at
+        # least 3 of the contact's candidates AND the current pipeline pick
+        # is among them. Otherwise, the GT player may be a late-arriving
+        # track that the scorer can't see (no bbox at contact frame), and
+        # the pipeline's Pass-2 swap via adaptive window is the safer call.
+        # Added 2026-05-14 after wawa regression analysis showed 3/5
+        # regressions were unreachable cases (GT track first appears
+        # 21-42 frames after contact).
+        if len(feats) < 3:
+            continue
+        feat_tids = {f.track_id for f in feats}
+        if action.player_track_id not in feat_tids:
             continue
         result = scorer.pick(action.action_type.value.upper(), feats)
         if result is None:

@@ -111,7 +111,7 @@ def _find_pos(
     positions: list[PlayerPositionLike],
     track_id: int,
     target_frame: int,
-    tolerance: int = 2,
+    tolerance: int = 5,
 ) -> PlayerPositionLike | None:
     best: PlayerPositionLike | None = None
     best_delta = tolerance + 1
@@ -148,13 +148,13 @@ def extract_features(
     `scripts/train_and_save_dynamic_scorer_2026_05_14.py` exactly — any
     change in either side must be mirrored in the other.
     """
-    p_at = _find_pos(positions, track_id, contact_frame, tolerance=2)
+    p_at = _find_pos(positions, track_id, contact_frame, tolerance=5)
     if p_at is None:
         return None
-    p_prev = _find_pos(positions, track_id, contact_frame - 5, tolerance=2)
-    p_next = _find_pos(positions, track_id, contact_frame + 5, tolerance=2)
-    p_pre_extend = _find_pos(positions, track_id, contact_frame - 3, tolerance=2)
-    p_post_extend = _find_pos(positions, track_id, contact_frame + 3, tolerance=2)
+    p_prev = _find_pos(positions, track_id, contact_frame - 5, tolerance=5)
+    p_next = _find_pos(positions, track_id, contact_frame + 5, tolerance=5)
+    p_pre_extend = _find_pos(positions, track_id, contact_frame - 3, tolerance=5)
+    p_post_extend = _find_pos(positions, track_id, contact_frame + 3, tolerance=5)
 
     x = p_at.x
     y = p_at.y
