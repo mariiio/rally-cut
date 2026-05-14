@@ -1,0 +1,544 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Probe B — 2026-05-14</title>
+<style>
+  body { background:#0f0f10; color:#eaeaea; font-family:-apple-system,sans-serif; margin:0; padding:24px; }
+  h1 { margin:0 0 16px 0; }
+  .agg { background:#1a1a1c; border:1px solid #2a2a2e; border-radius:8px; padding:16px 20px; margin-bottom:18px; }
+  table { border-collapse:collapse; margin-top:10px; }
+  td, th { border:1px solid #2a2a2e; padding:6px 10px; font-size:13px; }
+  th { background:#222; }
+  .case { background:#1a1a1c; border:1px solid #2a2a2e; border-radius:8px; padding:14px 18px; margin-bottom:14px; }
+  .case h3 { margin:0 0 8px 0; }
+  .case img { max-width:100%; max-height:75vh; display:block; margin:10px 0; cursor:zoom-in; background:#000; }
+  .ok { color:#5fe49d; } .bad { color:#f08680; } .skip { color:#aaa; }
+  pre { background:#0a0a0a; padding:8px 12px; border-radius:6px; overflow:auto; font-size:12px; }
+  #zoom-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.94); z-index:99; align-items:center; justify-content:center; cursor:zoom-out; }
+  #zoom-overlay.open { display:flex; }
+  #zoom-overlay img { max-width:96vw; max-height:96vh; }
+</style></head><body>
+<h1>Probe B — Sequence-Aware Attribution (2026-05-14)</h1>
+<div class="agg" id="agg"></div>
+<div id="cases"></div>
+<div id="zoom-overlay"><img id="zoom-img"></div>
+<script id="data" type="application/json">{
+  "agg": {
+    "n_total": 10,
+    "n_evaluable": 10,
+    "n_within_team": 9,
+    "S0_correct": 1,
+    "S1_correct": 3,
+    "S2_correct": 3,
+    "S3_correct": 2,
+    "S4_correct": 6,
+    "within_team": {
+      "S0": 1,
+      "S1": 3,
+      "S2": 3,
+      "S3": 2,
+      "S4": 6
+    },
+    "best_trajectory": 6,
+    "lift_over_S1": 3,
+    "verdict": "SHIP-A4-design (lift=3, threshold \u2265 3)"
+  },
+  "cases": [
+    {
+      "idx": 1,
+      "label": "cascade-f128",
+      "video": "titi",
+      "rally_short": "a0881d82",
+      "pl_frame": 128,
+      "action_type": "SET",
+      "gt_tid": 1,
+      "pl_tid": 2,
+      "s0_pick": 2,
+      "s1_pick": 1,
+      "s2_pick": 1,
+      "s2_endpoint": [
+        0.5788705675009677,
+        0.54620795140693
+      ],
+      "s3_pick": 2,
+      "s3_integrals": {
+        "2": 0.15054975572358337,
+        "1": 0.15768659113956424
+      },
+      "s4_pick": 1,
+      "prev_toucher_tid": 2,
+      "prev_action_type": "RECEIVE",
+      "same_team_cands": [
+        [
+          2,
+          0.008662643324836987
+        ],
+        [
+          1,
+          0.019272894094226552
+        ]
+      ],
+      "n_pre_ball": 10,
+      "s0_correct": false,
+      "s1_correct": true,
+      "s2_correct": true,
+      "s3_correct": false,
+      "s4_correct": true,
+      "skipped": false,
+      "skip_reason": "",
+      "visual_path": "visual_frames/01_titi_a0881d82_f128.jpg",
+      "note": "cascade f128 \u2014 pipeline picked p2 (closest), GT=p1 (same-team B)"
+    },
+    {
+      "idx": 2,
+      "label": "cascade-f225",
+      "video": "titi",
+      "rally_short": "a0881d82",
+      "pl_frame": 225,
+      "action_type": "DIG",
+      "gt_tid": 1,
+      "pl_tid": 2,
+      "s0_pick": 2,
+      "s1_pick": 2,
+      "s2_pick": 2,
+      "s2_endpoint": [
+        0.5916921909987698,
+        0.5292234507365476
+      ],
+      "s3_pick": 2,
+      "s3_integrals": {
+        "2": 0.13084302995372457,
+        "1": 0.14482660271722475
+      },
+      "s4_pick": 1,
+      "prev_toucher_tid": 2,
+      "prev_action_type": "ATTACK",
+      "same_team_cands": [
+        [
+          2,
+          0.006088401102891127
+        ],
+        [
+          1,
+          0.04140246156133992
+        ]
+      ],
+      "n_pre_ball": 10,
+      "s0_correct": false,
+      "s1_correct": false,
+      "s2_correct": false,
+      "s3_correct": false,
+      "s4_correct": true,
+      "skipped": false,
+      "skip_reason": "",
+      "visual_path": "visual_frames/02_titi_a0881d82_f225.jpg",
+      "note": "cascade f225 \u2014 pipeline picked p2, GT=p1 (same-team B)"
+    },
+    {
+      "idx": 3,
+      "label": "F3-keke",
+      "video": "keke",
+      "rally_short": "0144acfb",
+      "pl_frame": 223,
+      "action_type": "ATTACK",
+      "gt_tid": 3,
+      "pl_tid": 1,
+      "s0_pick": 1,
+      "s1_pick": 1,
+      "s2_pick": 1,
+      "s2_endpoint": [
+        0.23575365397920123,
+        0.433180171879918
+      ],
+      "s3_pick": 1,
+      "s3_integrals": {
+        "1": 0.31409642929247045,
+        "4": 0.3277167126128405
+      },
+      "s4_pick": 1,
+      "prev_toucher_tid": 2,
+      "prev_action_type": "SET",
+      "same_team_cands": [
+        [
+          1,
+          0.004042790335685305
+        ],
+        [
+          4,
+          0.3268390814081336
+        ]
+      ],
+      "n_pre_ball": 10,
+      "s0_correct": false,
+      "s1_correct": false,
+      "s2_correct": false,
+      "s3_correct": false,
+      "s4_correct": false,
+      "skipped": false,
+      "skip_reason": "",
+      "visual_path": "visual_frames/03_keke_0144acfb_f223.jpg",
+      "note": "F3 occlusion case \u2014 likely no GT yet, will skip"
+    },
+    {
+      "idx": 4,
+      "label": "F5-keke",
+      "video": "keke",
+      "rally_short": "99091ec6",
+      "pl_frame": 184,
+      "action_type": "ATTACK",
+      "gt_tid": 2,
+      "pl_tid": 2,
+      "s0_pick": 2,
+      "s1_pick": 2,
+      "s2_pick": 2,
+      "s2_endpoint": [
+        0.5122163208600682,
+        0.4183703918723152
+      ],
+      "s3_pick": 2,
+      "s3_integrals": {
+        "2": 0.30644428753478925,
+        "1": 0.34470495946528307
+      },
+      "s4_pick": 2,
+      "prev_toucher_tid": 3,
+      "prev_action_type": "RECEIVE",
+      "same_team_cands": [
+        [
+          2,
+          0.08794585350970062
+        ],
+        [
+          1,
+          0.1891639965234685
+        ]
+      ],
+      "n_pre_ball": 10,
+      "s0_correct": true,
+      "s1_correct": true,
+      "s2_correct": true,
+      "s3_correct": true,
+      "s4_correct": true,
+      "skipped": false,
+      "skip_reason": "",
+      "visual_path": "visual_frames/04_keke_99091ec6_f184.jpg",
+      "note": "F5 mid-rally attack \u2014 pipeline currently matches GT (control)"
+    },
+    {
+      "idx": 5,
+      "label": "stratified-jojo",
+      "video": "jojo",
+      "rally_short": "36d3aa2c",
+      "pl_frame": 143,
+      "action_type": "RECEIVE",
+      "gt_tid": 3,
+      "pl_tid": 4,
+      "s0_pick": 4,
+      "s1_pick": 4,
+      "s2_pick": 4,
+      "s2_endpoint": [
+        0.4181421662263797,
+        0.5638140160857594
+      ],
+      "s3_pick": 4,
+      "s3_integrals": {
+        "4": 0.13450867043788445,
+        "3": 0.19663300127209427
+      },
+      "s4_pick": 4,
+      "prev_toucher_tid": 1,
+      "prev_action_type": "SERVE",
+      "same_team_cands": [
+        [
+          4,
+          0.01299605078234043
+        ],
+        [
+          3,
+          0.06781830420067496
+        ]
+      ],
+      "n_pre_ball": 10,
+      "s0_correct": false,
+      "s1_correct": false,
+      "s2_correct": false,
+      "s3_correct": false,
+      "s4_correct": false,
+      "skipped": false,
+      "skip_reason": "",
+      "visual_path": "visual_frames/05_jojo_36d3aa2c_f143.jpg",
+      "note": "same-team error: pl=4 closest, gt=3"
+    },
+    {
+      "idx": 6,
+      "label": "stratified-tutu-set",
+      "video": "tutu",
+      "rally_short": "9064ba7b",
+      "pl_frame": 254,
+      "action_type": "SET",
+      "gt_tid": 2,
+      "pl_tid": 1,
+      "s0_pick": 1,
+      "s1_pick": 2,
+      "s2_pick": 2,
+      "s2_endpoint": [
+        0.5876082859394238,
+        0.5399785777454218
+      ],
+      "s3_pick": 1,
+      "s3_integrals": {
+        "1": 0.1706253386697099,
+        "2": 0.17616936991665771
+      },
+      "s4_pick": 2,
+      "prev_toucher_tid": 1,
+      "prev_action_type": "RECEIVE",
+      "same_team_cands": [
+        [
+          1,
+          0.00949438292940989
+        ],
+        [
+          2,
+          0.024977958337911055
+        ]
+      ],
+      "n_pre_ball": 10,
+      "s0_correct": false,
+      "s1_correct": true,
+      "s2_correct": true,
+      "s3_correct": false,
+      "s4_correct": true,
+      "skipped": false,
+      "skip_reason": "",
+      "visual_path": "visual_frames/06_tutu_9064ba7b_f254.jpg",
+      "note": "same-team error: pl=1 closest, gt=2 (tight gap 0.009 vs 0.025)"
+    },
+    {
+      "idx": 7,
+      "label": "stratified-gugu-dig",
+      "video": "gugu",
+      "rally_short": "62b6c286",
+      "pl_frame": 230,
+      "action_type": "DIG",
+      "gt_tid": 4,
+      "pl_tid": 3,
+      "s0_pick": 3,
+      "s1_pick": 3,
+      "s2_pick": 3,
+      "s2_endpoint": [
+        0.4510373200228731,
+        0.45600585731420384
+      ],
+      "s3_pick": 4,
+      "s3_integrals": {
+        "3": 0.14629805391193315,
+        "4": 0.128470793893625
+      },
+      "s4_pick": 4,
+      "prev_toucher_tid": 1,
+      "prev_action_type": "ATTACK",
+      "same_team_cands": [
+        [
+          3,
+          0.009871887482971162
+        ],
+        [
+          4,
+          0.020062270009728343
+        ]
+      ],
+      "n_pre_ball": 10,
+      "s0_correct": false,
+      "s1_correct": false,
+      "s2_correct": false,
+      "s3_correct": true,
+      "s4_correct": true,
+      "skipped": false,
+      "skip_reason": "",
+      "visual_path": "visual_frames/07_gugu_62b6c286_f230.jpg",
+      "note": "same-team error: pl=3 closest, gt=4 (tight gap)"
+    },
+    {
+      "idx": 8,
+      "label": "stratified-jaja",
+      "video": "jaja",
+      "rally_short": "2ae99d01",
+      "pl_frame": 146,
+      "action_type": "RECEIVE",
+      "gt_tid": 2,
+      "pl_tid": 1,
+      "s0_pick": 1,
+      "s1_pick": 1,
+      "s2_pick": 1,
+      "s2_endpoint": [
+        0.330757202593831,
+        0.5032669899024527
+      ],
+      "s3_pick": 1,
+      "s3_integrals": {
+        "1": 0.22841314045009026,
+        "2": 0.3341520413412857
+      },
+      "s4_pick": 1,
+      "prev_toucher_tid": 3,
+      "prev_action_type": "SERVE",
+      "same_team_cands": [
+        [
+          1,
+          0.025435093314759835
+        ],
+        [
+          2,
+          0.23387713732832535
+        ]
+      ],
+      "n_pre_ball": 10,
+      "s0_correct": false,
+      "s1_correct": false,
+      "s2_correct": false,
+      "s3_correct": false,
+      "s4_correct": false,
+      "skipped": false,
+      "skip_reason": "",
+      "visual_path": "visual_frames/08_jaja_2ae99d01_f146.jpg",
+      "note": "same-team error: pl=1, gt=2"
+    },
+    {
+      "idx": 9,
+      "label": "stratified-natch",
+      "video": "natch",
+      "rally_short": "e5e4c0b7",
+      "pl_frame": 214,
+      "action_type": "ATTACK",
+      "gt_tid": 2,
+      "pl_tid": 1,
+      "s0_pick": 1,
+      "s1_pick": 1,
+      "s2_pick": 1,
+      "s2_endpoint": [
+        0.47059404027591295,
+        0.29389572159642796
+      ],
+      "s3_pick": 1,
+      "s3_integrals": {
+        "1": 0.3618554822233596,
+        "2": 0.38603362183447626
+      },
+      "s4_pick": 2,
+      "prev_toucher_tid": 1,
+      "prev_action_type": "RECEIVE",
+      "same_team_cands": [
+        [
+          1,
+          0.0759147685986838
+        ],
+        [
+          2,
+          0.15331215314440697
+        ]
+      ],
+      "n_pre_ball": 10,
+      "s0_correct": false,
+      "s1_correct": false,
+      "s2_correct": false,
+      "s3_correct": false,
+      "s4_correct": true,
+      "skipped": false,
+      "skip_reason": "",
+      "visual_path": "visual_frames/09_natch_e5e4c0b7_f214.jpg",
+      "note": "same-team error: pl=1 closest, gt=2"
+    },
+    {
+      "idx": 10,
+      "label": "stratified-lala-attack",
+      "video": "lala",
+      "rally_short": "793625cd",
+      "pl_frame": 335,
+      "action_type": "ATTACK",
+      "gt_tid": 3,
+      "pl_tid": 4,
+      "s0_pick": 4,
+      "s1_pick": 4,
+      "s2_pick": 4,
+      "s2_endpoint": [
+        0.40110124008384873,
+        0.3185382153654919
+      ],
+      "s3_pick": 4,
+      "s3_integrals": {
+        "4": 0.2906851367174693,
+        "3": 0.33355489610425076
+      },
+      "s4_pick": 4,
+      "prev_toucher_tid": 3,
+      "prev_action_type": "SET",
+      "same_team_cands": [
+        [
+          4,
+          0.09116244671556112
+        ],
+        [
+          3,
+          0.2525700754209652
+        ]
+      ],
+      "n_pre_ball": 10,
+      "s0_correct": false,
+      "s1_correct": false,
+      "s2_correct": false,
+      "s3_correct": false,
+      "s4_correct": false,
+      "skipped": false,
+      "skip_reason": "",
+      "visual_path": "visual_frames/10_lala_793625cd_f335.jpg",
+      "note": "same-team error: pl=4 closest, gt=3 (tight: 0.091 vs 0.092)"
+    }
+  ]
+}</script>
+<script>
+const DATA = JSON.parse(document.getElementById('data').textContent);
+function agg() {
+  const a = DATA.agg;
+  return `
+    <h2 style="margin:0 0 10px">Aggregate</h2>
+    <table>
+      <tr><th>Metric</th><th>Value</th></tr>
+      <tr><td>Cases</td><td>${a.n_total}</td></tr>
+      <tr><td>Evaluable</td><td>${a.n_evaluable}</td></tr>
+      <tr><td>S0 baseline</td><td>${a.S0_correct} / ${a.n_evaluable}</td></tr>
+      <tr><td>S1 ball-pos</td><td>${a.S1_correct} / ${a.n_evaluable}</td></tr>
+      <tr><td>S2 traj-end</td><td>${a.S2_correct} / ${a.n_evaluable}</td></tr>
+      <tr><td>S3 traj-int</td><td>${a.S3_correct} / ${a.n_evaluable}</td></tr>
+      <tr><td>S4 anti-self</td><td>${a.S4_correct} / ${a.n_evaluable}</td></tr>
+      <tr><td>Best traj</td><td>${a.best_trajectory}</td></tr>
+      <tr><td>Lift over S1</td><td>${a.lift_over_S1}</td></tr>
+      <tr><td>Verdict</td><td><b>${a.verdict}</b></td></tr>
+    </table>`;
+}
+function fmt(pick, correct) {
+  if (pick === null || pick === undefined) return '—';
+  const cls = correct === true ? 'ok' : (correct === false ? 'bad' : '');
+  const m = correct === true ? '✓' : (correct === false ? '✗' : '?');
+  return `<span class="${cls}">p${pick}${m}</span>`;
+}
+function caseHtml(r) {
+  if (r.skipped) {
+    return `<div class="case"><h3>#${r.idx} ${r.label} — ${r.video}/${r.rally_short} ${r.action_type} f=${r.pl_frame}</h3><div class="skip">SKIPPED: ${r.skip_reason}</div></div>`;
+  }
+  const img = r.visual_path ? `<img src="${r.visual_path}" onclick="zoom(this.src)">` : '';
+  return `
+    <div class="case">
+      <h3>#${r.idx} ${r.label} — ${r.video}/${r.rally_short} ${r.action_type} f=${r.pl_frame}</h3>
+      <p><b>GT:</b> p${r.gt_tid} | S0=${fmt(r.s0_pick, r.s0_correct)} | S1=${fmt(r.s1_pick, r.s1_correct)} | S2=${fmt(r.s2_pick, r.s2_correct)} | S3=${fmt(r.s3_pick, r.s3_correct)} | S4=${fmt(r.s4_pick, r.s4_correct)}</p>
+      <p><i>${r.note}</i></p>
+      ${img}
+      <pre>same_team_cands: ${JSON.stringify(r.same_team_cands)}
+s2_endpoint: ${JSON.stringify(r.s2_endpoint)}
+s3_integrals: ${JSON.stringify(r.s3_integrals)}
+prev_toucher: p${r.prev_toucher_tid} (${r.prev_action_type})  n_pre_ball: ${r.n_pre_ball}</pre>
+    </div>`;
+}
+document.getElementById('agg').innerHTML = agg();
+document.getElementById('cases').innerHTML = DATA.cases.map(caseHtml).join('');
+function zoom(s){const o=document.getElementById('zoom-overlay');document.getElementById('zoom-img').src=s;o.classList.add('open');}
+document.getElementById('zoom-overlay').addEventListener('click', () => document.getElementById('zoom-overlay').classList.remove('open'));
+</script></body></html>

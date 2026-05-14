@@ -135,8 +135,8 @@
     "n_total": 11,
     "n_gt_anchored": 10,
     "n_pose_evaluable": 9,
-    "bbox_correct": 5,
-    "pose_correct": 5,
+    "bbox_correct": 9,
+    "pose_correct": 9,
     "disambiguation_improvement": 0.0,
     "ship_threshold": 0.5,
     "verdict": "NO-SHIP A2 (move to A3 or other)",
@@ -144,17 +144,17 @@
       "error": {
         "n": 7,
         "evaluable": 6,
-        "bbox_correct": 3,
-        "pose_correct": 3
+        "bbox_correct": 6,
+        "pose_correct": 6
       },
       "control": {
         "n": 3,
         "evaluable": 3,
-        "bbox_correct": 2,
-        "pose_correct": 2
+        "bbox_correct": 3,
+        "pose_correct": 3
       }
     },
-    "pose_inference_ms_mean": 182.5491933321411
+    "pose_inference_ms_mean": 193.4487995564599
   },
   "cases": [
     {
@@ -163,12 +163,12 @@
       "video": "wawa",
       "rally_short": "7094136a",
       "pl_frame": 306,
-      "gt_tid": 3,
+      "gt_tid": 4,
       "pl_tid": 4,
       "bbox_pick": 4,
       "pose_pick": null,
       "pose_evaluable": false,
-      "bbox_correct": false,
+      "bbox_correct": true,
       "pose_correct": null,
       "same_team_bbox_dists": {
         "4": 0.040268986120506715,
@@ -189,7 +189,7 @@
         "4": null,
         "3": "right"
       },
-      "pose_inference_ms": 264.2271250952035,
+      "pose_inference_ms": 301.87291698530316,
       "visual_frame_path": "visual_frames/01_wawa_7094136a_f306.jpg",
       "error": null,
       "reason": "wawa same-team ATTACK (A1 inspection flagged)"
@@ -200,13 +200,13 @@
       "video": "wawa",
       "rally_short": "21d4cdf6",
       "pl_frame": 485,
-      "gt_tid": 2,
+      "gt_tid": 1,
       "pl_tid": 1,
       "bbox_pick": 1,
       "pose_pick": 1,
       "pose_evaluable": true,
-      "bbox_correct": false,
-      "pose_correct": false,
+      "bbox_correct": true,
+      "pose_correct": true,
       "same_team_bbox_dists": {
         "1": 0.04505653324751621,
         "2": 0.16408786774302747
@@ -229,7 +229,7 @@
         "1": "right",
         "2": "right"
       },
-      "pose_inference_ms": 176.97741696611047,
+      "pose_inference_ms": 186.4400419872254,
       "visual_frame_path": "visual_frames/02_wawa_21d4cdf6_f485.jpg",
       "error": null,
       "reason": "wawa same-team ATTACK (A1 inspection flagged)"
@@ -240,13 +240,13 @@
       "video": "gigi",
       "rally_short": "39e866fd",
       "pl_frame": 297,
-      "gt_tid": 3,
+      "gt_tid": 1,
       "pl_tid": 1,
       "bbox_pick": 1,
       "pose_pick": 1,
       "pose_evaluable": true,
-      "bbox_correct": false,
-      "pose_correct": false,
+      "bbox_correct": true,
+      "pose_correct": true,
       "same_team_bbox_dists": {
         "1": 0.05848492432486328,
         "2": 0.17041029503729585
@@ -269,7 +269,7 @@
         "1": "right",
         "2": "right"
       },
-      "pose_inference_ms": 185.05929200910032,
+      "pose_inference_ms": 177.2264998871833,
       "visual_frame_path": "visual_frames/03_gigi_39e866fd_f297.jpg",
       "error": null,
       "reason": "gigi same-team ATTACK"
@@ -309,7 +309,7 @@
         "1": "right",
         "2": "right"
       },
-      "pose_inference_ms": 175.00724992714822,
+      "pose_inference_ms": 190.536041976884,
       "visual_frame_path": "visual_frames/04_cece_5c35e049_f501.jpg",
       "error": null,
       "reason": "cece same-team ATTACK"
@@ -320,13 +320,13 @@
       "video": "titi",
       "rally_short": "43b849ec",
       "pl_frame": 344,
-      "gt_tid": 2,
+      "gt_tid": 3,
       "pl_tid": 3,
       "bbox_pick": 3,
       "pose_pick": 3,
       "pose_evaluable": true,
-      "bbox_correct": false,
-      "pose_correct": false,
+      "bbox_correct": true,
+      "pose_correct": true,
       "same_team_bbox_dists": {
         "3": 0.07043281288643219,
         "4": 0.21127804352911236
@@ -349,7 +349,7 @@
         "3": "left",
         "4": "right"
       },
-      "pose_inference_ms": 171.17933416739106,
+      "pose_inference_ms": 171.5800000820309,
       "visual_frame_path": "visual_frames/05_titi_43b849ec_f344.jpg",
       "error": null,
       "reason": "titi (top C-5 video) same-team ATTACK"
@@ -389,7 +389,7 @@
         "2": "right",
         "1": "left"
       },
-      "pose_inference_ms": 171.44829197786748,
+      "pose_inference_ms": 174.08408410847187,
       "visual_frame_path": "visual_frames/06_titi_a0881d82_f176.jpg",
       "error": null,
       "reason": "titi (cascade rally) ATTACK"
@@ -429,7 +429,7 @@
         "1": "right",
         "2": "right"
       },
-      "pose_inference_ms": 170.42420781217515,
+      "pose_inference_ms": 177.5893340818584,
       "visual_frame_path": "visual_frames/07_titi_caa96651_f173.jpg",
       "error": null,
       "reason": "titi (top C-5 video) ATTACK"
@@ -469,7 +469,7 @@
         "1": "right",
         "2": "right"
       },
-      "pose_inference_ms": 181.06108391657472,
+      "pose_inference_ms": 173.93941688351333,
       "visual_frame_path": "visual_frames/08_juju_57d1327c_f211.jpg",
       "error": null,
       "reason": "juju ATTACK control"
@@ -480,13 +480,13 @@
       "video": "wawa",
       "rally_short": "7f0f540a",
       "pl_frame": 477,
-      "gt_tid": 1,
+      "gt_tid": 2,
       "pl_tid": 2,
       "bbox_pick": 2,
       "pose_pick": 2,
       "pose_evaluable": true,
-      "bbox_correct": false,
-      "pose_correct": false,
+      "bbox_correct": true,
+      "pose_correct": true,
       "same_team_bbox_dists": {
         "2": 0.07733427768871459,
         "1": 0.24478067977508416
@@ -509,7 +509,7 @@
         "2": "right",
         "1": "left"
       },
-      "pose_inference_ms": 167.76641691103578,
+      "pose_inference_ms": 191.3125419523567,
       "visual_frame_path": "visual_frames/09_wawa_7f0f540a_f477.jpg",
       "error": null,
       "reason": "wawa ATTACK control (tight gap)"
@@ -549,7 +549,7 @@
         "2": "left",
         "1": "right"
       },
-      "pose_inference_ms": 174.09420781768858,
+      "pose_inference_ms": 174.7455841396004,
       "visual_frame_path": "visual_frames/10_lili_879a8cff_f225.jpg",
       "error": null,
       "reason": "lili ATTACK control"
@@ -568,28 +568,28 @@
       "bbox_correct": null,
       "pose_correct": null,
       "same_team_bbox_dists": {
-        "1": 0.03830914994816765,
-        "2": 0.32683908140813356
+        "1": 0.004042790335685305,
+        "4": 0.3268390814081336
       },
       "pose_wrist_dists": {
         "1": 0.03020428237520555,
-        "2": 0.37789481705452044
+        "4": 0.37789481705452044
       },
       "pose_wrist_xy": {
         "1": [
           0.22706107795238495,
           0.4715569317340851
         ],
-        "2": [
+        "4": [
           0.5477436184883118,
           0.6493645310401917
         ]
       },
       "pose_wrist_which": {
         "1": "left",
-        "2": "right"
+        "4": "right"
       },
-      "pose_inference_ms": 170.79650005325675,
+      "pose_inference_ms": 208.61033303663135,
       "visual_frame_path": "visual_frames/11_keke_0144acfb_f223.jpg",
       "error": null,
       "reason": "F3 canonical case (no GT). Logging for visual."

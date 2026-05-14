@@ -1,0 +1,532 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>S4 dual-frame review — 2026-05-14</title>
+<style>
+  :root { --bg:#0f0f10; --card:#1a1a1c; --border:#2a2a2e; --text:#eaeaea; --muted:#aaa; }
+  body { background:var(--bg); color:var(--text); font-family:-apple-system,sans-serif; margin:0; padding:24px; }
+  h1 { margin:0 0 6px 0; }
+  .summary { color:var(--muted); margin-bottom:14px; font-size:13px; }
+  .legend { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:10px 18px; margin-bottom:18px; font-size:13px; }
+  .legend span.swatch { display:inline-block; width:12px; height:12px; vertical-align:middle; margin-right:4px; border-radius:2px; }
+  .toolbar { position:sticky; top:0; background:var(--bg); padding:8px 0 14px 0; z-index:5; border-bottom:1px solid var(--border); }
+  .toolbar button { background:#222; color:#eaeaea; border:1px solid #333; border-radius:6px; padding:6px 12px; margin-right:6px; cursor:pointer; }
+  .toolbar button:hover { background:#2a2a2e; }
+  .case { background:var(--card); border:1px solid var(--border); border-radius:8px; padding:14px 18px; margin:14px 0; display:grid; grid-template-columns: 1fr 280px; gap:14px; }
+  .case h3 { margin:0 0 8px 0; font-size:15px; }
+  .case img { max-width:100%; max-height:80vh; display:block; margin:6px 0; cursor:zoom-in; background:#000; border-radius:4px; }
+  .meta { color:var(--muted); font-size:12px; line-height:1.5; }
+  .meta b { color:#ddd; }
+  .bucket { display:inline-block; padding:2px 8px; border-radius:4px; font-size:11px; font-weight:600; background:#222; color:#ddd; margin-left:6px; }
+  .sidebar { display:flex; flex-direction:column; gap:10px; }
+  .verdict-buttons { display:flex; flex-direction:column; gap:6px; }
+  .verdict-buttons button { background:#222; color:#eaeaea; border:1px solid #333; border-radius:6px; padding:8px 10px; cursor:pointer; text-align:left; font-size:13px; }
+  .verdict-buttons button:hover { background:#2a2a2e; }
+  .verdict-buttons button.selected { box-shadow: inset 0 0 0 2px #60aaff; background:#1f3050; }
+  .verdict-readout { margin-top:6px; color:#9cc; font-size:12px; min-height:18px; }
+  #zoom-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.94); z-index:99; align-items:center; justify-content:center; cursor:zoom-out; }
+  #zoom-overlay.open { display:flex; }
+  #zoom-overlay img { max-width:97vw; max-height:97vh; }
+  #paste-overlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.85); z-index:100; align-items:center; justify-content:center; }
+  #paste-overlay.open { display:flex; }
+  #paste-overlay .panel { background:#1a1a1c; border:1px solid #333; border-radius:8px; padding:18px; max-width:700px; width:90%; }
+  #paste-overlay textarea { width:100%; height:240px; background:#0f0f10; color:#eaeaea; border:1px solid #333; border-radius:4px; padding:10px; font-family:ui-monospace,monospace; font-size:12px; }
+  #paste-overlay .panel-actions { margin-top:10px; display:flex; gap:8px; }
+</style></head><body>
+<h1>S4 dual-frame review — failure-mode candidates</h1>
+<div class="summary">17 cases where pipeline shows a same-player consecutive pair without a block between them. Strict volleyball rule says one side must be wrong.</div>
+<div class="legend">
+  <span class="swatch" style="background:rgb(50,120,200)"></span>Team A
+  &nbsp;&nbsp;<span class="swatch" style="background:rgb(200,80,80)"></span>Team B
+  &nbsp;&nbsp;<span class="swatch" style="background:rgb(60,200,255)"></span>Pipeline pick (cyan)
+  &nbsp;&nbsp;<span class="swatch" style="background:rgb(60,220,60)"></span>S4 proposed (green)
+  &nbsp;&nbsp;<span class="swatch" style="background:rgb(255,60,60)"></span>Prev attributed player / prev-toucher (red)
+  &nbsp;&nbsp;<span class="swatch" style="background:rgb(255,255,0)"></span>Ball (yellow)
+</div>
+<div class="toolbar">
+  <button onclick="copyVerdicts()">Copy verdicts to clipboard</button>
+  <button onclick="showPaste()">Show paste-back string</button>
+  <button onclick="resetVerdicts()">Reset all</button>
+  <span id="progress" style="color:#9cc; margin-left:10px; font-size:13px;"></span>
+</div>
+<div id="cases"></div>
+<div id="zoom-overlay"><img id="zoom-img"></div>
+<div id="paste-overlay"><div class="panel">
+  <div style="font-size:13px; color:#ccc; margin-bottom:8px;">Paste-back string:</div>
+  <textarea id="paste-text" readonly></textarea>
+  <div class="panel-actions">
+    <button onclick="copyPaste()">Copy</button>
+    <button onclick="hidePaste()">Close</button>
+  </div>
+</div></div>
+<script id="data" type="application/json">[
+  {
+    "idx": 1,
+    "bucket": "probe_b_cascade_anchor",
+    "video_name": "titi",
+    "rally_short": "a0881d82",
+    "rally_id": "a0881d82-bd3e-4664-bd11-4e672ca29aa6",
+    "rally_order": 20,
+    "fps": 30.0,
+    "prev_frame": 76,
+    "prev_action": "RECEIVE",
+    "prev_pid": 2,
+    "prev_team": "B",
+    "curr_frame": 128,
+    "curr_action": "SET",
+    "pipeline_pid": 2,
+    "pipeline_team": "B",
+    "s4_pid": 1,
+    "s4_team": "B",
+    "prev_source_time": "10:30.772",
+    "curr_source_time": "10:32.506",
+    "img": "s4_dual_frames/01_titi_a0881d82_prev_f76_curr_f128.jpg"
+  },
+  {
+    "idx": 2,
+    "bucket": "probe_b_cascade_anchor",
+    "video_name": "titi",
+    "rally_short": "a0881d82",
+    "rally_id": "a0881d82-bd3e-4664-bd11-4e672ca29aa6",
+    "rally_order": 20,
+    "fps": 30.0,
+    "prev_frame": 176,
+    "prev_action": "ATTACK",
+    "prev_pid": 2,
+    "prev_team": "B",
+    "curr_frame": 225,
+    "curr_action": "DIG",
+    "pipeline_pid": 2,
+    "pipeline_team": "B",
+    "s4_pid": 1,
+    "s4_team": "B",
+    "prev_source_time": "10:34.106",
+    "curr_source_time": "10:35.739",
+    "img": "s4_dual_frames/02_titi_a0881d82_prev_f176_curr_f225.jpg"
+  },
+  {
+    "idx": 3,
+    "bucket": "attack_after_attack",
+    "video_name": "yaya",
+    "rally_short": "1f5ff17d",
+    "rally_id": "1f5ff17d-014f-4093-b6e6-c85360fb1638",
+    "rally_order": 5,
+    "fps": 30.0,
+    "prev_frame": 251,
+    "prev_action": "ATTACK",
+    "prev_pid": 1,
+    "prev_team": "B",
+    "curr_frame": 304,
+    "curr_action": "ATTACK",
+    "pipeline_pid": 1,
+    "pipeline_team": "B",
+    "s4_pid": 2,
+    "s4_team": "B",
+    "prev_source_time": "3:46.567",
+    "curr_source_time": "3:48.333",
+    "img": "s4_dual_frames/03_yaya_1f5ff17d_prev_f251_curr_f304.jpg"
+  },
+  {
+    "idx": 4,
+    "bucket": "attack_after_attack",
+    "video_name": "matttch",
+    "rally_short": "8d3205ed",
+    "rally_id": "8d3205ed-b0dc-4c0c-bc24-fda34554e45f",
+    "rally_order": 7,
+    "fps": 29.97,
+    "prev_frame": 220,
+    "prev_action": "ATTACK",
+    "prev_pid": 3,
+    "prev_team": "B",
+    "curr_frame": 296,
+    "curr_action": "ATTACK",
+    "pipeline_pid": 3,
+    "pipeline_team": "B",
+    "s4_pid": 4,
+    "s4_team": "B",
+    "prev_source_time": "3:37.513",
+    "curr_source_time": "3:40.049",
+    "img": "s4_dual_frames/04_matttch_8d3205ed_prev_f220_curr_f296.jpg"
+  },
+  {
+    "idx": 5,
+    "bucket": "attack_after_attack",
+    "video_name": "lulu",
+    "rally_short": "55565c2b",
+    "rally_id": "55565c2b-49b2-4817-b046-7bef02569b0e",
+    "rally_order": 8,
+    "fps": 59.94005994005994,
+    "prev_frame": 439,
+    "prev_action": "ATTACK",
+    "prev_pid": 1,
+    "prev_team": "A",
+    "curr_frame": 558,
+    "curr_action": "ATTACK",
+    "pipeline_pid": 1,
+    "pipeline_team": "A",
+    "s4_pid": 2,
+    "s4_team": "A",
+    "prev_source_time": "3:44.557",
+    "curr_source_time": "3:46.542",
+    "img": "s4_dual_frames/05_lulu_55565c2b_prev_f439_curr_f558.jpg"
+  },
+  {
+    "idx": 6,
+    "bucket": "attack_after_attack",
+    "video_name": "yoyo",
+    "rally_short": "21a9b203",
+    "rally_id": "21a9b203-dc92-48dc-8f19-d94835e0e226",
+    "rally_order": 2,
+    "fps": 60.0,
+    "prev_frame": 506,
+    "prev_action": "ATTACK",
+    "prev_pid": 1,
+    "prev_team": "A",
+    "curr_frame": 528,
+    "curr_action": "ATTACK",
+    "pipeline_pid": 1,
+    "pipeline_team": "A",
+    "s4_pid": 2,
+    "s4_team": "A",
+    "prev_source_time": "1:36.867",
+    "curr_source_time": "1:37.234",
+    "img": "s4_dual_frames/06_yoyo_21a9b203_prev_f506_curr_f528.jpg"
+  },
+  {
+    "idx": 7,
+    "bucket": "attack_after_attack",
+    "video_name": "meme",
+    "rally_short": "49582c29",
+    "rally_id": "49582c29-f09c-4b39-8435-bd19451812c8",
+    "rally_order": 2,
+    "fps": 30.0,
+    "prev_frame": 265,
+    "prev_action": "ATTACK",
+    "prev_pid": 1,
+    "prev_team": "A",
+    "curr_frame": 314,
+    "curr_action": "ATTACK",
+    "pipeline_pid": 1,
+    "pipeline_team": "A",
+    "s4_pid": 2,
+    "s4_team": "A",
+    "prev_source_time": "0:52.633",
+    "curr_source_time": "0:54.267",
+    "img": "s4_dual_frames/07_meme_49582c29_prev_f265_curr_f314.jpg"
+  },
+  {
+    "idx": 8,
+    "bucket": "attack_after_attack",
+    "video_name": "jiji",
+    "rally_short": "0793ebd2",
+    "rally_id": "0793ebd2-5301-4317-a7ba-3fb3bf9fe368",
+    "rally_order": 9,
+    "fps": 30.0,
+    "prev_frame": 304,
+    "prev_action": "ATTACK",
+    "prev_pid": 4,
+    "prev_team": "A",
+    "curr_frame": 380,
+    "curr_action": "ATTACK",
+    "pipeline_pid": 4,
+    "pipeline_team": "A",
+    "s4_pid": 3,
+    "s4_team": "A",
+    "prev_source_time": "5:35.133",
+    "curr_source_time": "5:37.667",
+    "img": "s4_dual_frames/08_jiji_0793ebd2_prev_f304_curr_f380.jpg"
+  },
+  {
+    "idx": 9,
+    "bucket": "attack_after_attack",
+    "video_name": "meme",
+    "rally_short": "65c54107",
+    "rally_id": "65c54107-6c0f-4888-9600-6ec06939c8b5",
+    "rally_order": 3,
+    "fps": 30.0,
+    "prev_frame": 163,
+    "prev_action": "ATTACK",
+    "prev_pid": 1,
+    "prev_team": "A",
+    "curr_frame": 220,
+    "curr_action": "ATTACK",
+    "pipeline_pid": 1,
+    "pipeline_team": "A",
+    "s4_pid": 2,
+    "s4_team": "A",
+    "prev_source_time": "1:11.633",
+    "curr_source_time": "1:13.533",
+    "img": "s4_dual_frames/09_meme_65c54107_prev_f163_curr_f220.jpg"
+  },
+  {
+    "idx": 10,
+    "bucket": "attack_after_set",
+    "video_name": "titi",
+    "rally_short": "594a832a",
+    "rally_id": "594a832a-ab27-480e-976a-268c8f101559",
+    "rally_order": 9,
+    "fps": 30.0,
+    "prev_frame": 144,
+    "prev_action": "SET",
+    "prev_pid": 1,
+    "prev_team": "B",
+    "curr_frame": 193,
+    "curr_action": "ATTACK",
+    "pipeline_pid": 1,
+    "pipeline_team": "B",
+    "s4_pid": 2,
+    "s4_team": "B",
+    "prev_source_time": "4:50.236",
+    "curr_source_time": "4:51.869",
+    "img": "s4_dual_frames/10_titi_594a832a_prev_f144_curr_f193.jpg"
+  },
+  {
+    "idx": 11,
+    "bucket": "attack_after_set",
+    "video_name": "lili",
+    "rally_short": "ded9504c",
+    "rally_id": "ded9504c-ce40-4808-8d12-8bcc3b974b62",
+    "rally_order": 15,
+    "fps": 29.97002997002997,
+    "prev_frame": 181,
+    "prev_action": "SET",
+    "prev_pid": 3,
+    "prev_team": "A",
+    "curr_frame": 230,
+    "curr_action": "ATTACK",
+    "pipeline_pid": 3,
+    "pipeline_team": "A",
+    "s4_pid": 4,
+    "s4_team": "A",
+    "prev_source_time": "8:59.204",
+    "curr_source_time": "9:00.839",
+    "img": "s4_dual_frames/11_lili_ded9504c_prev_f181_curr_f230.jpg"
+  },
+  {
+    "idx": 12,
+    "bucket": "attack_after_set",
+    "video_name": "match",
+    "rally_short": "920d4a33",
+    "rally_id": "920d4a33-ae9a-4299-ac19-8e773ca76e61",
+    "rally_order": 3,
+    "fps": 29.97,
+    "prev_frame": 111,
+    "prev_action": "SET",
+    "prev_pid": 2,
+    "prev_team": "A",
+    "curr_frame": 159,
+    "curr_action": "ATTACK",
+    "pipeline_pid": 2,
+    "pipeline_team": "A",
+    "s4_pid": 1,
+    "s4_team": "A",
+    "prev_source_time": "1:54.217",
+    "curr_source_time": "1:55.818",
+    "img": "s4_dual_frames/12_match_920d4a33_prev_f111_curr_f159.jpg"
+  },
+  {
+    "idx": 13,
+    "bucket": "attack_after_set",
+    "video_name": "toto",
+    "rally_short": "a1a5baf7",
+    "rally_id": "a1a5baf7-e249-476e-9ab7-cf60fac04111",
+    "rally_order": 19,
+    "fps": 29.91666666666667,
+    "prev_frame": 627,
+    "prev_action": "SET",
+    "prev_pid": 1,
+    "prev_team": "A",
+    "curr_frame": 679,
+    "curr_action": "ATTACK",
+    "pipeline_pid": 1,
+    "pipeline_team": "B",
+    "s4_pid": 2,
+    "s4_team": "B",
+    "prev_source_time": "11:00.662",
+    "curr_source_time": "11:02.400",
+    "img": "s4_dual_frames/13_toto_a1a5baf7_prev_f627_curr_f679.jpg"
+  },
+  {
+    "idx": 14,
+    "bucket": "attack_after_set",
+    "video_name": "vivi",
+    "rally_short": "eeecf5a0",
+    "rally_id": "eeecf5a0-def4-43dd-8fc9-72e502165c2d",
+    "rally_order": 6,
+    "fps": 59.28943089430894,
+    "prev_frame": 461,
+    "prev_action": "SET",
+    "prev_pid": 1,
+    "prev_team": "B",
+    "curr_frame": 533,
+    "curr_action": "ATTACK",
+    "pipeline_pid": 1,
+    "pipeline_team": "B",
+    "s4_pid": 2,
+    "s4_team": "B",
+    "prev_source_time": "3:00.841",
+    "curr_source_time": "3:02.056",
+    "img": "s4_dual_frames/14_vivi_eeecf5a0_prev_f461_curr_f533.jpg"
+  },
+  {
+    "idx": 15,
+    "bucket": "attack_after_set",
+    "video_name": "tata",
+    "rally_short": "e50f127e",
+    "rally_id": "e50f127e-3952-4ba2-9047-39fff14a2e25",
+    "rally_order": 4,
+    "fps": 30.0,
+    "prev_frame": 196,
+    "prev_action": "SET",
+    "prev_pid": 2,
+    "prev_team": "A",
+    "curr_frame": 233,
+    "curr_action": "ATTACK",
+    "pipeline_pid": 2,
+    "pipeline_team": "A",
+    "s4_pid": 1,
+    "s4_team": "A",
+    "prev_source_time": "3:35.933",
+    "curr_source_time": "3:37.167",
+    "img": "s4_dual_frames/15_tata_e50f127e_prev_f196_curr_f233.jpg"
+  },
+  {
+    "idx": 16,
+    "bucket": "attack_after_set",
+    "video_name": "matchop",
+    "rally_short": "f62bc819",
+    "rally_id": "f62bc819-d7c4-4287-b617-edac3f5194bc",
+    "rally_order": 4,
+    "fps": 29.97,
+    "prev_frame": 134,
+    "prev_action": "SET",
+    "prev_pid": 4,
+    "prev_team": "B",
+    "curr_frame": 177,
+    "curr_action": "ATTACK",
+    "pipeline_pid": 4,
+    "pipeline_team": "B",
+    "s4_pid": 3,
+    "s4_team": "B",
+    "prev_source_time": "2:09.563",
+    "curr_source_time": "2:10.998",
+    "img": "s4_dual_frames/16_matchop_f62bc819_prev_f134_curr_f177.jpg"
+  },
+  {
+    "idx": 17,
+    "bucket": "same_team_other",
+    "video_name": "mech",
+    "rally_short": "f8e251d8",
+    "rally_id": "f8e251d8-c7ee-40fd-946c-502067343936",
+    "rally_order": 7,
+    "fps": 29.97,
+    "prev_frame": 70,
+    "prev_action": "RECEIVE",
+    "prev_pid": 1,
+    "prev_team": "B",
+    "curr_frame": 127,
+    "curr_action": "ATTACK",
+    "pipeline_pid": 1,
+    "pipeline_team": "B",
+    "s4_pid": 2,
+    "s4_team": "B",
+    "prev_source_time": "3:31.711",
+    "curr_source_time": "3:33.613",
+    "img": "s4_dual_frames/17_mech_f8e251d8_prev_f70_curr_f127.jpg"
+  }
+]</script>
+<script>
+const DATA = JSON.parse(document.getElementById('data').textContent);
+const VERDICT_OPTIONS = [
+  { code: "prev_wrong",   label: "PREV wrong (prev's attribution is bad)",          icon: "[P]" },
+  { code: "curr_wrong",   label: "CURR wrong (S4 is right)",                         icon: "[C]" },
+  { code: "type_wrong",   label: "TYPE wrong (one is actually BLOCK)",               icon: "[T]" },
+  { code: "false_pos",    label: "FALSE POSITIVE (one contact isn't real)",          icon: "[F]" },
+  { code: "other",        label: "something else",                                   icon: "[?]" },
+];
+const verdicts = {};
+
+function caseHtml(r) {
+  const buttons = VERDICT_OPTIONS.map(o =>
+    `<button data-idx="${r.idx}" data-code="${o.code}" onclick="setVerdict(${r.idx}, '${o.code}', this)">${o.icon} ${o.label}</button>`
+  ).join('');
+  return `
+    <div class="case" id="case-${r.idx}">
+      <div class="left">
+        <h3>#${r.idx} ${r.video_name}/${r.rally_short} <span class="bucket">${r.bucket}</span></h3>
+        <div class="meta">
+          <b>prev:</b> ${r.prev_action}@f${r.prev_frame} (${r.prev_source_time}) p${r.prev_pid}(${r.prev_team})<br>
+          <b>curr:</b> ${r.curr_action}@f${r.curr_frame} (${r.curr_source_time}) — PL=p${r.pipeline_pid}(${r.pipeline_team}) vs S4=p${r.s4_pid}(${r.s4_team})<br>
+          <b>rally:</b> #${r.rally_order} <code style="font-size:11px;">${r.rally_id}</code>
+        </div>
+        <img src="${r.img}" onclick="zoom(this.src)">
+      </div>
+      <div class="sidebar">
+        <div style="font-size:13px; color:#ccc;">Verdict</div>
+        <div class="verdict-buttons" data-idx="${r.idx}">${buttons}</div>
+        <div class="verdict-readout" id="vr-${r.idx}"></div>
+      </div>
+    </div>`;
+}
+
+function setVerdict(idx, code, btn) {
+  verdicts[idx] = code;
+  document.querySelectorAll(`.verdict-buttons[data-idx="${idx}"] button`).forEach(b => b.classList.remove('selected'));
+  btn.classList.add('selected');
+  const r = DATA.find(x => x.idx === idx);
+  document.getElementById(`vr-${idx}`).textContent = `${code} — ${r.video_name}/${r.rally_short} f${r.curr_frame}`;
+  updateProgress();
+  localStorage.setItem('s4_dual_verdicts', JSON.stringify(verdicts));
+}
+
+function updateProgress() {
+  const n = Object.keys(verdicts).length;
+  document.getElementById('progress').textContent = `${n} / ${DATA.length} labeled`;
+}
+
+function buildPaste() {
+  const rows = DATA.map(r => {
+    const v = verdicts[r.idx] || "";
+    return `${r.idx}\t${r.bucket}\t${r.video_name}/${r.rally_short}\tf${r.prev_frame}->${r.curr_frame}\t${r.prev_action}->${r.curr_action}\tPL=p${r.pipeline_pid} S4=p${r.s4_pid} prev=p${r.prev_pid}\t${v}`;
+  });
+  return ["idx\tbucket\tvideo/rally\tframes\taction_pair\tpids\tverdict", ...rows].join("\n");
+}
+
+function copyVerdicts() {
+  const text = buildPaste();
+  navigator.clipboard.writeText(text).then(
+    () => alert("Copied " + Object.keys(verdicts).length + " verdicts."),
+    () => { showPaste(); }
+  );
+}
+function showPaste() {
+  document.getElementById('paste-text').value = buildPaste();
+  document.getElementById('paste-overlay').classList.add('open');
+}
+function hidePaste() { document.getElementById('paste-overlay').classList.remove('open'); }
+function copyPaste() {
+  const ta = document.getElementById('paste-text');
+  ta.select();
+  document.execCommand('copy');
+  alert("Copied.");
+}
+function resetVerdicts() {
+  if (!confirm("Clear all verdicts?")) return;
+  for (const k of Object.keys(verdicts)) delete verdicts[k];
+  localStorage.removeItem('s4_dual_verdicts');
+  document.querySelectorAll('.verdict-buttons button').forEach(b => b.classList.remove('selected'));
+  document.querySelectorAll('.verdict-readout').forEach(e => e.textContent = '');
+  updateProgress();
+}
+function zoom(s){const o=document.getElementById('zoom-overlay');document.getElementById('zoom-img').src=s;o.classList.add('open');}
+document.getElementById('zoom-overlay').addEventListener('click', () => document.getElementById('zoom-overlay').classList.remove('open'));
+
+document.getElementById('cases').innerHTML = DATA.map(caseHtml).join('');
+// Restore from localStorage.
+try {
+  const saved = JSON.parse(localStorage.getItem('s4_dual_verdicts') || "{}");
+  for (const [k, v] of Object.entries(saved)) {
+    const btn = document.querySelector(`.verdict-buttons[data-idx="${k}"] button[data-code="${v}"]`);
+    if (btn) { btn.click(); }
+  }
+} catch (e) {}
+updateProgress();
+</script></body></html>
