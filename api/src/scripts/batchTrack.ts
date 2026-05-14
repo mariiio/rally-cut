@@ -27,7 +27,6 @@ import {
   TEMP_DIR,
   type CalibrationCorner,
 } from '../services/playerTrackingService.js';
-import { runMatchAnalysis } from '../services/matchAnalysisService.js';
 
 const prisma = new PrismaClient();
 
@@ -187,14 +186,11 @@ async function main() {
 
     console.log(`[BATCH_WORKER] Job ${jobId} done: ${completedCount} completed, ${failedCount} failed`);
 
-    // Auto-trigger match analysis if any rallies succeeded
-    if (completedCount > 0) {
-      try {
-        await runMatchAnalysis(video.id);
-      } catch (error) {
-        console.error(`[BATCH_WORKER] Match analysis failed:`, error);
-      }
-    }
+    // Match analysis is triggered client-side via the analysisStore's 5-s
+    // debounce + catch-up flow once pollTracking observes batch completion.
+    // This mirrors the Modal path (`tracking-batch-complete` webhook also
+    // no longer auto-triggers). Auto-triggering here would bypass catch-up
+    // for rallies created mid-batch and race with the client's SSE call.
   } catch (error) {
     console.error(`[BATCH_WORKER] Job ${jobId} failed:`, error);
     await failJob(jobId, error instanceof Error ? error.message : String(error));
