@@ -3605,6 +3605,7 @@ def _apply_dynamic_scorer_attribution(
     actions: list[ClassifiedAction],
     contacts: list[Contact],
     player_positions: list[PlayerPosition],
+    ball_positions: list[BallPosition] | None = None,
 ) -> int:
     """Re-attribute actions using the per-action-type dynamic-feature scorer.
 
@@ -3644,8 +3645,14 @@ def _apply_dynamic_scorer_attribution(
             y=p.y,
             width=p.width,
             height=p.height,
+            keypoints=p.keypoints,
         ))
     contact_by_frame = {c.frame: c for c in contacts}
+    # Build ball-by-frame lookup for post-contact alignment feature
+    ball_by_frame: dict[int, BallPosition] = {}
+    if ball_positions:
+        for b in ball_positions:
+            ball_by_frame[b.frame_number] = b
     n_swapped = 0
     for i, action in enumerate(actions):
         if action.confidence < 0.3:
@@ -3657,6 +3664,16 @@ def _apply_dynamic_scorer_attribution(
         contact = contact_by_frame.get(action.frame)
         if contact is None or not contact.player_candidates:
             continue
+        # Post-contact ball position for wrist_post_alignment feature (first
+        # detection in f+5..f+15).
+        post_ball_x: float | None = None
+        post_ball_y: float | None = None
+        for offset in range(5, 16):
+            bp = ball_by_frame.get(action.frame + offset)
+            if bp is not None:
+                post_ball_x = bp.x
+                post_ball_y = bp.y
+                break
         # Find previous valid action's player_track_id for the
         # same_as_prev feature (discourages same-player back-to-back).
         prev_action_tid = -1
@@ -3672,7 +3689,9 @@ def _apply_dynamic_scorer_attribution(
         for tid, _dist in contact.player_candidates:
             f = extract_features(pp_like, int(tid), action.frame,
                                  action.ball_x, action.ball_y,
-                                 prev_action_tid=prev_action_tid)
+                                 prev_action_tid=prev_action_tid,
+                                 post_ball_x=post_ball_x,
+                                 post_ball_y=post_ball_y)
             if f is not None:
                 feats.append(f)
         # Coverage gate: only override when the scorer has features for at
@@ -3938,6 +3957,7 @@ def classify_rally_actions(
     _apply_dynamic_scorer_attribution(
         result.actions, contact_sequence.contacts,
         contact_sequence.player_positions,
+        ball_positions=contact_sequence.ball_positions,
     )
 
     # Visual attribution pass (overrides proximity-based attribution)

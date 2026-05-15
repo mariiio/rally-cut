@@ -33,8 +33,11 @@ DB_DSN = os.environ.get(
     "postgresql://postgres:postgres@localhost:5436/rallycut",
 )
 TRUSTED_CODENAMES = (
+    # Original trusted-14 (player-attribution GT validated 2026-05-14)
     "titi", "toto", "lulu", "wawa", "caco", "cece", "cici", "cuco",
     "gaga", "kaka", "kiki", "juju", "yeye", "keke",
+    # 7 added 2026-05-15 — trusted-21 corpus
+    "gigi", "gugu", "mame", "meme", "mimi", "moma", "mumu",
 )
 FRAME_TOLERANCE = 5
 FEATURE_NAMES = [
@@ -42,7 +45,19 @@ FEATURE_NAMES = [
     "velocity_mag", "velocity_toward_ball",
     "top_y_at_contact", "top_y_change", "height_change",
     "same_as_prev",  # 1.0 if candidate.tid == previous action's playerTrackId else 0.0
+    # Pose dynamics (v2, 2026-05-15)
+    "wrist_velocity_max", "wrist_to_ball_min", "body_orientation_diff",
+    "arms_raised", "wrist_post_alignment", "pose_confidence_mean",
+    # v2.1 — target ATTACK contest
+    "wrist_y_velocity",
 ]
+# COCO 17-keypoint indices
+KPT_LEFT_SHOULDER = 5
+KPT_RIGHT_SHOULDER = 6
+KPT_LEFT_WRIST = 9
+KPT_RIGHT_WRIST = 10
+KPT_VIS_THRESHOLD = 0.3
+POSE_WINDOW = 5
 ACTION_TYPES = ["SERVE", "RECEIVE", "SET", "ATTACK", "DIG", "BLOCK"]
 MODEL_VERSION = "v1"
 OUTPUT_DIR = Path(__file__).resolve().parents[1] / "weights" / "dynamic_attribution_scorer"
@@ -73,10 +88,141 @@ def _find_pos(positions: list[dict], tid: int, frame: int, tolerance: int = 5) -
     return best
 
 
+def _wrist_xy_from_dict(p: dict, which: str) -> tuple[float, float, float] | None:
+    kps = p.get("keypoints")
+    if not kps or len(kps) < 17:
+        return None
+    idx = KPT_LEFT_WRIST if which == "left" else KPT_RIGHT_WRIST
+    kx, ky, kc = kps[idx]
+    if kc < KPT_VIS_THRESHOLD:
+        return None
+    return float(kx), float(ky), float(kc)
+
+
+def _shoulder_xy_from_dict(p: dict, which: str) -> tuple[float, float, float] | None:
+    kps = p.get("keypoints")
+    if not kps or len(kps) < 17:
+        return None
+    idx = KPT_LEFT_SHOULDER if which == "left" else KPT_RIGHT_SHOULDER
+    kx, ky, kc = kps[idx]
+    if kc < KPT_VIS_THRESHOLD:
+        return None
+    return float(kx), float(ky), float(kc)
+
+
+def _compute_pose_features(
+    positions: list[dict], tid: int, contact_frame: int,
+    ball_x: float, ball_y: float,
+    post_ball_x: float | None, post_ball_y: float | None,
+) -> dict[str, float]:
+    """Compute pose features from keypoints stored in positions_json.
+    Mirrors dynamic_attribution_scorer._compute_pose_features. Keep these
+    two functions in lockstep — same feature order, same logic."""
+    track_positions = sorted(
+        [p for p in positions if int(p.get("trackId", -1)) == tid
+         and abs(int(p.get("frameNumber", -1)) - contact_frame) <= POSE_WINDOW],
+        key=lambda p: int(p.get("frameNumber", -1)),
+    )
+    wrist_pos: dict[int, tuple[float, float]] = {}
+    confs: list[float] = []
+    arms_raised_at_contact = 0.0
+    for p in track_positions:
+        fnum = int(p.get("frameNumber", -1))
+        lw = _wrist_xy_from_dict(p, "left")
+        rw = _wrist_xy_from_dict(p, "right")
+        best_w: tuple[float, float] | None = None
+        best_d = float("inf")
+        for w in (lw, rw):
+            if w is None: continue
+            d = math.hypot(w[0] - ball_x, w[1] - ball_y)
+            if d < best_d: best_d = d; best_w = (w[0], w[1])
+            confs.append(w[2])
+        if best_w is not None: wrist_pos[fnum] = best_w
+        ls = _shoulder_xy_from_dict(p, "left")
+        rs = _shoulder_xy_from_dict(p, "right")
+        for s in (ls, rs):
+            if s is not None: confs.append(s[2])
+        if abs(fnum - contact_frame) <= 2:
+            if lw and rw and ls and rs:
+                if lw[1] < ls[1] and rw[1] < rs[1]: arms_raised_at_contact = 1.0
+
+    if not wrist_pos and not confs:
+        return {
+            "wrist_velocity_max": 0.0, "wrist_to_ball_min": 1.0,
+            "body_orientation_diff": math.pi, "arms_raised": 0.0,
+            "wrist_post_alignment": 0.0, "pose_confidence_mean": 0.0,
+            "wrist_y_velocity": 0.0,
+        }
+    sorted_frames = sorted(wrist_pos.keys())
+    wrist_velocity_max = 0.0
+    wrist_y_velocity_at_contact = 0.0
+    best_vel = None
+    for i in range(len(sorted_frames) - 1):
+        f1, f2 = sorted_frames[i], sorted_frames[i + 1]
+        if f2 - f1 > 3: continue
+        x1, y1 = wrist_pos[f1]; x2, y2 = wrist_pos[f2]
+        gap = max(1, f2 - f1)
+        d = math.hypot(x2 - x1, y2 - y1) / gap
+        if d > wrist_velocity_max: wrist_velocity_max = d
+        if min(abs(f1 - contact_frame), abs(f2 - contact_frame)) <= 2:
+            dy_pf = (y2 - y1) / gap
+            if abs(dy_pf) > abs(wrist_y_velocity_at_contact): wrist_y_velocity_at_contact = dy_pf
+        # Track best velocity vector for post-alignment computation
+        dx_t, dy_t = x2 - x1, y2 - y1
+        d_t = math.hypot(dx_t, dy_t)
+        if best_vel is None or d_t > best_vel[2]:
+            best_vel = (dx_t, dy_t, d_t)
+
+    wrist_to_ball_min = float("inf")
+    for f, (wx, wy) in wrist_pos.items():
+        if abs(f - contact_frame) <= 2:
+            d = math.hypot(wx - ball_x, wy - ball_y)
+            if d < wrist_to_ball_min: wrist_to_ball_min = d
+    if not math.isfinite(wrist_to_ball_min): wrist_to_ball_min = 1.0
+
+    body_orientation_diff = math.pi
+    p_contact = next((p for p in track_positions if abs(int(p.get("frameNumber",-1)) - contact_frame) <= 1), None)
+    if p_contact is not None:
+        ls = _shoulder_xy_from_dict(p_contact, "left")
+        rs = _shoulder_xy_from_dict(p_contact, "right")
+        if ls and rs:
+            sx = rs[0] - ls[0]; sy = rs[1] - ls[1]
+            facing_x = -sy; facing_y = sx
+            torso_x = (ls[0] + rs[0]) / 2; torso_y = (ls[1] + rs[1]) / 2
+            to_ball_x = ball_x - torso_x; to_ball_y = ball_y - torso_y
+            mag_f = math.hypot(facing_x, facing_y) + 1e-6
+            mag_b = math.hypot(to_ball_x, to_ball_y) + 1e-6
+            cos_theta = (facing_x * to_ball_x + facing_y * to_ball_y) / (mag_f * mag_b)
+            cos_theta = max(-1.0, min(1.0, cos_theta))
+            body_orientation_diff = math.acos(cos_theta)
+
+    wrist_post_alignment = 0.0
+    if (post_ball_x is not None and post_ball_y is not None
+            and best_vel is not None and best_vel[2] > 0):
+        ball_dx = post_ball_x - ball_x
+        ball_dy = post_ball_y - ball_y
+        ball_mag = math.hypot(ball_dx, ball_dy) + 1e-6
+        wrist_post_alignment = ((best_vel[0] * ball_dx + best_vel[1] * ball_dy)
+                                 / (best_vel[2] * ball_mag))
+
+    pose_confidence_mean = (sum(confs) / len(confs)) if confs else 0.0
+    return {
+        "wrist_velocity_max": wrist_velocity_max,
+        "wrist_to_ball_min": wrist_to_ball_min,
+        "body_orientation_diff": body_orientation_diff,
+        "arms_raised": arms_raised_at_contact,
+        "wrist_post_alignment": wrist_post_alignment,
+        "pose_confidence_mean": pose_confidence_mean,
+        "wrist_y_velocity": wrist_y_velocity_at_contact,
+    }
+
+
 def _compute_features(
     positions: list[dict], tid: int, contact_frame: int,
     ball_x: float, ball_y: float,
     prev_action_tid: int = -1,
+    post_ball_x: float | None = None,
+    post_ball_y: float | None = None,
 ) -> list[float] | None:
     p_at = _find_pos(positions, tid, contact_frame, tolerance=5)
     if p_at is None:
@@ -116,11 +262,19 @@ def _compute_features(
     else:
         height_change = 0.0
     same_as_prev = 1.0 if (prev_action_tid >= 0 and tid == prev_action_tid) else 0.0
+    pose = _compute_pose_features(
+        positions, tid, contact_frame, ball_x, ball_y,
+        post_ball_x, post_ball_y,
+    )
     return [
         bbox_dist, bbox_area, bbox_aspect_ratio, inside,
         velocity_mag, velocity_toward_ball,
         y, top_y_change, height_change,
         same_as_prev,
+        pose["wrist_velocity_max"], pose["wrist_to_ball_min"],
+        pose["body_orientation_diff"], pose["arms_raised"],
+        pose["wrist_post_alignment"], pose["pose_confidence_mean"],
+        pose["wrist_y_velocity"],
     ]
 
 
@@ -169,6 +323,18 @@ def build_dataset() -> list[CandidateRow]:
             primary_tids = [int(t) for t in primary_raw]
             aj = json.loads(actions_json) if isinstance(actions_json, str) else actions_json
             actions = aj.get("actions") or []
+            # Load ball_positions_json for post-contact ball lookup (wrist_post_alignment)
+            bcur = conn.execute(
+                "SELECT ball_positions_json FROM player_tracks WHERE rally_id=%s",
+                [rally_id],
+            )
+            ball_row = bcur.fetchone()
+            ball_positions = (
+                ball_row[0] if (ball_row and isinstance(ball_row[0], list)) else []
+            )
+            ball_by_frame = {
+                int(b.get("frameNumber", -1)): b for b in ball_positions
+            }
             gt_cur = conn.execute(
                 """
                 SELECT frame, action::text, resolved_track_id
@@ -225,12 +391,23 @@ def build_dataset() -> list[CandidateRow]:
                         prev_action_tid = pa_tid
                         break
                 n_gt_matched += 1
+                # Post-contact ball for wrist_post_alignment (first detection
+                # in f+5..f+15 window).
+                post_ball_x = post_ball_y = None
+                for offset in range(5, 16):
+                    b = ball_by_frame.get(pipe_frame + offset)
+                    if b is not None:
+                        post_ball_x = float(b.get("x") or 0)
+                        post_ball_y = float(b.get("y") or 0)
+                        break
                 # Use PIPELINE's frame + ball position (production-matched).
                 for tid in primary_tids:
                     feats = _compute_features(
                         positions, tid, pipe_frame,
                         float(pipe_ball_x), float(pipe_ball_y),
                         prev_action_tid=prev_action_tid,
+                        post_ball_x=post_ball_x,
+                        post_ball_y=post_ball_y,
                     )
                     if feats is None:
                         continue

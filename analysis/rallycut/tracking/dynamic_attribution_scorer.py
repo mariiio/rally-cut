@@ -43,7 +43,23 @@ FEATURE_NAMES = (
     "top_y_change",
     "height_change",
     "same_as_prev",  # 1.0 if candidate.tid == previous action's playerTrackId else 0.0
+    # Pose-dynamics features (v2, 2026-05-15). All zeros if keypoints unavailable.
+    "wrist_velocity_max",
+    "wrist_to_ball_min",
+    "body_orientation_diff",
+    "arms_raised",
+    "wrist_post_alignment",
+    "pose_confidence_mean",
+    # v2.1 (2026-05-15): target ATTACK contest residual
+    "wrist_y_velocity",  # vertical wrist velocity at contact; attacker descends, blocker stays
 )
+
+# COCO 17-keypoint indices used in pose features.
+KPT_LEFT_SHOULDER = 5
+KPT_RIGHT_SHOULDER = 6
+KPT_LEFT_WRIST = 9
+KPT_RIGHT_WRIST = 10
+KPT_VIS_THRESHOLD = 0.3
 
 # Default location of trained models relative to repo root.
 _DEFAULT_MODELS_DIR = (
@@ -66,6 +82,15 @@ class CandidateFeatures:
     top_y_change: float
     height_change: float
     same_as_prev: float = 0.0
+    # Pose features (v2). Default to 0 / safe values when keypoints unavailable.
+    wrist_velocity_max: float = 0.0
+    wrist_to_ball_min: float = 1.0
+    body_orientation_diff: float = math.pi
+    arms_raised: float = 0.0
+    wrist_post_alignment: float = 0.0
+    pose_confidence_mean: float = 0.0
+    # v2.1
+    wrist_y_velocity: float = 0.0
 
     def as_vector(self) -> list[float]:
         return [
@@ -79,6 +104,13 @@ class CandidateFeatures:
             self.top_y_change,
             self.height_change,
             self.same_as_prev,
+            self.wrist_velocity_max,
+            self.wrist_to_ball_min,
+            self.body_orientation_diff,
+            self.arms_raised,
+            self.wrist_post_alignment,
+            self.pose_confidence_mean,
+            self.wrist_y_velocity,
         ]
 
 
@@ -93,13 +125,17 @@ class PlayerPositionLike:
 
     frame_number: int
     track_id: int
-    x: float          # bbox top-left x (normalized)
-    y: float          # bbox top-left y (normalized)
+    x: float          # bbox center x (normalized)
+    y: float          # bbox center y (normalized)
     width: float
     height: float
+    # COCO 17-keypoint pose data (x, y, conf) per keypoint; None when not
+    # enriched. When present, pose features are computed.
+    keypoints: list[list[float]] | None = None
 
 
 def position_from_dict(d: dict[str, Any]) -> PlayerPositionLike:
+    kps = d.get("keypoints")
     return PlayerPositionLike(
         frame_number=int(d.get("frameNumber", d.get("frame_number", -1))),
         track_id=int(d.get("trackId", d.get("track_id", -1))),
@@ -107,6 +143,7 @@ def position_from_dict(d: dict[str, Any]) -> PlayerPositionLike:
         y=float(d.get("y", 0.0)),
         width=float(d.get("width", 0.0)),
         height=float(d.get("height", 0.0)),
+        keypoints=kps if (kps and len(kps) >= 17) else None,
     )
 
 
@@ -143,6 +180,8 @@ def extract_features(
     ball_x: float,
     ball_y: float,
     prev_action_tid: int = -1,
+    post_ball_x: float | None = None,
+    post_ball_y: float | None = None,
 ) -> CandidateFeatures | None:
     """Compute the 9-feature vector for one candidate at one contact.
 
@@ -198,6 +237,12 @@ def extract_features(
         height_change = 0.0
 
     same_as_prev = 1.0 if (prev_action_tid >= 0 and track_id == prev_action_tid) else 0.0
+
+    # Pose features (v2). Compute when keypoints are available.
+    pose = _compute_pose_features(
+        positions, track_id, contact_frame, ball_x, ball_y,
+        post_ball_x, post_ball_y,
+    )
     return CandidateFeatures(
         track_id=track_id,
         bbox_dist=bbox_dist,
@@ -210,7 +255,175 @@ def extract_features(
         top_y_change=top_y_change,
         height_change=height_change,
         same_as_prev=same_as_prev,
+        **pose,
     )
+
+
+def _wrist_xy(p: PlayerPositionLike, which: str) -> tuple[float, float, float] | None:
+    """Return (x, y, conf) of left or right wrist; None if not visible."""
+    if p.keypoints is None or len(p.keypoints) < 17:
+        return None
+    idx = KPT_LEFT_WRIST if which == "left" else KPT_RIGHT_WRIST
+    kx, ky, kc = p.keypoints[idx]
+    if kc < KPT_VIS_THRESHOLD:
+        return None
+    return float(kx), float(ky), float(kc)
+
+
+def _shoulder_xy(p: PlayerPositionLike, which: str) -> tuple[float, float, float] | None:
+    if p.keypoints is None or len(p.keypoints) < 17:
+        return None
+    idx = KPT_LEFT_SHOULDER if which == "left" else KPT_RIGHT_SHOULDER
+    kx, ky, kc = p.keypoints[idx]
+    if kc < KPT_VIS_THRESHOLD:
+        return None
+    return float(kx), float(ky), float(kc)
+
+
+_POSE_WINDOW = 5
+
+
+def _compute_pose_features(
+    positions: list[PlayerPositionLike],
+    track_id: int,
+    contact_frame: int,
+    ball_x: float,
+    ball_y: float,
+    post_ball_x: float | None = None,
+    post_ball_y: float | None = None,
+) -> dict[str, float]:
+    """Compute 7 pose-based features for one candidate.
+
+    Returns dict with defaults when keypoints are unavailable. Mirrors
+    `scripts/probe_pose_features_2026_05_15.py::compute_pose_features` —
+    keep in lockstep.
+    """
+    track_positions = sorted(
+        [p for p in positions
+         if p.track_id == track_id
+         and abs(p.frame_number - contact_frame) <= _POSE_WINDOW],
+        key=lambda p: p.frame_number,
+    )
+    wrist_pos: dict[int, tuple[float, float]] = {}
+    confs: list[float] = []
+    arms_raised_at_contact = 0.0
+    for p in track_positions:
+        lw = _wrist_xy(p, "left")
+        rw = _wrist_xy(p, "right")
+        best_w: tuple[float, float] | None = None
+        best_d = float("inf")
+        for w in (lw, rw):
+            if w is None:
+                continue
+            d = math.hypot(w[0] - ball_x, w[1] - ball_y)
+            if d < best_d:
+                best_d = d
+                best_w = (w[0], w[1])
+            confs.append(w[2])
+        if best_w is not None:
+            wrist_pos[p.frame_number] = best_w
+        ls = _shoulder_xy(p, "left")
+        rs = _shoulder_xy(p, "right")
+        for s in (ls, rs):
+            if s is not None:
+                confs.append(s[2])
+        if abs(p.frame_number - contact_frame) <= 2:
+            if lw and rw and ls and rs:
+                if lw[1] < ls[1] and rw[1] < rs[1]:
+                    arms_raised_at_contact = 1.0
+
+    # If we have no pose data at all, return defaults
+    if not wrist_pos and not confs:
+        return {
+            "wrist_velocity_max": 0.0,
+            "wrist_to_ball_min": 1.0,
+            "body_orientation_diff": math.pi,
+            "arms_raised": 0.0,
+            "wrist_post_alignment": 0.0,
+            "pose_confidence_mean": 0.0,
+            "wrist_y_velocity": 0.0,
+        }
+
+    sorted_frames = sorted(wrist_pos.keys())
+    wrist_velocity_max = 0.0
+    wrist_y_velocity_at_contact = 0.0
+    best_vel: tuple[float, float, float] | None = None
+    for i in range(len(sorted_frames) - 1):
+        f1, f2 = sorted_frames[i], sorted_frames[i + 1]
+        if f2 - f1 > 3:
+            continue
+        x1, y1 = wrist_pos[f1]
+        x2, y2 = wrist_pos[f2]
+        gap = max(1, f2 - f1)
+        dx_t, dy_t = (x2 - x1), (y2 - y1)
+        d = math.hypot(dx_t, dy_t) / gap
+        if d > wrist_velocity_max:
+            wrist_velocity_max = d
+        # Y-velocity near the contact frame (positive y = descending in image)
+        if min(abs(f1 - contact_frame), abs(f2 - contact_frame)) <= 2:
+            dy_per_frame = dy_t / gap
+            if abs(dy_per_frame) > abs(wrist_y_velocity_at_contact):
+                wrist_y_velocity_at_contact = dy_per_frame
+        # Track best velocity vector (raw, not /gap) for post-alignment
+        d_t = math.hypot(dx_t, dy_t)
+        if best_vel is None or d_t > best_vel[2]:
+            best_vel = (dx_t, dy_t, d_t)
+
+    wrist_to_ball_min = float("inf")
+    for f, (wx, wy) in wrist_pos.items():
+        if abs(f - contact_frame) <= 2:
+            d = math.hypot(wx - ball_x, wy - ball_y)
+            if d < wrist_to_ball_min:
+                wrist_to_ball_min = d
+    if not math.isfinite(wrist_to_ball_min):
+        wrist_to_ball_min = 1.0
+
+    # Body orientation: angle between body-perpendicular and direction-to-ball
+    body_orientation_diff = math.pi
+    p_contact = next(
+        (p for p in track_positions if abs(p.frame_number - contact_frame) <= 1),
+        None,
+    )
+    if p_contact is not None:
+        ls = _shoulder_xy(p_contact, "left")
+        rs = _shoulder_xy(p_contact, "right")
+        if ls is not None and rs is not None:
+            sx = rs[0] - ls[0]
+            sy = rs[1] - ls[1]
+            facing_x = -sy
+            facing_y = sx
+            torso_x = (ls[0] + rs[0]) / 2
+            torso_y = (ls[1] + rs[1]) / 2
+            to_ball_x = ball_x - torso_x
+            to_ball_y = ball_y - torso_y
+            mag_f = math.hypot(facing_x, facing_y) + 1e-6
+            mag_b = math.hypot(to_ball_x, to_ball_y) + 1e-6
+            cos_theta = (facing_x * to_ball_x + facing_y * to_ball_y) / (mag_f * mag_b)
+            cos_theta = max(-1.0, min(1.0, cos_theta))
+            body_orientation_diff = math.acos(cos_theta)
+
+    wrist_post_alignment = 0.0
+    if (post_ball_x is not None and post_ball_y is not None
+            and best_vel is not None and best_vel[2] > 0):
+        ball_dx = post_ball_x - ball_x
+        ball_dy = post_ball_y - ball_y
+        ball_mag = math.hypot(ball_dx, ball_dy) + 1e-6
+        wrist_post_alignment = (
+            (best_vel[0] * ball_dx + best_vel[1] * ball_dy)
+            / (best_vel[2] * ball_mag)
+        )
+
+    pose_confidence_mean = (sum(confs) / len(confs)) if confs else 0.0
+
+    return {
+        "wrist_velocity_max": wrist_velocity_max,
+        "wrist_to_ball_min": wrist_to_ball_min,
+        "body_orientation_diff": body_orientation_diff,
+        "arms_raised": arms_raised_at_contact,
+        "wrist_post_alignment": wrist_post_alignment,
+        "pose_confidence_mean": pose_confidence_mean,
+        "wrist_y_velocity": wrist_y_velocity_at_contact,
+    }
 
 
 class DynamicAttributionScorer:
