@@ -22,7 +22,6 @@ import { ActionLabelingMode } from './ActionLabelingMode';
 import { RallyLandingOverlay } from './RallyLandingOverlay';
 import { getMatchStatsApi } from '@/services/api';
 import type { MatchStats } from '@/services/api';
-import { LabelingModeBanner } from './LabelingModeBanner';
 import { usePlayerTrackingStore } from '@/stores/playerTrackingStore';
 import { rallyMatchEntry } from '@/utils/gtLabelDisplay';
 import { effectiveTeamAssignments } from '@/utils/teamAssignments';
@@ -831,9 +830,6 @@ export function VideoPlayer() {
           </Typography>
         </Box>
       )}
-
-      {/* Action labeling mode banner */}
-      <LabelingModeBanner />
 
       {/* Buffering indicator - during playback stalls */}
       {isBuffering && !isLoading && (
