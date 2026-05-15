@@ -131,14 +131,23 @@ def main() -> None:
 
         player_positions = []
         if positions_json:
-            player_positions = [
-                PlayerPos(
+            for pp in positions_json:
+                pos = PlayerPos(
                     frame_number=pp["frameNumber"], track_id=pp["trackId"],
                     x=pp["x"], y=pp["y"], width=pp["width"], height=pp["height"],
                     confidence=pp.get("confidence", 1.0),
                 )
-                for pp in positions_json
-            ]
+                # Preserve pose keypoints + embedding so the dynamic-feature
+                # scorer can compute pose features at inference time. Without
+                # this the scorer sees default-zero pose features and the
+                # training-inference distribution mismatches.
+                kps = pp.get("keypoints")
+                if kps and len(kps) >= 17:
+                    pos.keypoints = kps
+                emb = pp.get("embedding")
+                if emb:
+                    pos.embedding = emb
+                player_positions.append(pos)
 
         match_teams = match_teams_by_rally.get(rally_id)
 
