@@ -106,7 +106,10 @@ WEIGHT_GROUPS: dict[str, list[str]] = {
         "pose_attribution/pose_attribution.joblib",
         # Dynamic attribution scorer (2026-05-14): per-action-type GBMs +
         # manifest. Loaded by `tracking/dynamic_attribution_scorer.py` when
-        # `USE_DYNAMIC_ATTRIBUTION_SCORER=1`.
+        # `USE_DYNAMIC_ATTRIBUTION_SCORER=1`. v1 = trained on v3 contact
+        # frames (heuristic snap output); v2 = retrained 2026-05-17 on v4
+        # contact frames (post learned regressor). Default in inference is
+        # v2 (co-aligned with CONTACT_PIPELINE_VERSION v4).
         "dynamic_attribution_scorer/manifest.json",
         "dynamic_attribution_scorer/SERVE_v1.joblib",
         "dynamic_attribution_scorer/RECEIVE_v1.joblib",
@@ -114,6 +117,17 @@ WEIGHT_GROUPS: dict[str, list[str]] = {
         "dynamic_attribution_scorer/ATTACK_v1.joblib",
         "dynamic_attribution_scorer/DIG_v1.joblib",
         "dynamic_attribution_scorer/BLOCK_v1.joblib",
+        "dynamic_attribution_scorer/SERVE_v2.joblib",
+        "dynamic_attribution_scorer/RECEIVE_v2.joblib",
+        "dynamic_attribution_scorer/SET_v2.joblib",
+        "dynamic_attribution_scorer/ATTACK_v2.joblib",
+        "dynamic_attribution_scorer/DIG_v2.joblib",
+        "dynamic_attribution_scorer/BLOCK_v2.joblib",
+        # Contact-frame regressor (2026-05-17): learned per-contact frame
+        # offset predictor. 25-feat sklearn GBR (Huber), trained on 2480
+        # (candidate, GT-frame) pairs from full 74-video corpus. Loaded by
+        # `tracking/contact_frame_regressor.py`. Required for CONTACT_PIPELINE_VERSION v4+.
+        "contact_frame_regressor/best_model.joblib",
     ],
     "external": [
         "videomae/game_state_classifier/model.safetensors",
