@@ -108,6 +108,10 @@ interface ApiVideo {
   rallies: ApiRally[];
   cameraSettings?: ApiVideoCameraSettings | null;
   createdAt: string;
+  // Used as a `?v=<ms>` cache-buster on derived URLs so the browser
+  // refetches after a server-side re-encode. Optional for back-compat
+  // with older API responses that didn't return it.
+  updatedAt?: string;
   qualityDowngradedAt?: string | null;
   qualityReportJson?: VideoQualityReport | null;
   courtCalibrationJson?: Array<{ x: number; y: number }> | null;
@@ -204,11 +208,17 @@ function apiVideoToMatch(apiVideo: ApiVideo, cloudfrontDomain?: string): Match {
   // In development: always use relative URL (proxied to backend) to avoid CORS issues with fetch()
   const isProd = process.env.NODE_ENV === 'production';
 
+  // Cache-bust derived URLs with updatedAt so server-side re-encodes are
+  // picked up immediately (same pattern as fetchVideoForEditor). Falls
+  // back to no buster if the older API didn't return updatedAt.
+  const cacheBuster = apiVideo.updatedAt
+    ? `?v=${encodeURIComponent(new Date(apiVideo.updatedAt).getTime())}`
+    : '';
   const buildUrl = (s3Key: string): string => {
-    if (isProd && cloudfrontDomain) {
-      return `https://${cloudfrontDomain}/${s3Key}`;
-    }
-    return `/${s3Key}`;
+    const base = (isProd && cloudfrontDomain)
+      ? `https://${cloudfrontDomain}/${s3Key}`
+      : `/${s3Key}`;
+    return `${base}${cacheBuster}`;
   };
 
   const videoUrl = buildUrl(apiVideo.s3Key);
