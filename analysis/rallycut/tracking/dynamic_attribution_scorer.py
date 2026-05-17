@@ -469,7 +469,7 @@ class DynamicAttributionScorer:
     on first use of each action type.
     """
 
-    def __init__(self, models_dir: Path | str | None = None, version: str = "v1") -> None:
+    def __init__(self, models_dir: Path | str | None = None, version: str = "v2") -> None:
         self.models_dir = Path(models_dir) if models_dir is not None else _DEFAULT_MODELS_DIR
         self.version = version
         self._models: dict[str, Any] = {}

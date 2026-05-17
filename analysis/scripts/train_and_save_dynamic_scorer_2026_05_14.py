@@ -105,7 +105,7 @@ FRAME_TOLERANCE = 5
 # triple-duplication risk was flagged in the post-v3.1 audit).
 FEATURE_NAMES = list(_INFERENCE_FEATURE_NAMES)
 ACTION_TYPES = ["SERVE", "RECEIVE", "SET", "ATTACK", "DIG", "BLOCK"]
-MODEL_VERSION = "v1"
+MODEL_VERSION = "v2"  # 2026-05-17 — retrained on v4 contact frames (post-regressor)
 OUTPUT_DIR = Path(__file__).resolve().parents[1] / "weights" / "dynamic_attribution_scorer"
 
 

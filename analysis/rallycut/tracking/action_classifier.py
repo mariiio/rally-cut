@@ -64,7 +64,14 @@ logger = logging.getLogger(__name__)
 #          intra-team. Modest +0.3pp matched accuracy (91.3 → 91.6%
 #          on trusted-29) with RECEIVE +1.3pp showing the gate captures
 #          cases the per-action mask missed.
-ACTION_PIPELINE_VERSION = "v4"
+# v5 (2026-05-17): Co-aligned with contact-frame regressor (CONTACT
+#          v4). Dynamic-attribution scorer retrained on v4 contact
+#          frames as v2. v1 scorer was calibrated to v3 (post-snap-MAX)
+#          contact placements; v4 shifts frames ~3f earlier on average
+#          (strike vs apex), shifting feature distributions enough that
+#          v1 scorer regressed -8.4pp ATTACK on trusted-29. v2 scorer
+#          re-learns the decision boundary at v4 frames. Combined v4+v2.
+ACTION_PIPELINE_VERSION = "v5"
 
 # Cached default action type classifier (loaded once from disk on first use)
 _default_action_classifier_cache: dict[str, ActionTypeClassifier | None] = {}

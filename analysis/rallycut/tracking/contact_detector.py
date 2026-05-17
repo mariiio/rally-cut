@@ -55,7 +55,18 @@ logger = logging.getLogger(__name__)
 #          mid-flight bends where no player is present (e.g. off-screen
 #          serve trajectories). Fixes the 8-case SERVE regression v2
 #          introduced and adds +4pp SERVE matched accuracy on trusted-29.
-CONTACT_PIPELINE_VERSION = "v3"
+#  - v4: 2026-05-17 — learned contact-frame regressor as the final
+#          refinement step (post heuristic direction-change snap). 25-feat
+#          sklearn GradientBoostingRegressor (Huber loss) trained on 2480
+#          (candidate, GT-frame) pairs from the full 74-video action-GT
+#          corpus. LOO CV: MAE 2.11 → 1.32 (-37%); within ±5 of GT:
+#          +64 net (79 GAINED, 15 LOST); within ±2: +353 cases. Handles
+#          per-action variation organically via action one-hot features.
+#          Spec: reports/contact_frame_regressor_2026_05_17/
+#          REQUIRES retrained dynamic_attribution_scorer (v3.2 scorer
+#          was calibrated for v3 contact frames; v4 shifts frames ~3f
+#          earlier on average, requires co-aligned scorer).
+CONTACT_PIPELINE_VERSION = "v4"
 
 # Minimum confidence to treat a ball position as a real detection.
 # Ball detector confidence is bimodal: either 0.0 (no detection) or >=0.3 (confident).
@@ -3086,6 +3097,22 @@ def detect_contacts(
         contacts, ball_by_frame,
         player_positions=player_positions,
         window=10,
+    )
+
+    # Apply learned contact-frame regressor as the final precision step.
+    # The heuristic snap above moves contacts to direction-change MAX (the
+    # apex of the trajectory bend), but GT marks the strike frame itself
+    # (typically 6-10f earlier). The regressor uses pose (wrist/elbow), bbox,
+    # ball trajectory, and action-type context to predict per-contact frame
+    # offsets. Trained on 2480 (candidate, GT-frame) pairs from the full
+    # 74-video corpus. LOO CV: MAE 2.11 → 1.32; +64 net within ±5 of GT.
+    # Skips silently if model is not on disk (graceful fallback to heuristic).
+    from rallycut.tracking.contact_frame_regressor import (
+        refine_contacts_with_regressor,
+    )
+    refine_contacts_with_regressor(
+        contacts, ball_positions,
+        player_positions=player_positions,
     )
 
     # Deduplicate contacts from proximity + standard candidates at similar frames
