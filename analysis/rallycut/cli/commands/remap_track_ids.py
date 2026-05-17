@@ -143,6 +143,42 @@ def _should_reverse(
     return False
 
 
+def _check_snapshot_covered_by_mapping(
+    snapshot_primary_ids: list[int] | None,
+    raw_mapping: dict[int, int],
+) -> tuple[bool, list[int]]:
+    """Defense-in-depth invariant for the snapshot+restore loop.
+
+    Returns ``(ok, missing_ids)``. ``ok`` is True iff every real (>0) ID in
+    ``snapshot_primary_ids`` is a key in ``raw_mapping``. When False,
+    applying the remap would silently drop a primary track — caller MUST
+    refuse to mutate.
+
+    Background: the snapshot+restore loop in remap-track-ids assumes
+    ``appliedFullMapping`` (which feeds ``raw_mapping``) covers every raw
+    BoT-SORT track ID captured in ``pre_remap_state_json``. An older
+    pipeline bug (fixed in 5a521701, 2026-05-11) overwrote
+    ``appliedFullMapping`` with canonical-space identity ``{1:1, 2:2, 3:3,
+    4:4}`` while the snapshot kept the original raw IDs (e.g.,
+    ``[1, 5, 8, 11]``). Every subsequent remap then dropped tracks 5, 8,
+    11 — self-reinforcing data destruction triggered by routine
+    re-analyze. The source-priority fix prevents NEW corruption but
+    can't recover from data already in this state. This guard catches
+    that state at the destructive boundary so the rally is preserved
+    rather than further damaged.
+
+    Negative IDs (BoT-SORT's ``-1`` sentinel; synthetic sub-track ids)
+    are ignored — they're not real primary tracks.
+    """
+    if not snapshot_primary_ids:
+        return True, []
+    snapshot_real = {int(t) for t in snapshot_primary_ids if int(t) > 0}
+    if not snapshot_real:
+        return True, []
+    missing = sorted(snapshot_real - set(raw_mapping.keys()))
+    return (not missing), missing
+
+
 def _build_full_mapping(
     track_to_player: dict[int, int],
     all_track_ids: set[int],
@@ -699,6 +735,8 @@ def remap_track_ids_cmd(
             rows = cur.fetchall()
 
     total_remapped = 0
+    n_skipped_corrupted = 0
+    skipped_rally_ids: list[str] = []
     updates: list[tuple[int, dict[str, Any]]] = []  # (pt_id, {column: value})
 
     for (
@@ -764,6 +802,40 @@ def remap_track_ids_cmd(
         mapping = _build_full_mapping(
             raw_mapping, all_track_ids, sub_track_pids=sub_track_pids,
         )
+
+        # Fail-closed invariant: refuse to mutate this rally when the
+        # snapshot's real primary tracks aren't covered by the mapping.
+        # See `_check_snapshot_covered_by_mapping` docstring for the bug
+        # this guards against (ff175026 corruption pattern, 2026-05-17).
+        # On violation: skip the rally entirely — no DB write — so the
+        # currently-stored canonical state is preserved. Repair via
+        # `scripts/repair_remap_track_to_player_drop.py` or re-track.
+        snapshot_primary_for_check = (
+            snapshot_payload.get("primaryTrackIds") if snapshot_payload else None
+        )
+        covered, missing_from_mapping = _check_snapshot_covered_by_mapping(
+            snapshot_primary_for_check, raw_mapping
+        )
+        if not covered:
+            logger.error(
+                "remap-track-ids: REFUSING to remap rally %s — snapshot's "
+                "primaryTrackIds %s contains raw tracks %s absent from the "
+                "resolved raw_mapping keys %s. Applying would silently drop "
+                "%d primary track(s). Likely cause: appliedFullMapping was "
+                "overwritten to canonical-space identity by an older "
+                "pipeline bug. Rally left unchanged; run "
+                "`scripts/repair_remap_track_to_player_drop.py %s` or "
+                "re-track the rally.",
+                rally_id[:12] if isinstance(rally_id, str) else rally_id,
+                sorted(int(t) for t in (snapshot_primary_for_check or [])),
+                missing_from_mapping,
+                sorted(raw_mapping.keys()),
+                len(missing_from_mapping),
+                video_id,
+            )
+            n_skipped_corrupted += 1
+            skipped_rally_ids.append(rally_id)
+            continue
 
         # Initialize changes early so first-run snapshot capture is
         # persisted even on identity-mapping rallies (where no other field
@@ -904,6 +976,18 @@ def remap_track_ids_cmd(
 
     if not quiet:
         console.print(f"\n  Total: {total_remapped} track ID references remapped")
+        if n_skipped_corrupted > 0:
+            short_ids = ", ".join(rid[:8] for rid in skipped_rally_ids[:5])
+            more = "" if len(skipped_rally_ids) <= 5 else f" (+{len(skipped_rally_ids) - 5} more)"
+            console.print(
+                f"  [red]SKIPPED {n_skipped_corrupted} rallies with corrupted "
+                f"appliedFullMapping[/red]: {short_ids}{more}"
+            )
+            console.print(
+                f"  [yellow]Repair:[/yellow] "
+                f"`uv run python scripts/repair_remap_track_to_player_drop.py {video_id}` "
+                f"or re-track the skipped rallies."
+            )
 
     # Set trackToPlayer to identity for remapped rallies (downstream consumers need this).
     # appliedFullMapping/remapApplied already set on rally_entry objects above.

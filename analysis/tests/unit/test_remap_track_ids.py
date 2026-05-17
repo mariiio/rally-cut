@@ -10,6 +10,7 @@ import pytest
 from rallycut.cli.commands.remap_track_ids import (
     _build_full_mapping,
     _capture_snapshot,
+    _check_snapshot_covered_by_mapping,
     _deepcopy_json,
     _invert_mapping,
     _load_canonical_per_rally,
@@ -723,3 +724,63 @@ class TestResolveRawMappingSource:
         }
         result = _resolve_raw_mapping_source(rally_entry, None)
         assert result == {1: 1, 3: 4, 9: 2, 10: 3}
+
+
+class TestCheckSnapshotCoveredByMapping:
+    """Fail-closed invariant for remap-track-ids.
+
+    Regression target: ff175026 case where ``pre_remap_state_json.primaryTrackIds``
+    held raw BoT-SORT IDs like ``[1, 5, 8, 11]`` while ``appliedFullMapping`` had
+    been corrupted to canonical-space identity ``{1:1, 2:2, 3:3, 4:4}`` by an
+    older pipeline bug. The snapshot-restore + apply loop then silently dropped
+    tracks 5, 8, 11 from positions and primary_track_ids on every re-analyze.
+
+    The fix (commit 5a521701, 2026-05-11) made remap prefer ``appliedFullMapping``
+    over ``trackToPlayer`` — but does not protect against an already-corrupted
+    ``appliedFullMapping``. This invariant adds a fail-closed guard: when the
+    snapshot's real primary tracks aren't covered by the mapping the remap is
+    about to apply, refuse to mutate. Better to leave the rally in its current
+    canonical state than to silently destroy it.
+    """
+
+    def test_ok_when_snapshot_primary_subset_of_mapping(self) -> None:
+        snapshot_primary = [1, 5, 8, 11]
+        raw_mapping = {1: 1, 5: 2, 8: 3, 11: 4, 10: 101}
+        ok, missing = _check_snapshot_covered_by_mapping(snapshot_primary, raw_mapping)
+        assert ok is True
+        assert missing == []
+
+    def test_violation_when_mapping_missing_primary_ids(self) -> None:
+        """The ff175026 / rally 10 shape — appliedFullMapping corrupted to identity."""
+        snapshot_primary = [1, 5, 8, 11]
+        raw_mapping = {1: 1, 2: 2, 3: 3, 4: 4}
+        ok, missing = _check_snapshot_covered_by_mapping(snapshot_primary, raw_mapping)
+        assert ok is False
+        assert sorted(missing) == [5, 8, 11]
+
+    def test_ok_when_snapshot_empty(self) -> None:
+        """No primary to protect → nothing to check."""
+        ok, missing = _check_snapshot_covered_by_mapping([], {1: 1})
+        assert ok is True
+        assert missing == []
+
+    def test_ok_when_snapshot_none(self) -> None:
+        """Legacy rallies that never had a snapshot captured → nothing to check."""
+        ok, missing = _check_snapshot_covered_by_mapping(None, {1: 1})
+        assert ok is True
+        assert missing == []
+
+    def test_violation_when_mapping_empty(self) -> None:
+        snapshot_primary = [1, 5, 8, 11]
+        ok, missing = _check_snapshot_covered_by_mapping(snapshot_primary, {})
+        assert ok is False
+        assert sorted(missing) == [1, 5, 8, 11]
+
+    def test_negative_sentinel_ids_in_snapshot_ignored(self) -> None:
+        """BoT-SORT's ``-1`` sentinel can leak into legacy snapshots; it must
+        not trigger a false violation."""
+        snapshot_primary = [-1, 1, 5]
+        raw_mapping = {1: 1, 5: 2}
+        ok, missing = _check_snapshot_covered_by_mapping(snapshot_primary, raw_mapping)
+        assert ok is True
+        assert missing == []
