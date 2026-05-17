@@ -396,6 +396,7 @@ function runPreviewCli(
 export interface TiltDetectResult {
   tiltDeg: number;
   linesScored: number;
+  dispersionDeg: number;
 }
 
 /**
@@ -417,7 +418,7 @@ export async function runTiltDetect(localPath: string): Promise<TiltDetectResult
     return await runTiltDetectCli(frameDir);
   } catch (err) {
     console.warn(`[tilt-detect] failed, returning zero result: ${err}`);
-    return { tiltDeg: 0, linesScored: 0 };
+    return { tiltDeg: 0, linesScored: 0, dispersionDeg: 0 };
   } finally {
     await fs.rm(frameDir, { recursive: true, force: true }).catch(() => {});
   }
@@ -505,6 +506,7 @@ function runTiltDetectCli(frameDir: string): Promise<TiltDetectResult> {
         resolve({
           tiltDeg: Number(parsed.tiltDeg ?? 0),
           linesScored: Number(parsed.linesScored ?? 0),
+          dispersionDeg: Number(parsed.dispersionDeg ?? 0),
         });
       } catch (e) {
         reject(new Error(`tilt-detect parse failed: ${e}`));

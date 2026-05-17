@@ -12,32 +12,97 @@ vi.mock('../src/config/env.js', () => ({
 }));
 
 import { describe, expect, it } from 'vitest';
-import { shouldAutoRotate, shouldSkipOptimization } from '../src/services/processingService.js';
+import {
+  buildRotateFilterChain,
+  shouldAutoRotate,
+  shouldSkipOptimization,
+} from '../src/services/processingService.js';
 
 describe('shouldAutoRotate', () => {
-  it('fires when |tilt| > 5 and linesScored >= 3', () => {
-    expect(shouldAutoRotate({ tiltDeg: 7, linesScored: 5 })).toBe(true);
+  const baseGood = { linesScored: 15, dispersionDeg: 1.2 };
+
+  it('fires when |tilt| is in (5, 8] with strong confident evidence', () => {
+    expect(shouldAutoRotate({ ...baseGood, tiltDeg: 7 })).toBe(true);
   });
-  it('fires on negative tilt (|tilt| > 5)', () => {
-    expect(shouldAutoRotate({ tiltDeg: -8, linesScored: 10 })).toBe(true);
+  it('fires on negative tilt within the band', () => {
+    expect(shouldAutoRotate({ ...baseGood, tiltDeg: -7 })).toBe(true);
   });
-  it('does not fire when |tilt| is 5 (strict >)', () => {
-    expect(shouldAutoRotate({ tiltDeg: 5, linesScored: 20 })).toBe(false);
+  it('fires exactly at the 8° upper cap', () => {
+    expect(shouldAutoRotate({ ...baseGood, tiltDeg: 8 })).toBe(true);
   });
-  it('does not fire when |tilt| is -5 (strict >)', () => {
-    expect(shouldAutoRotate({ tiltDeg: -5, linesScored: 20 })).toBe(false);
+  it('does not fire when |tilt| is 5 (strict lower >)', () => {
+    expect(shouldAutoRotate({ ...baseGood, tiltDeg: 5 })).toBe(false);
   });
-  it('does not fire when linesScored is 2 (needs >= 3)', () => {
-    expect(shouldAutoRotate({ tiltDeg: 10, linesScored: 2 })).toBe(false);
+  it('does not fire when |tilt| is -5 (strict lower >)', () => {
+    expect(shouldAutoRotate({ ...baseGood, tiltDeg: -5 })).toBe(false);
   });
-  it('fires when linesScored is exactly 3 (inclusive lower bound)', () => {
-    expect(shouldAutoRotate({ tiltDeg: 10, linesScored: 3 })).toBe(true);
+  it('does not fire when |tilt| exceeds 8° cap (perspective territory)', () => {
+    expect(shouldAutoRotate({ ...baseGood, tiltDeg: 9 })).toBe(false);
+  });
+  it('rejects the 952e1bf8 false-positive case (20° with 973 confident lines)', () => {
+    expect(
+      shouldAutoRotate({ tiltDeg: -19.97, linesScored: 973, dispersionDeg: 0.5 }),
+    ).toBe(false);
+  });
+  it('does not fire when linesScored is below 10', () => {
+    expect(shouldAutoRotate({ ...baseGood, linesScored: 8, tiltDeg: 7 })).toBe(false);
+  });
+  it('fires when linesScored is exactly 10 (inclusive lower bound)', () => {
+    expect(shouldAutoRotate({ ...baseGood, linesScored: 10, tiltDeg: 7 })).toBe(true);
+  });
+  it('does not fire when dispersionDeg ≥ 2.5 (lines disagree)', () => {
+    expect(shouldAutoRotate({ ...baseGood, tiltDeg: 7, dispersionDeg: 5 })).toBe(false);
+  });
+  it('does not fire when dispersionDeg is missing (defaults to Infinity)', () => {
+    expect(shouldAutoRotate({ tiltDeg: 7, linesScored: 15 })).toBe(false);
   });
   it('does not fire when already autoRotated', () => {
-    expect(shouldAutoRotate({ autoRotated: true, tiltDeg: 10, linesScored: 20 })).toBe(false);
+    expect(shouldAutoRotate({ ...baseGood, autoRotated: true, tiltDeg: 7 })).toBe(false);
   });
-  it('does not fire on null fields', () => {
+  it('does not fire on empty input', () => {
     expect(shouldAutoRotate({})).toBe(false);
+  });
+});
+
+describe('buildRotateFilterChain', () => {
+  function parseScaleFactor(scaleStr: string): number {
+    // "scale=trunc(iw*1.151.../2)*2:trunc(ih*1.151.../2)*2"
+    const m = scaleStr.match(/iw\*([0-9.]+)\//);
+    if (!m) throw new Error(`Could not parse scale factor from ${scaleStr}`);
+    return Number(m[1]);
+  }
+
+  it('emits a [scale, rotate] pair that crops back to source dimensions', () => {
+    const chain = buildRotateFilterChain(0.1, 1920, 1080);
+    expect(chain).toHaveLength(2);
+    expect(chain[0]).toMatch(/^scale=trunc\(iw\*/);
+    expect(chain[1]).toMatch(/^rotate=0\.1:ow=1920:oh=1080:c=black$/);
+  });
+
+  it('scale factor matches M = |cos θ| + |sin θ| * (long/short)', () => {
+    const rad = (7 * Math.PI) / 180;
+    const expected = Math.cos(rad) + Math.sin(rad) * (1920 / 1080);
+    const M = parseScaleFactor(buildRotateFilterChain(rad, 1920, 1080)[0]);
+    expect(M).toBeCloseTo(expected, 6);
+  });
+
+  it('is sign-independent (clockwise and counter-clockwise zoom identically)', () => {
+    const M_pos = parseScaleFactor(buildRotateFilterChain(0.12, 1920, 1080)[0]);
+    const M_neg = parseScaleFactor(buildRotateFilterChain(-0.12, 1920, 1080)[0]);
+    expect(M_pos).toBeCloseTo(M_neg, 10);
+  });
+
+  it('is aspect-orientation symmetric (landscape and portrait zoom identically)', () => {
+    const M_land = parseScaleFactor(buildRotateFilterChain(0.12, 1920, 1080)[0]);
+    const M_port = parseScaleFactor(buildRotateFilterChain(0.12, 1080, 1920)[0]);
+    expect(M_land).toBeCloseTo(M_port, 10);
+  });
+
+  it('M ≈ 1.24 at the 8° upper cap (1920×1080)', () => {
+    const rad = (8 * Math.PI) / 180;
+    const M = parseScaleFactor(buildRotateFilterChain(rad, 1920, 1080)[0]);
+    expect(M).toBeGreaterThan(1.23);
+    expect(M).toBeLessThan(1.25);
   });
 });
 

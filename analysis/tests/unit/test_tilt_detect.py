@@ -8,6 +8,7 @@ import numpy as np
 
 from rallycut.cli.commands.tilt_detect import (
     _near_horizontal_lines,
+    _weighted_mad,
     _weighted_median,
     compute_tilt_from_frames,
 )
@@ -56,17 +57,28 @@ def test_positive_tilt_detected_with_correct_sign():
 
 
 def test_negative_tilt_detected_with_correct_sign():
+    # -10° is now outside the tightened ANGLE_FILTER_DEG=15° band's safe
+    # margin but still within it, so detection should still succeed.
     frame = _black_frame_with_line(-10.0)
     result = compute_tilt_from_frames([frame])
     assert abs(result["tiltDeg"] - (-10.0)) < 1.5
     assert result["linesScored"] >= 1
 
 
+def test_line_beyond_angle_filter_is_rejected():
+    # 20° from horizontal — outside the tightened ANGLE_FILTER_DEG=15° window.
+    # Tightened on 2026-05-17 from 30° to reject perspective-projected lines
+    # in oblique-camera footage (see video 952e1bf8 case).
+    frame = _black_frame_with_line(20.0)
+    result = compute_tilt_from_frames([frame])
+    assert result["tiltDeg"] == 0.0
+    assert result["linesScored"] == 0
+
+
 def test_near_vertical_line_is_filtered_out():
-    # 60° from horizontal — outside the ANGLE_FILTER_DEG=30° window
+    # 60° from horizontal — well outside the ANGLE_FILTER_DEG window.
     frame = _black_frame_with_line(60.0)
     result = compute_tilt_from_frames([frame])
-    # No qualifying lines → no-op response
     assert result["tiltDeg"] == 0.0
     assert result["linesScored"] == 0
 
@@ -75,6 +87,7 @@ def test_empty_input_is_noop():
     result = compute_tilt_from_frames([])
     assert result["tiltDeg"] == 0.0
     assert result["linesScored"] == 0
+    assert result["dispersionDeg"] == 0.0
 
 
 def test_median_across_multiple_frames():
@@ -91,3 +104,25 @@ def test_median_across_multiple_frames():
 def test_near_horizontal_lines_returns_empty_for_blank_frame():
     blank = np.zeros((360, 640, 3), dtype=np.uint8)
     assert _near_horizontal_lines(blank) == []
+
+
+def test_weighted_mad_is_zero_for_unanimous_lines():
+    # All lines agree on 7° → dispersion = 0
+    pairs = [(7.0, 1.0), (7.0, 2.0), (7.0, 3.0)]
+    assert _weighted_mad(pairs, _weighted_median(pairs)) == 0.0
+
+
+def test_weighted_mad_grows_with_spread():
+    tight = [(5.0, 1.0), (5.5, 1.0), (6.0, 1.0), (6.5, 1.0), (7.0, 1.0)]
+    loose = [(0.0, 1.0), (3.0, 1.0), (6.0, 1.0), (9.0, 1.0), (12.0, 1.0)]
+    tight_med = _weighted_median(tight)
+    loose_med = _weighted_median(loose)
+    assert _weighted_mad(tight, tight_med) < _weighted_mad(loose, loose_med)
+
+
+def test_dispersion_is_returned_alongside_tilt():
+    # Multiple consistent lines → low dispersion
+    frames = [_black_frame_with_line(5.0) for _ in range(3)]
+    result = compute_tilt_from_frames(frames)
+    assert "dispersionDeg" in result
+    assert result["dispersionDeg"] < 1.0

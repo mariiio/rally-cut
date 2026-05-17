@@ -12,6 +12,7 @@ Optimizes uploaded videos for web playback:
 from __future__ import annotations
 
 import json
+import math
 import subprocess
 import tempfile
 from pathlib import Path
@@ -256,6 +257,49 @@ def needs_optimization(video_path: Path) -> bool:
         return True
 
 
+def _probe_video_dimensions(video_path: Path) -> tuple[int, int]:
+    """Return (width, height) of the first video stream via ffprobe."""
+    result = subprocess.run(
+        [
+            "ffprobe",
+            "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "json",
+            str(video_path),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    info = json.loads(result.stdout)
+    stream = (info.get("streams") or [{}])[0]
+    width = int(stream.get("width") or 0)
+    height = int(stream.get("height") or 0)
+    if width <= 0 or height <= 0:
+        raise RuntimeError(f"ffprobe returned invalid dimensions for {video_path}")
+    return width, height
+
+
+def _build_rotate_filter_chain(rotation_rad: float, width: int, height: int) -> str:
+    """FFmpeg `scale=...,rotate=...` chain with zoom compensation.
+
+    Scales the source up by `M = |cos θ| + |sin θ| * (long/short)` so that
+    after rotation the inscribed axis-aligned W×H rect exactly fills the
+    output — no black corners. `c=black` is left as a safety net for
+    sub-pixel rounding. Mirrors `buildRotateFilterChain` in
+    `api/src/services/processingService.ts` — keep in sync.
+    """
+    abs_rad = abs(rotation_rad)
+    long_short = max(width, height) / min(width, height)
+    m = math.cos(abs_rad) + math.sin(abs_rad) * long_short
+    return (
+        f"scale=trunc(iw*{m}/2)*2:trunc(ih*{m}/2)*2,"
+        f"rotate={rotation_rad}:ow={width}:oh={height}:c=black"
+    )
+
+
 def optimize_video(
     input_path: Path, output_path: Path, tier: str, rotation_rad: float = 0.0
 ) -> None:
@@ -263,9 +307,10 @@ def optimize_video(
 
     Matches the local FFmpeg invocation in
     `api/src/services/processingService.ts::triggerLocalProcessing`. When
-    `rotation_rad != 0`, appends `-vf rotate=<rad>:ow=iw:oh=ih:c=black` to
-    correct a measured tilt — the rotation_rad is the NEGATIVE of the tilt
-    (correcting, not replicating).
+    `rotation_rad != 0`, prepends a `scale=...,rotate=...` chain that
+    zoom-compensates so the rotated output has no black corners.
+    `rotation_rad` is the NEGATIVE of the measured tilt (correcting, not
+    replicating).
     """
 
     # FFmpeg command for optimization
@@ -289,8 +334,10 @@ def optimize_video(
         "-ac", "2",  # Stereo
     ]
     if rotation_rad != 0.0:
-        cmd.extend(["-vf", f"rotate={rotation_rad}:ow=iw:oh=ih:c=black"])
-        print(f"Applying auto-rotate: {rotation_rad:.4f} rad")
+        width, height = _probe_video_dimensions(input_path)
+        vf = _build_rotate_filter_chain(rotation_rad, width, height)
+        cmd.extend(["-vf", vf])
+        print(f"Applying auto-rotate {rotation_rad:.4f} rad with zoom compensation: {vf}")
     cmd.append(str(output_path))
 
     print(f"Running: {' '.join(cmd)}")

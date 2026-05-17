@@ -108,7 +108,8 @@ export async function generatePosterImmediate(
       tiltResult = await runTiltDetect(inputPath);
       console.log(
         `[TILT] Video ${videoId} tiltDeg=${tiltResult.tiltDeg.toFixed(2)} ` +
-        `linesScored=${tiltResult.linesScored}`,
+        `linesScored=${tiltResult.linesScored} ` +
+        `dispersionDeg=${tiltResult.dispersionDeg.toFixed(2)}`,
       );
     } catch (err) {
       console.log(`[TILT] Failed to detect tilt for ${videoId}:`, err);
@@ -168,6 +169,7 @@ export async function generatePosterImmediate(
           issues: [],
           tiltDeg: tiltResult.tiltDeg,
           linesScored: tiltResult.linesScored,
+          dispersionDeg: tiltResult.dispersionDeg,
           autoRotated: false,
         });
       }
@@ -612,28 +614,38 @@ async function triggerLambdaProcessing(
 
 /**
  * Predicate: should we apply auto-rotation correction during optimize?
- * Fires when |tilt| > 5° AND at least 3 Hough lines supported the measurement
- * AND the video hasn't already been rotated.
  *
- * `tiltDeg` is signed — the rotate filter uses the sign to pick direction, and
- * this predicate takes the absolute value so a video tilted by -7° triggers
- * the fix the same way as one tilted by +7°.
+ * Fires only for SUBTLE, HIGH-CONFIDENCE tilts: |tilt| in (5°, 8°],
+ * supported by ≥10 Hough lines that agree (dispersion < 2.5°), and the
+ * video hasn't already been rotated. `tiltDeg` is signed — the rotate
+ * filter uses the sign to pick direction; this predicate takes the
+ * absolute value so ±7° trigger the fix the same way.
  *
- * Supersedes the original beach-trained court-keypoint approach, whose
- * confidence metric topped out at ~0.6–0.75 on rotated footage (making the
- * 0.8 gate dead code) and which collapsed entirely at >10° tilt. The Hough
- * pipeline is rotation-equivariant and measures to ±0.1° across the full
- * fixture set.
+ * The 8° upper cap exists because the Hough-line detector cannot
+ * distinguish "world-horizontal lines viewed in oblique perspective"
+ * from "actual frame tilt". On sand-level beach footage the net cable,
+ * court boundaries, and building rooflines all project at ~10-20° in
+ * image space, which produced confident false positives (e.g. video
+ * 952e1bf8 was mis-rotated by -20° driven by 973 perspective lines).
+ * Anything beyond ~8° is almost certainly perspective, not real tilt.
+ *
+ * Combined with `ANGLE_FILTER_DEG=15°` in the detector (was 30°), the
+ * line-count floor (was 3), and the dispersion gate (new), false
+ * positives like 952e1bf8 are rejected at multiple stages.
  */
 export function shouldAutoRotate(qr: {
   autoRotated?: boolean;
   tiltDeg?: number | null;
   linesScored?: number | null;
+  dispersionDeg?: number | null;
 }): boolean {
+  const tilt = Math.abs(qr.tiltDeg ?? 0);
   return (
     !qr.autoRotated &&
-    Math.abs(qr.tiltDeg ?? 0) > 5 &&
-    (qr.linesScored ?? 0) >= 3
+    tilt > 5 &&
+    tilt <= 8 &&
+    (qr.linesScored ?? 0) >= 10 &&
+    (qr.dispersionDeg ?? Infinity) < 2.5
   );
 }
 
@@ -753,7 +765,8 @@ async function triggerLocalProcessing(
     console.log(`[LOCAL PROCESSING] Optimizing video ${videoId}${wantsRotate ? ` (auto-rotate ${(qr.tiltDeg ?? 0).toFixed(1)}°)` : ""}...`);
     const vfArgs: string[] = [];
     if (wantsRotate) {
-      vfArgs.push(`rotate=${rotationRad}:ow=iw:oh=ih:c=black`);
+      const { width: srcW, height: srcH } = await probeVideoDimensions(inputPath);
+      vfArgs.push(...buildRotateFilterChain(rotationRad, srcW, srcH));
     }
     await runFFmpeg([
       "-i", inputPath,
@@ -868,6 +881,54 @@ async function triggerLocalProcessing(
       // Ignore cleanup errors
     }
   }
+}
+
+/**
+ * Probe the width/height of a video file via ffprobe. Used by the rotate
+ * filter to compute the zoom-compensation scale factor (which depends on
+ * the source aspect ratio). Throws if the video has no video stream.
+ */
+async function probeVideoDimensions(
+  videoPath: string,
+): Promise<{ width: number; height: number }> {
+  const result = await runFFprobe([
+    "-v", "error",
+    "-select_streams", "v:0",
+    "-show_entries", "stream=width,height",
+    "-of", "json",
+    videoPath,
+  ]);
+  const info = JSON.parse(result);
+  const stream = info?.streams?.[0];
+  const width = Number(stream?.width);
+  const height = Number(stream?.height);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    throw new Error(`ffprobe returned invalid dimensions for ${videoPath}`);
+  }
+  return { width, height };
+}
+
+/**
+ * Compute the FFmpeg `scale=...,rotate=...` filter chain for a rotation by
+ * `rotationRad` of a `width × height` source. Scales the source up by a
+ * factor `M = |cos θ| + |sin θ| * (long/short)` so that after rotation
+ * the inscribed axis-aligned W×H rect exactly fills the output — no
+ * black corners. `c=black` is left as a safety net for sub-pixel rounding.
+ *
+ * Exported for cross-test parity with the Lambda implementation.
+ */
+export function buildRotateFilterChain(
+  rotationRad: number,
+  width: number,
+  height: number,
+): string[] {
+  const absRad = Math.abs(rotationRad);
+  const longShort = Math.max(width, height) / Math.min(width, height);
+  const M = Math.cos(absRad) + Math.sin(absRad) * longShort;
+  return [
+    `scale=trunc(iw*${M}/2)*2:trunc(ih*${M}/2)*2`,
+    `rotate=${rotationRad}:ow=${width}:oh=${height}:c=black`,
+  ];
 }
 
 /**

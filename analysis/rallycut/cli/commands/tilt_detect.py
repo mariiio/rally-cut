@@ -24,10 +24,13 @@ import cv2
 import numpy as np
 import typer
 
-# Only count lines within this many degrees of horizontal. Generous enough to
-# handle moderate tilts while rejecting obviously non-horizontal edges (court
-# sidelines, player silhouettes).
-ANGLE_FILTER_DEG = 30.0
+# Only count lines within this many degrees of horizontal. The auto-rotate
+# decision predicate caps applied corrections at ±8°, so anything beyond ~15°
+# is either an oblique perspective projection (net cable, court boundary seen
+# from sand level) or a structural edge that doesn't reflect frame tilt.
+# Tightened from 30° on 2026-05-17 after video 952e1bf8 was confidently
+# mis-rotated by -20° driven by hundreds of perspective-projected lines.
+ANGLE_FILTER_DEG = 15.0
 
 # Line must span at least this fraction of the frame's shorter dimension.
 # The beach-VB net top and horizon are both near frame-width; this cutoff
@@ -50,7 +53,7 @@ def tilt_detect(
 
 
 def compute_tilt_from_frames(frames: list[np.ndarray]) -> dict:
-    """Return `{tiltDeg, linesScored}`.
+    """Return `{tiltDeg, linesScored, dispersionDeg}`.
 
     `tiltDeg` is signed: positive = top of the frame is tilted clockwise
     (right side lower than left in image coordinates). A rotation filter
@@ -58,14 +61,24 @@ def compute_tilt_from_frames(frames: list[np.ndarray]) -> dict:
 
     `linesScored` is the total number of near-horizontal line segments
     contributing to the median across all input frames.
+
+    `dispersionDeg` is the length-weighted median absolute deviation of the
+    line angles around `tiltDeg`. Low values mean the supporting lines all
+    agree on the angle; high values mean they disagree. The auto-rotate
+    decision predicate uses this as a confidence gate.
     """
     collected: list[tuple[float, float]] = []  # (angle_deg, length_px)
     for f in frames:
         collected.extend(_near_horizontal_lines(f))
     if not collected:
-        return {"tiltDeg": 0.0, "linesScored": 0}
+        return {"tiltDeg": 0.0, "linesScored": 0, "dispersionDeg": 0.0}
     tilt = _weighted_median(collected)
-    return {"tiltDeg": float(tilt), "linesScored": len(collected)}
+    dispersion = _weighted_mad(collected, tilt)
+    return {
+        "tiltDeg": float(tilt),
+        "linesScored": len(collected),
+        "dispersionDeg": float(dispersion),
+    }
 
 
 def _near_horizontal_lines(bgr: np.ndarray) -> list[tuple[float, float]]:
@@ -127,3 +140,9 @@ def _weighted_median(values_and_weights: list[tuple[float, float]]) -> float:
         if cum >= half:
             return v
     return sorted_pairs[-1][0]
+
+
+def _weighted_mad(values_and_weights: list[tuple[float, float]], center: float) -> float:
+    """Weighted median absolute deviation around `center`."""
+    deviations = [(abs(v - center), w) for v, w in values_and_weights]
+    return _weighted_median(deviations)
