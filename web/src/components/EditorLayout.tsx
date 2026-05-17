@@ -455,7 +455,7 @@ export function EditorLayout({ sessionId, videoId, initialVideoId }: EditorLayou
             {currentMatch && (
               <QualityReportBanner report={currentMatch.qualityReportJson ?? null} videoId={currentMatch.id} />
             )}
-            <AutoFixNote fixes={currentMatch?.qualityReportJson?.autoFixes} />
+            <AutoFixNote fixes={currentMatch?.qualityReportJson?.autoFixes} videoId={currentMatch?.id} />
             {/* Player tracking toolbar */}
             <PlayerTrackingToolbar />
             <Box sx={{ flex: 1, minHeight: 0 }}>
