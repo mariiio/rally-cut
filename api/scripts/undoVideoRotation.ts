@@ -59,13 +59,13 @@ async function downloadFromS3(key: string, destPath: string): Promise<void> {
   await pipeline(Readable.fromWeb(response.body as never), ws);
 }
 
-async function uploadToS3(key: string, data: Buffer): Promise<void> {
+async function uploadToS3(key: string, data: Buffer, contentType: string): Promise<void> {
   await s3.send(
     new PutObjectCommand({
       Bucket: BUCKET,
       Key: key,
       Body: data,
-      ContentType: "video/mp4",
+      ContentType: contentType,
     }),
   );
 }
@@ -97,21 +97,32 @@ async function main(): Promise<void> {
   }
 
   const qr = (video.qualityReportJson as QualityReport | null) ?? null;
-  if (!qr?.autoRotated) {
-    console.error(`Video ${videoId} has autoRotated !== true; nothing to undo`);
+  // Soft precondition: this script exists to re-derive optimize/proxy/poster
+  // from the preserved original. That requires the video to actually HAVE an
+  // original distinct from the current s3Key (i.e. optimization ran at some
+  // point). It does NOT require autoRotated to currently be true — re-runs
+  // are valid (e.g. to regenerate a stale proxy after a partial cleanup).
+  if (!video.originalS3Key || video.originalS3Key === video.s3Key) {
+    console.error(
+      `Video ${videoId}: no separate originalS3Key. Nothing to undo — the ` +
+        `current s3Key already points at the original upload.`,
+    );
     process.exit(1);
   }
-  const straightened = (qr.autoFixes ?? []).find((f) => f.id === "auto_straightened");
+  const straightened = (qr?.autoFixes ?? []).find((f) => f.id === "auto_straightened");
   const originalTilt = straightened?.data?.originalTiltDeg;
-  if (!Number.isFinite(originalTilt)) {
+  if (!qr?.autoRotated && originalTilt == null) {
     console.warn(
-      `Video ${videoId}: no auto_straightened entry with originalTiltDeg; ` +
-        `tiltDeg will be restored to null.`,
+      `Video ${videoId}: autoRotated is already false and no auto_straightened ` +
+        `entry remains. Re-running anyway to re-derive optimize/proxy/poster ` +
+        `from the original.`,
     );
   }
 
   const originalKey = video.originalS3Key ?? video.s3Key;
   const optimizedKey = video.s3Key; // currently points at the rotated _optimized.mp4
+  const proxyKey = video.proxyS3Key; // 720p variant, read first by the web editor
+  const posterKey = video.posterS3Key; // 1280px JPEG thumb
   if (!originalKey || !optimizedKey) {
     console.error(`Video ${videoId} missing s3Key/originalS3Key`);
     process.exit(1);
@@ -120,18 +131,22 @@ async function main(): Promise<void> {
   console.log(`[undo-rotation] video=${videoId}`);
   console.log(`[undo-rotation]   original  = ${originalKey}`);
   console.log(`[undo-rotation]   optimized = ${optimizedKey}`);
+  console.log(`[undo-rotation]   proxy     = ${proxyKey ?? "(none)"}`);
+  console.log(`[undo-rotation]   poster    = ${posterKey ?? "(none)"}`);
   console.log(`[undo-rotation]   was rotated by ${originalTilt ?? "?"}°`);
 
   const tmpDir = path.join(os.tmpdir(), `undo-rotation-${videoId}`);
   await fs.mkdir(tmpDir, { recursive: true });
   const inputPath = path.join(tmpDir, "input.mp4");
   const outputPath = path.join(tmpDir, "output.mp4");
+  const proxyPath = path.join(tmpDir, "proxy.mp4");
+  const posterPath = path.join(tmpDir, "poster.jpg");
 
   try {
     console.log("[undo-rotation] downloading original from S3...");
     await downloadFromS3(originalKey, inputPath);
 
-    console.log("[undo-rotation] re-encoding without rotation...");
+    console.log("[undo-rotation] re-encoding optimized (no rotate)...");
     await runFFmpeg([
       "-i", inputPath,
       "-c:v", "libx264",
@@ -147,10 +162,43 @@ async function main(): Promise<void> {
       "-ac", "2",
       "-y", outputPath,
     ]);
+    console.log(`[undo-rotation] uploading optimized → ${optimizedKey}`);
+    const optimizedData = await fs.readFile(outputPath);
+    await uploadToS3(optimizedKey, optimizedData, "video/mp4");
 
-    console.log(`[undo-rotation] uploading clean optimized to ${optimizedKey}...`);
-    const data = await fs.readFile(outputPath);
-    await uploadToS3(optimizedKey, data);
+    if (proxyKey) {
+      console.log("[undo-rotation] re-encoding 720p proxy (no rotate)...");
+      await runFFmpeg([
+        "-i", outputPath,
+        "-vf", "scale=-2:720",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-crf", "28",
+        "-preset", "fast",
+        "-movflags", "+faststart",
+        "-c:a", "aac",
+        "-b:a", "96k",
+        "-y", proxyPath,
+      ]);
+      console.log(`[undo-rotation] uploading proxy → ${proxyKey}`);
+      const proxyData = await fs.readFile(proxyPath);
+      await uploadToS3(proxyKey, proxyData, "video/mp4");
+    }
+
+    if (posterKey) {
+      console.log("[undo-rotation] regenerating poster (no rotate)...");
+      await runFFmpeg([
+        "-ss", "1",
+        "-i", inputPath,
+        "-vframes", "1",
+        "-vf", "scale=1280:-1",
+        "-q:v", "2",
+        "-y", posterPath,
+      ]);
+      console.log(`[undo-rotation] uploading poster → ${posterKey}`);
+      const posterData = await fs.readFile(posterPath);
+      await uploadToS3(posterKey, posterData, "image/jpeg");
+    }
 
     console.log("[undo-rotation] updating DB (clearing autoRotated + auto_straightened)...");
     await prisma.$transaction(async (tx) => {
@@ -168,7 +216,7 @@ async function main(): Promise<void> {
         where: { id: videoId },
         data: {
           qualityReportJson: updated as unknown as Prisma.InputJsonValue,
-          fileSizeBytes: BigInt(data.length),
+          fileSizeBytes: BigInt(optimizedData.length),
         },
       });
     });
