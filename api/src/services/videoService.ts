@@ -1100,6 +1100,10 @@ export async function getVideoForEditor(videoId: string, userId: string) {
       height: video.height,
       fps: video.fps,
       status: video.status,
+      // Prisma @updatedAt — used by the web client as a cache-busting query
+      // string (`?v=…`) on video/proxy/poster URLs so server-side re-encodes
+      // (e.g. undoVideoRotation) are picked up without manual cache clears.
+      updatedAt: video.updatedAt.toISOString(),
       rallies: transformedRallies,
       cameraSettings: video.cameraSettings[0] ?? null,
       courtCalibrationJson: video.courtCalibrationJson ?? null,

@@ -712,6 +712,10 @@ interface ApiVideoEditorResponse {
     width: number | null;
     height: number | null;
     fps: number | null;
+    // ISO timestamp; appended as `?v=<ms>` to video/proxy/poster URLs so
+    // browsers fetch fresh content after a server-side re-encode instead
+    // of serving the stale cached copy until max-age expires.
+    updatedAt: string;
     rallies: ApiRally[];
     status: 'PENDING' | 'UPLOADED' | 'DETECTING' | 'DETECTED' | 'ERROR';
     cameraSettings?: ApiVideoCameraSettings | null;
@@ -767,10 +771,19 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
   const data: ApiVideoEditorResponse = await response.json();
   const cloudfrontDomain = process.env.NEXT_PUBLIC_CLOUDFRONT_DOMAIN;
 
-  // Build video URLs
+  // Cache-bust by appending the video's updatedAt as a query string. Prisma
+  // auto-touches updatedAt on every video write (including the regen done by
+  // undoVideoRotation.ts), so the URL changes whenever the underlying object
+  // changes — instant client-side cache invalidation regardless of the
+  // server-side Cache-Control max-age. Falls back to no cache-buster if
+  // updatedAt is somehow missing (older API server).
+  const cacheBuster = data.video.updatedAt
+    ? `?v=${encodeURIComponent(new Date(data.video.updatedAt).getTime())}`
+    : '';
   const getUrl = (s3Key: string | null | undefined): string | undefined => {
     if (!s3Key) return undefined;
-    return cloudfrontDomain ? `https://${cloudfrontDomain}/${s3Key}` : `/${s3Key}`;
+    const base = cloudfrontDomain ? `https://${cloudfrontDomain}/${s3Key}` : `/${s3Key}`;
+    return `${base}${cacheBuster}`;
   };
 
   // Use video's actual FPS from API, fall back to 30 if not set
