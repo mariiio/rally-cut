@@ -15,7 +15,6 @@ This script is for production: use ALL available labeled data.
 from __future__ import annotations
 
 import json
-import math
 import os
 import sys
 from collections import defaultdict
@@ -29,7 +28,16 @@ import psycopg
 from sklearn.ensemble import GradientBoostingClassifier
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from rallycut.tracking.match_tracker import build_match_team_assignments  # noqa: E402
+from rallycut.tracking.dynamic_attribution_scorer import (  # noqa: E402
+    FEATURE_NAMES as _INFERENCE_FEATURE_NAMES,
+)
+from rallycut.tracking.dynamic_attribution_scorer import (
+    extract_features,
+    position_from_dict,
+)
+from rallycut.tracking.match_tracker import (  # noqa: E402
+    build_match_team_assignments,
+)
 
 # Net-crossing actions for team-chain forward propagation. Mirrors
 # `_NET_CROSSING_ACTIONS` in rallycut/tracking/action_classifier.py.
@@ -90,201 +98,20 @@ TRUSTED_CODENAMES = (
     "papa", "pepe", "pipi", "popo", "pupu", "veve", "vivi", "vovo",
 )
 FRAME_TOLERANCE = 5
-FEATURE_NAMES = [
-    "bbox_dist", "bbox_area", "bbox_aspect_ratio", "bbox_inside_frame",
-    "velocity_mag", "velocity_toward_ball",
-    "top_y_at_contact", "top_y_change", "height_change",
-    "same_as_prev",  # 1.0 if candidate.tid == previous action's playerTrackId else 0.0
-    # Pose dynamics (v2, 2026-05-15)
-    "wrist_velocity_max", "wrist_to_ball_min", "body_orientation_diff",
-    "arms_raised", "wrist_post_alignment", "pose_confidence_mean",
-    # v2.1 — target ATTACK contest
-    "wrist_y_velocity",
-    # v3 (2026-05-17) — team-awareness; 0.5 = uninformative
-    "team_matches_expected",
-]
-# COCO 17-keypoint indices
-KPT_LEFT_SHOULDER = 5
-KPT_RIGHT_SHOULDER = 6
-KPT_LEFT_WRIST = 9
-KPT_RIGHT_WRIST = 10
-KPT_VIS_THRESHOLD = 0.3
-POSE_WINDOW = 5
+# Re-export the inference feature-names list as the single source of truth.
+# Any FEATURE_NAMES change MUST be made in dynamic_attribution_scorer.py;
+# this training script always trains with whatever feature set inference
+# defines, eliminating drift risk (refactored 2026-05-17, after the
+# triple-duplication risk was flagged in the post-v3.1 audit).
+FEATURE_NAMES = list(_INFERENCE_FEATURE_NAMES)
 ACTION_TYPES = ["SERVE", "RECEIVE", "SET", "ATTACK", "DIG", "BLOCK"]
 MODEL_VERSION = "v1"
 OUTPUT_DIR = Path(__file__).resolve().parents[1] / "weights" / "dynamic_attribution_scorer"
 
 
-def _ball_dist_upper_quarter(p: dict, ball_x: float, ball_y: float) -> float:
-    px = float(p.get("x", 0))
-    py = float(p.get("y", 0)) - float(p.get("height", 0)) * 0.25
-    return math.hypot(px - ball_x, py - ball_y)
-
-
-def _find_pos(positions: list[dict], tid: int, frame: int, tolerance: int = 5) -> dict | None:
-    """Note: tolerance widened from 2 to 5 on 2026-05-14 to address wawa
-    regression (3 of 5 wawa regressions were cases where the GT player was
-    tracked at ±3..±5 of contact but not ±2, making the scorer unable to
-    pick GT). Must stay in lockstep with dynamic_attribution_scorer.py's
-    _find_pos tolerance."""
-    best = None
-    best_delta = tolerance + 1
-    for p in positions:
-        if int(p.get("trackId", -1)) != tid:
-            continue
-        f = int(p.get("frameNumber", -1))
-        delta = abs(f - frame)
-        if delta < best_delta:
-            best_delta = delta
-            best = p
-    return best
-
-
-def _wrist_xy_from_dict(p: dict, which: str) -> tuple[float, float, float] | None:
-    kps = p.get("keypoints")
-    if not kps or len(kps) < 17:
-        return None
-    idx = KPT_LEFT_WRIST if which == "left" else KPT_RIGHT_WRIST
-    kx, ky, kc = kps[idx]
-    if kc < KPT_VIS_THRESHOLD:
-        return None
-    return float(kx), float(ky), float(kc)
-
-
-def _shoulder_xy_from_dict(p: dict, which: str) -> tuple[float, float, float] | None:
-    kps = p.get("keypoints")
-    if not kps or len(kps) < 17:
-        return None
-    idx = KPT_LEFT_SHOULDER if which == "left" else KPT_RIGHT_SHOULDER
-    kx, ky, kc = kps[idx]
-    if kc < KPT_VIS_THRESHOLD:
-        return None
-    return float(kx), float(ky), float(kc)
-
-
-def _compute_pose_features(
-    positions: list[dict], tid: int, contact_frame: int,
-    ball_x: float, ball_y: float,
-    post_ball_x: float | None, post_ball_y: float | None,
-) -> dict[str, float]:
-    """Compute pose features from keypoints stored in positions_json.
-    Mirrors dynamic_attribution_scorer._compute_pose_features. Keep these
-    two functions in lockstep — same feature order, same logic."""
-    track_positions = sorted(
-        [p for p in positions if int(p.get("trackId", -1)) == tid
-         and abs(int(p.get("frameNumber", -1)) - contact_frame) <= POSE_WINDOW],
-        key=lambda p: int(p.get("frameNumber", -1)),
-    )
-    wrist_pos: dict[int, tuple[float, float]] = {}
-    confs: list[float] = []
-    arms_raised_at_contact = 0.0
-    for p in track_positions:
-        fnum = int(p.get("frameNumber", -1))
-        lw = _wrist_xy_from_dict(p, "left")
-        rw = _wrist_xy_from_dict(p, "right")
-        best_w: tuple[float, float] | None = None
-        best_d = float("inf")
-        for w in (lw, rw):
-            if w is None: continue
-            d = math.hypot(w[0] - ball_x, w[1] - ball_y)
-            if d < best_d: best_d = d; best_w = (w[0], w[1])
-            confs.append(w[2])
-        if best_w is not None: wrist_pos[fnum] = best_w
-        ls = _shoulder_xy_from_dict(p, "left")
-        rs = _shoulder_xy_from_dict(p, "right")
-        for s in (ls, rs):
-            if s is not None: confs.append(s[2])
-        if abs(fnum - contact_frame) <= 2:
-            if lw and rw and ls and rs:
-                if lw[1] < ls[1] and rw[1] < rs[1]: arms_raised_at_contact = 1.0
-
-    if not wrist_pos and not confs:
-        return {
-            "wrist_velocity_max": 0.0, "wrist_to_ball_min": 1.0,
-            "body_orientation_diff": math.pi, "arms_raised": 0.0,
-            "wrist_post_alignment": 0.0, "pose_confidence_mean": 0.0,
-            "wrist_y_velocity": 0.0,
-        }
-    sorted_frames = sorted(wrist_pos.keys())
-    wrist_velocity_max = 0.0
-    wrist_y_velocity_at_contact = 0.0
-    best_vel = None
-    for i in range(len(sorted_frames) - 1):
-        f1, f2 = sorted_frames[i], sorted_frames[i + 1]
-        if f2 - f1 > 3: continue
-        x1, y1 = wrist_pos[f1]; x2, y2 = wrist_pos[f2]
-        gap = max(1, f2 - f1)
-        d = math.hypot(x2 - x1, y2 - y1) / gap
-        if d > wrist_velocity_max: wrist_velocity_max = d
-        if min(abs(f1 - contact_frame), abs(f2 - contact_frame)) <= 2:
-            dy_pf = (y2 - y1) / gap
-            if abs(dy_pf) > abs(wrist_y_velocity_at_contact): wrist_y_velocity_at_contact = dy_pf
-        # Track best velocity vector for post-alignment computation
-        dx_t, dy_t = x2 - x1, y2 - y1
-        d_t = math.hypot(dx_t, dy_t)
-        if best_vel is None or d_t > best_vel[2]:
-            best_vel = (dx_t, dy_t, d_t)
-
-    wrist_to_ball_min = float("inf")
-    for f, (wx, wy) in wrist_pos.items():
-        if abs(f - contact_frame) <= 2:
-            d = math.hypot(wx - ball_x, wy - ball_y)
-            if d < wrist_to_ball_min: wrist_to_ball_min = d
-    if not math.isfinite(wrist_to_ball_min): wrist_to_ball_min = 1.0
-
-    body_orientation_diff = math.pi
-    p_contact = next((p for p in track_positions if abs(int(p.get("frameNumber",-1)) - contact_frame) <= 1), None)
-    if p_contact is not None:
-        ls = _shoulder_xy_from_dict(p_contact, "left")
-        rs = _shoulder_xy_from_dict(p_contact, "right")
-        if ls and rs:
-            sx = rs[0] - ls[0]; sy = rs[1] - ls[1]
-            facing_x = -sy; facing_y = sx
-            torso_x = (ls[0] + rs[0]) / 2; torso_y = (ls[1] + rs[1]) / 2
-            to_ball_x = ball_x - torso_x; to_ball_y = ball_y - torso_y
-            mag_f = math.hypot(facing_x, facing_y) + 1e-6
-            mag_b = math.hypot(to_ball_x, to_ball_y) + 1e-6
-            cos_theta = (facing_x * to_ball_x + facing_y * to_ball_y) / (mag_f * mag_b)
-            cos_theta = max(-1.0, min(1.0, cos_theta))
-            body_orientation_diff = math.acos(cos_theta)
-
-    wrist_post_alignment = 0.0
-    if (post_ball_x is not None and post_ball_y is not None
-            and best_vel is not None and best_vel[2] > 0):
-        ball_dx = post_ball_x - ball_x
-        ball_dy = post_ball_y - ball_y
-        ball_mag = math.hypot(ball_dx, ball_dy) + 1e-6
-        wrist_post_alignment = ((best_vel[0] * ball_dx + best_vel[1] * ball_dy)
-                                 / (best_vel[2] * ball_mag))
-
-    pose_confidence_mean = (sum(confs) / len(confs)) if confs else 0.0
-    return {
-        "wrist_velocity_max": wrist_velocity_max,
-        "wrist_to_ball_min": wrist_to_ball_min,
-        "body_orientation_diff": body_orientation_diff,
-        "arms_raised": arms_raised_at_contact,
-        "wrist_post_alignment": wrist_post_alignment,
-        "pose_confidence_mean": pose_confidence_mean,
-        "wrist_y_velocity": wrist_y_velocity_at_contact,
-    }
-
-
-def _team_match_feature_train(
-    tid: int,
-    expected_team: int | None,
-    team_assignments: dict[int, int] | None,
-) -> float:
-    """Mirrors dynamic_attribution_scorer._team_match_feature exactly."""
-    if expected_team is None or team_assignments is None:
-        return 0.5
-    cand_team = team_assignments.get(tid)
-    if cand_team is None:
-        return 0.5
-    return 1.0 if int(cand_team) == int(expected_team) else 0.0
-
-
 def _compute_features(
-    positions: list[dict], tid: int, contact_frame: int,
+    positions_like: list,  # list[PlayerPositionLike]
+    tid: int, contact_frame: int,
     ball_x: float, ball_y: float,
     prev_action_tid: int = -1,
     post_ball_x: float | None = None,
@@ -292,60 +119,26 @@ def _compute_features(
     expected_team: int | None = None,
     team_assignments: dict[int, int] | None = None,
 ) -> list[float] | None:
-    p_at = _find_pos(positions, tid, contact_frame, tolerance=5)
-    if p_at is None:
-        return None
-    p_prev = _find_pos(positions, tid, contact_frame - 5, tolerance=5)
-    p_next = _find_pos(positions, tid, contact_frame + 5, tolerance=5)
-    p_pre_extend = _find_pos(positions, tid, contact_frame - 3, tolerance=5)
-    p_post_extend = _find_pos(positions, tid, contact_frame + 3, tolerance=5)
-    x = float(p_at.get("x", 0))
-    y = float(p_at.get("y", 0))
-    w = float(p_at.get("width", 0))
-    h = float(p_at.get("height", 0))
-    bbox_dist = _ball_dist_upper_quarter(p_at, ball_x, ball_y)
-    bbox_area = w * h
-    bbox_aspect_ratio = w / max(h, 1e-6)
-    inside = 1.0 if (x >= 0 and y >= 0 and x + w <= 1.0 and y + h <= 1.0) else 0.0
-    if p_prev and p_next:
-        cx_prev = float(p_prev.get("x", 0)) + float(p_prev.get("width", 0)) / 2
-        cy_prev = float(p_prev.get("y", 0)) + float(p_prev.get("height", 0)) / 2
-        cx_next = float(p_next.get("x", 0)) + float(p_next.get("width", 0)) / 2
-        cy_next = float(p_next.get("y", 0)) + float(p_next.get("height", 0)) / 2
-        dx = cx_next - cx_prev
-        dy = cy_next - cy_prev
-        velocity_mag = math.hypot(dx, dy)
-        cx_at = x + w / 2
-        cy_at = y + h / 2
-        to_ball_x = ball_x - cx_at
-        to_ball_y = ball_y - cy_at
-        to_ball_mag = math.hypot(to_ball_x, to_ball_y) + 1e-6
-        velocity_toward_ball = (dx * to_ball_x + dy * to_ball_y) / to_ball_mag
-    else:
-        velocity_mag = 0.0
-        velocity_toward_ball = 0.0
-    top_y_change = y - float(p_prev.get("y", y)) if p_prev else 0.0
-    if p_pre_extend and p_post_extend:
-        height_change = float(p_post_extend.get("height", h)) - float(p_pre_extend.get("height", h))
-    else:
-        height_change = 0.0
-    same_as_prev = 1.0 if (prev_action_tid >= 0 and tid == prev_action_tid) else 0.0
-    pose = _compute_pose_features(
-        positions, tid, contact_frame, ball_x, ball_y,
-        post_ball_x, post_ball_y,
+    """Compute feature vector for one candidate at one contact.
+
+    Refactored 2026-05-17 (post-v3.1 audit): delegates to inference's
+    `extract_features` to eliminate the triple-duplication risk. The
+    previous ~200-line duplicate implementation here drifted from the
+    inference module silently. Now the inference module is the single
+    source of truth; this script's training distribution can never
+    diverge from the inference distribution.
+    """
+    cf = extract_features(
+        positions_like, tid, contact_frame, ball_x, ball_y,
+        prev_action_tid=prev_action_tid,
+        post_ball_x=post_ball_x,
+        post_ball_y=post_ball_y,
+        expected_team=expected_team,
+        team_assignments=team_assignments,
     )
-    team_match = _team_match_feature_train(tid, expected_team, team_assignments)
-    return [
-        bbox_dist, bbox_area, bbox_aspect_ratio, inside,
-        velocity_mag, velocity_toward_ball,
-        y, top_y_change, height_change,
-        same_as_prev,
-        pose["wrist_velocity_max"], pose["wrist_to_ball_min"],
-        pose["body_orientation_diff"], pose["arms_raised"],
-        pose["wrist_post_alignment"], pose["pose_confidence_mean"],
-        pose["wrist_y_velocity"],
-        team_match,
-    ]
+    if cf is None:
+        return None
+    return cf.as_vector()
 
 
 @dataclass
@@ -411,6 +204,10 @@ def build_dataset() -> list[CandidateRow]:
             if positions_json is None or not isinstance(primary_raw, list) or actions_json is None:
                 continue
             positions = positions_json if isinstance(positions_json, list) else []
+            # Convert once per rally to PlayerPositionLike (the inference
+            # module's input type), so all downstream feature computations
+            # share the inference module's logic.
+            positions_like = [position_from_dict(p) for p in positions]
             primary_tids = [int(t) for t in primary_raw]
             aj = json.loads(actions_json) if isinstance(actions_json, str) else actions_json
             actions = aj.get("actions") or []
@@ -505,7 +302,7 @@ def build_dataset() -> list[CandidateRow]:
                     expected_team = expected_teams[best_idx]
                 for tid in primary_tids:
                     feats = _compute_features(
-                        positions, tid, pipe_frame,
+                        positions_like, tid, pipe_frame,
                         float(pipe_ball_x), float(pipe_ball_y),
                         prev_action_tid=prev_action_tid,
                         post_ball_x=post_ball_x,

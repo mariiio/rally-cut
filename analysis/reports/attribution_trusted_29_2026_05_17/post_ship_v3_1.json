@@ -1,0 +1,826 @@
+{
+  "totals": {
+    "total": 1252,
+    "correct": 920,
+    "unmatched": 225
+  },
+  "by_action": {
+    "SERVE": {
+      "total": 199,
+      "correct": 123,
+      "unmatched": 53,
+      "accuracy": 61.80904522613066
+    },
+    "RECEIVE": {
+      "total": 193,
+      "correct": 144,
+      "unmatched": 40,
+      "accuracy": 74.61139896373057
+    },
+    "SET": {
+      "total": 278,
+      "correct": 215,
+      "unmatched": 40,
+      "accuracy": 77.33812949640287
+    },
+    "ATTACK": {
+      "total": 356,
+      "correct": 280,
+      "unmatched": 45,
+      "accuracy": 78.65168539325843
+    },
+    "DIG": {
+      "total": 199,
+      "correct": 152,
+      "unmatched": 38,
+      "accuracy": 76.38190954773869
+    },
+    "BLOCK": {
+      "total": 27,
+      "correct": 6,
+      "unmatched": 9,
+      "accuracy": 22.22222222222222
+    }
+  },
+  "by_video": {
+    "titi": {
+      "total": 86,
+      "correct": 71,
+      "accuracy": 82.55813953488372
+    },
+    "toto": {
+      "total": 58,
+      "correct": 47,
+      "accuracy": 81.03448275862068
+    },
+    "lulu": {
+      "total": 37,
+      "correct": 27,
+      "accuracy": 72.97297297297297
+    },
+    "wawa": {
+      "total": 45,
+      "correct": 27,
+      "accuracy": 60.0
+    },
+    "caco": {
+      "total": 22,
+      "correct": 19,
+      "accuracy": 86.36363636363636
+    },
+    "cece": {
+      "total": 29,
+      "correct": 21,
+      "accuracy": 72.41379310344827
+    },
+    "cici": {
+      "total": 42,
+      "correct": 37,
+      "accuracy": 88.09523809523809
+    },
+    "cuco": {
+      "total": 48,
+      "correct": 39,
+      "accuracy": 81.25
+    },
+    "gaga": {
+      "total": 48,
+      "correct": 33,
+      "accuracy": 68.75
+    },
+    "kaka": {
+      "total": 74,
+      "correct": 54,
+      "accuracy": 72.97297297297297
+    },
+    "kiki": {
+      "total": 54,
+      "correct": 36,
+      "accuracy": 66.66666666666666
+    },
+    "juju": {
+      "total": 80,
+      "correct": 59,
+      "accuracy": 73.75
+    },
+    "yeye": {
+      "total": 80,
+      "correct": 53,
+      "accuracy": 66.25
+    },
+    "keke": {
+      "total": 52,
+      "correct": 23,
+      "accuracy": 44.230769230769226
+    },
+    "gigi": {
+      "total": 56,
+      "correct": 37,
+      "accuracy": 66.07142857142857
+    },
+    "gugu": {
+      "total": 27,
+      "correct": 20,
+      "accuracy": 74.07407407407408
+    },
+    "mame": {
+      "total": 17,
+      "correct": 14,
+      "accuracy": 82.35294117647058
+    },
+    "meme": {
+      "total": 35,
+      "correct": 31,
+      "accuracy": 88.57142857142857
+    },
+    "mimi": {
+      "total": 25,
+      "correct": 20,
+      "accuracy": 80.0
+    },
+    "moma": {
+      "total": 34,
+      "correct": 22,
+      "accuracy": 64.70588235294117
+    },
+    "mumu": {
+      "total": 30,
+      "correct": 26,
+      "accuracy": 86.66666666666667
+    },
+    "papa": {
+      "total": 44,
+      "correct": 31,
+      "accuracy": 70.45454545454545
+    },
+    "pepe": {
+      "total": 45,
+      "correct": 35,
+      "accuracy": 77.77777777777779
+    },
+    "pipi": {
+      "total": 33,
+      "correct": 28,
+      "accuracy": 84.84848484848484
+    },
+    "popo": {
+      "total": 34,
+      "correct": 24,
+      "accuracy": 70.58823529411765
+    },
+    "pupu": {
+      "total": 36,
+      "correct": 27,
+      "accuracy": 75.0
+    },
+    "veve": {
+      "total": 39,
+      "correct": 31,
+      "accuracy": 79.48717948717949
+    },
+    "vivi": {
+      "total": 15,
+      "correct": 9,
+      "accuracy": 60.0
+    },
+    "vovo": {
+      "total": 27,
+      "correct": 19,
+      "accuracy": 70.37037037037037
+    }
+  },
+  "by_video_action": {
+    "titi|SERVE": {
+      "total": 11,
+      "correct": 8
+    },
+    "titi|RECEIVE": {
+      "total": 11,
+      "correct": 8
+    },
+    "titi|SET": {
+      "total": 18,
+      "correct": 16
+    },
+    "titi|ATTACK": {
+      "total": 27,
+      "correct": 21
+    },
+    "titi|DIG": {
+      "total": 17,
+      "correct": 16
+    },
+    "titi|BLOCK": {
+      "total": 2,
+      "correct": 2
+    },
+    "toto|SERVE": {
+      "total": 11,
+      "correct": 7
+    },
+    "toto|RECEIVE": {
+      "total": 9,
+      "correct": 8
+    },
+    "toto|SET": {
+      "total": 11,
+      "correct": 10
+    },
+    "toto|ATTACK": {
+      "total": 17,
+      "correct": 16
+    },
+    "toto|DIG": {
+      "total": 8,
+      "correct": 6
+    },
+    "toto|BLOCK": {
+      "total": 2,
+      "correct": 0
+    },
+    "lulu|SERVE": {
+      "total": 9,
+      "correct": 7
+    },
+    "lulu|RECEIVE": {
+      "total": 7,
+      "correct": 4
+    },
+    "lulu|SET": {
+      "total": 6,
+      "correct": 6
+    },
+    "lulu|ATTACK": {
+      "total": 9,
+      "correct": 7
+    },
+    "lulu|DIG": {
+      "total": 6,
+      "correct": 3
+    },
+    "wawa|SERVE": {
+      "total": 6,
+      "correct": 3
+    },
+    "wawa|RECEIVE": {
+      "total": 7,
+      "correct": 5
+    },
+    "wawa|SET": {
+      "total": 12,
+      "correct": 6
+    },
+    "wawa|ATTACK": {
+      "total": 14,
+      "correct": 8
+    },
+    "wawa|DIG": {
+      "total": 6,
+      "correct": 5
+    },
+    "caco|SERVE": {
+      "total": 3,
+      "correct": 2
+    },
+    "caco|RECEIVE": {
+      "total": 3,
+      "correct": 3
+    },
+    "caco|SET": {
+      "total": 5,
+      "correct": 5
+    },
+    "caco|ATTACK": {
+      "total": 5,
+      "correct": 5
+    },
+    "caco|DIG": {
+      "total": 4,
+      "correct": 4
+    },
+    "caco|BLOCK": {
+      "total": 2,
+      "correct": 0
+    },
+    "cece|SERVE": {
+      "total": 5,
+      "correct": 2
+    },
+    "cece|RECEIVE": {
+      "total": 5,
+      "correct": 2
+    },
+    "cece|SET": {
+      "total": 5,
+      "correct": 3
+    },
+    "cece|ATTACK": {
+      "total": 9,
+      "correct": 9
+    },
+    "cece|DIG": {
+      "total": 5,
+      "correct": 5
+    },
+    "cici|SERVE": {
+      "total": 5,
+      "correct": 5
+    },
+    "cici|RECEIVE": {
+      "total": 7,
+      "correct": 7
+    },
+    "cici|SET": {
+      "total": 12,
+      "correct": 10
+    },
+    "cici|ATTACK": {
+      "total": 12,
+      "correct": 9
+    },
+    "cici|DIG": {
+      "total": 6,
+      "correct": 6
+    },
+    "cuco|SERVE": {
+      "total": 7,
+      "correct": 4
+    },
+    "cuco|RECEIVE": {
+      "total": 7,
+      "correct": 6
+    },
+    "cuco|SET": {
+      "total": 11,
+      "correct": 11
+    },
+    "cuco|ATTACK": {
+      "total": 15,
+      "correct": 13
+    },
+    "cuco|DIG": {
+      "total": 8,
+      "correct": 5
+    },
+    "gaga|SERVE": {
+      "total": 5,
+      "correct": 3
+    },
+    "gaga|RECEIVE": {
+      "total": 6,
+      "correct": 4
+    },
+    "gaga|SET": {
+      "total": 13,
+      "correct": 8
+    },
+    "gaga|ATTACK": {
+      "total": 14,
+      "correct": 12
+    },
+    "gaga|DIG": {
+      "total": 10,
+      "correct": 6
+    },
+    "kaka|SERVE": {
+      "total": 14,
+      "correct": 9
+    },
+    "kaka|RECEIVE": {
+      "total": 12,
+      "correct": 10
+    },
+    "kaka|SET": {
+      "total": 18,
+      "correct": 14
+    },
+    "kaka|ATTACK": {
+      "total": 20,
+      "correct": 13
+    },
+    "kaka|DIG": {
+      "total": 9,
+      "correct": 8
+    },
+    "kaka|BLOCK": {
+      "total": 1,
+      "correct": 0
+    },
+    "kiki|SERVE": {
+      "total": 8,
+      "correct": 6
+    },
+    "kiki|RECEIVE": {
+      "total": 8,
+      "correct": 6
+    },
+    "kiki|SET": {
+      "total": 11,
+      "correct": 7
+    },
+    "kiki|ATTACK": {
+      "total": 16,
+      "correct": 11
+    },
+    "kiki|DIG": {
+      "total": 9,
+      "correct": 6
+    },
+    "kiki|BLOCK": {
+      "total": 2,
+      "correct": 0
+    },
+    "juju|SERVE": {
+      "total": 14,
+      "correct": 10
+    },
+    "juju|RECEIVE": {
+      "total": 13,
+      "correct": 11
+    },
+    "juju|SET": {
+      "total": 17,
+      "correct": 15
+    },
+    "juju|ATTACK": {
+      "total": 21,
+      "correct": 18
+    },
+    "juju|DIG": {
+      "total": 10,
+      "correct": 3
+    },
+    "juju|BLOCK": {
+      "total": 5,
+      "correct": 2
+    },
+    "yeye|SERVE": {
+      "total": 10,
+      "correct": 6
+    },
+    "yeye|RECEIVE": {
+      "total": 9,
+      "correct": 4
+    },
+    "yeye|SET": {
+      "total": 18,
+      "correct": 12
+    },
+    "yeye|ATTACK": {
+      "total": 25,
+      "correct": 20
+    },
+    "yeye|DIG": {
+      "total": 17,
+      "correct": 11
+    },
+    "yeye|BLOCK": {
+      "total": 1,
+      "correct": 0
+    },
+    "keke|SERVE": {
+      "total": 8,
+      "correct": 3
+    },
+    "keke|RECEIVE": {
+      "total": 8,
+      "correct": 6
+    },
+    "keke|SET": {
+      "total": 11,
+      "correct": 3
+    },
+    "keke|ATTACK": {
+      "total": 15,
+      "correct": 6
+    },
+    "keke|DIG": {
+      "total": 10,
+      "correct": 5
+    },
+    "gigi|SERVE": {
+      "total": 7,
+      "correct": 3
+    },
+    "gigi|RECEIVE": {
+      "total": 7,
+      "correct": 5
+    },
+    "gigi|SET": {
+      "total": 12,
+      "correct": 9
+    },
+    "gigi|ATTACK": {
+      "total": 17,
+      "correct": 11
+    },
+    "gigi|DIG": {
+      "total": 10,
+      "correct": 8
+    },
+    "gigi|BLOCK": {
+      "total": 3,
+      "correct": 1
+    },
+    "gugu|SERVE": {
+      "total": 5,
+      "correct": 5
+    },
+    "gugu|RECEIVE": {
+      "total": 5,
+      "correct": 3
+    },
+    "gugu|SET": {
+      "total": 6,
+      "correct": 2
+    },
+    "gugu|ATTACK": {
+      "total": 6,
+      "correct": 5
+    },
+    "gugu|DIG": {
+      "total": 5,
+      "correct": 5
+    },
+    "mame|SERVE": {
+      "total": 4,
+      "correct": 2
+    },
+    "mame|RECEIVE": {
+      "total": 4,
+      "correct": 3
+    },
+    "mame|SET": {
+      "total": 4,
+      "correct": 4
+    },
+    "mame|ATTACK": {
+      "total": 5,
+      "correct": 5
+    },
+    "meme|SERVE": {
+      "total": 8,
+      "correct": 7
+    },
+    "meme|RECEIVE": {
+      "total": 8,
+      "correct": 8
+    },
+    "meme|SET": {
+      "total": 6,
+      "correct": 4
+    },
+    "meme|ATTACK": {
+      "total": 9,
+      "correct": 8
+    },
+    "meme|DIG": {
+      "total": 4,
+      "correct": 4
+    },
+    "mimi|SERVE": {
+      "total": 5,
+      "correct": 2
+    },
+    "mimi|RECEIVE": {
+      "total": 5,
+      "correct": 4
+    },
+    "mimi|SET": {
+      "total": 6,
+      "correct": 6
+    },
+    "mimi|ATTACK": {
+      "total": 6,
+      "correct": 6
+    },
+    "mimi|DIG": {
+      "total": 2,
+      "correct": 2
+    },
+    "mimi|BLOCK": {
+      "total": 1,
+      "correct": 0
+    },
+    "moma|SERVE": {
+      "total": 5,
+      "correct": 5
+    },
+    "moma|RECEIVE": {
+      "total": 5,
+      "correct": 3
+    },
+    "moma|SET": {
+      "total": 9,
+      "correct": 7
+    },
+    "moma|ATTACK": {
+      "total": 8,
+      "correct": 4
+    },
+    "moma|DIG": {
+      "total": 4,
+      "correct": 3
+    },
+    "moma|BLOCK": {
+      "total": 3,
+      "correct": 0
+    },
+    "mumu|SERVE": {
+      "total": 6,
+      "correct": 3
+    },
+    "mumu|RECEIVE": {
+      "total": 6,
+      "correct": 5
+    },
+    "mumu|SET": {
+      "total": 8,
+      "correct": 8
+    },
+    "mumu|ATTACK": {
+      "total": 8,
+      "correct": 8
+    },
+    "mumu|DIG": {
+      "total": 2,
+      "correct": 2
+    },
+    "papa|SERVE": {
+      "total": 7,
+      "correct": 3
+    },
+    "papa|RECEIVE": {
+      "total": 6,
+      "correct": 3
+    },
+    "papa|SET": {
+      "total": 8,
+      "correct": 6
+    },
+    "papa|ATTACK": {
+      "total": 13,
+      "correct": 12
+    },
+    "papa|DIG": {
+      "total": 9,
+      "correct": 7
+    },
+    "papa|BLOCK": {
+      "total": 1,
+      "correct": 0
+    },
+    "pepe|SERVE": {
+      "total": 8,
+      "correct": 3
+    },
+    "pepe|RECEIVE": {
+      "total": 8,
+      "correct": 8
+    },
+    "pepe|SET": {
+      "total": 9,
+      "correct": 9
+    },
+    "pepe|ATTACK": {
+      "total": 13,
+      "correct": 10
+    },
+    "pepe|DIG": {
+      "total": 7,
+      "correct": 5
+    },
+    "pipi|SERVE": {
+      "total": 4,
+      "correct": 2
+    },
+    "pipi|RECEIVE": {
+      "total": 4,
+      "correct": 4
+    },
+    "pipi|SET": {
+      "total": 7,
+      "correct": 7
+    },
+    "pipi|ATTACK": {
+      "total": 10,
+      "correct": 9
+    },
+    "pipi|DIG": {
+      "total": 8,
+      "correct": 6
+    },
+    "popo|SERVE": {
+      "total": 6,
+      "correct": 3
+    },
+    "popo|RECEIVE": {
+      "total": 6,
+      "correct": 2
+    },
+    "popo|SET": {
+      "total": 8,
+      "correct": 6
+    },
+    "popo|ATTACK": {
+      "total": 9,
+      "correct": 9
+    },
+    "popo|DIG": {
+      "total": 4,
+      "correct": 4
+    },
+    "popo|BLOCK": {
+      "total": 1,
+      "correct": 0
+    },
+    "pupu|SERVE": {
+      "total": 5,
+      "correct": 3
+    },
+    "pupu|RECEIVE": {
+      "total": 5,
+      "correct": 3
+    },
+    "pupu|SET": {
+      "total": 8,
+      "correct": 7
+    },
+    "pupu|ATTACK": {
+      "total": 11,
+      "correct": 8
+    },
+    "pupu|DIG": {
+      "total": 5,
+      "correct": 5
+    },
+    "pupu|BLOCK": {
+      "total": 2,
+      "correct": 1
+    },
+    "veve|SERVE": {
+      "total": 6,
+      "correct": 5
+    },
+    "veve|RECEIVE": {
+      "total": 6,
+      "correct": 5
+    },
+    "veve|SET": {
+      "total": 9,
+      "correct": 8
+    },
+    "veve|ATTACK": {
+      "total": 11,
+      "correct": 7
+    },
+    "veve|DIG": {
+      "total": 6,
+      "correct": 6
+    },
+    "veve|BLOCK": {
+      "total": 1,
+      "correct": 0
+    },
+    "vivi|SERVE": {
+      "total": 3,
+      "correct": 1
+    },
+    "vivi|RECEIVE": {
+      "total": 3,
+      "correct": 2
+    },
+    "vivi|SET": {
+      "total": 3,
+      "correct": 0
+    },
+    "vivi|ATTACK": {
+      "total": 4,
+      "correct": 4
+    },
+    "vivi|DIG": {
+      "total": 2,
+      "correct": 2
+    },
+    "vovo|SERVE": {
+      "total": 4,
+      "correct": 1
+    },
+    "vovo|RECEIVE": {
+      "total": 3,
+      "correct": 2
+    },
+    "vovo|SET": {
+      "total": 7,
+      "correct": 6
+    },
+    "vovo|ATTACK": {
+      "total": 7,
+      "correct": 6
+    },
+    "vovo|DIG": {
+      "total": 6,
+      "correct": 4
+    }
+  }
+}
