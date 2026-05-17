@@ -42,7 +42,14 @@ logger = logging.getLogger(__name__)
 #          seq-anchored rescue, deduplication, _resolve_court_side, the
 #          GBM classifier wiring, or any helper that changes the
 #          serialized output.
-CONTACT_PIPELINE_VERSION = "v1"
+#  - v2: 2026-05-17 — direction-change-maximum frame snap. Each detected
+#          contact's frame is refined to the local trajectory bend apex
+#          within ±10 frames (post-filter, bounded by adjacent contacts).
+#          Fixes the systematic 6-9 frame early-placement bias measured
+#          on trusted-29 (93% of NEAR_PIPELINE_CONTACT cases were
+#          pipeline-early). Spec:
+#          analysis/reports/contact_fn_trusted29_2026_05_17/findings.md
+CONTACT_PIPELINE_VERSION = "v2"
 
 # Minimum confidence to treat a ball position as a real detection.
 # Ball detector confidence is bimodal: either 0.0 (no detection) or >=0.3 (confident).
@@ -2379,6 +2386,111 @@ def _prepare_candidates(
     )
 
 
+def _snap_contacts_to_direction_change_max(
+    contacts: list[Contact],
+    ball_by_frame: dict[int, BallPosition],
+    window: int = 10,
+    neighbor_step: int = 3,
+    min_snap_angle_deg: float = 30.0,
+    min_improvement_ratio: float = 1.5,
+) -> int:
+    """Refine each contact's frame to the local ball-trajectory direction-
+    change MAXIMUM within ±window frames.
+
+    Rationale (contact_fn_investigation_2026_05_17): on trusted-29, 93% of
+    cases where the pipeline correctly detected the contact but placed it
+    >5 frames from GT had the pipeline frame placed EARLY — at the start
+    of the direction change, not at its apex. The candidate generators
+    (direction_change, inflection, velocity_peak, parabolic, etc.) fire
+    on the FIRST frame meeting their threshold, which is typically a few
+    frames before the actual impact moment.
+
+    The actual impact moment is when the trajectory bends sharpest — i.e.,
+    the local maximum of the angle between (ball[f-step] → ball[f]) and
+    (ball[f] → ball[f+step]).
+
+    Snapping the contact frame to this maximum is bounded by `window` so
+    contacts can't drift arbitrarily far. The snap also respects adjacent
+    contact boundaries: the snap target must remain strictly between
+    neighboring contacts' frames.
+
+    Mutates `contacts` in place. Updates `frame`, `ball_x`, `ball_y`.
+    Returns the number of contacts whose frame changed.
+
+    Validated: simulated on 112 NEAR_PIPELINE_CONTACT trusted-29 cases →
+    87 (78%) end up within ±5 frames of GT after snap, vs 0 before.
+    """
+    if not contacts or not ball_by_frame:
+        return 0
+
+    sorted_contacts = sorted(contacts, key=lambda c: c.frame)
+    n_changed = 0
+    for i, contact in enumerate(sorted_contacts):
+        orig_frame = contact.frame
+        # Bound search by adjacent contacts so we don't merge them.
+        lo_bound = sorted_contacts[i - 1].frame + 1 if i > 0 else orig_frame - window
+        hi_bound = sorted_contacts[i + 1].frame - 1 if i + 1 < len(sorted_contacts) else orig_frame + window
+        lo = max(orig_frame - window, lo_bound)
+        hi = min(orig_frame + window, hi_bound)
+        if hi < lo:
+            continue
+
+        best_frame = orig_frame
+        best_angle = -1.0
+        orig_angle = -1.0  # angle at the original frame (for improvement test)
+        for f in range(lo, hi + 1):
+            prev = ball_by_frame.get(f - neighbor_step)
+            cur = ball_by_frame.get(f)
+            nxt = ball_by_frame.get(f + neighbor_step)
+            if prev is None or cur is None or nxt is None:
+                continue
+            v1x = cur.x - prev.x
+            v1y = cur.y - prev.y
+            v2x = nxt.x - cur.x
+            v2y = nxt.y - cur.y
+            m1 = math.hypot(v1x, v1y)
+            m2 = math.hypot(v2x, v2y)
+            if m1 < 1e-4 or m2 < 1e-4:
+                # No clear pre or post motion (e.g., serve toss before
+                # contact). Skip — can't measure bend.
+                continue
+            cos_t = (v1x * v2x + v1y * v2y) / (m1 * m2)
+            cos_t = max(-1.0, min(1.0, cos_t))
+            angle = math.degrees(math.acos(cos_t))
+            if f == orig_frame:
+                orig_angle = angle
+            if angle > best_angle:
+                best_angle = angle
+                best_frame = f
+
+        # Guards against over-aggressive snapping (added 2026-05-17 after
+        # initial A/B showed +24 SERVE unmatched due to snap moving
+        # serve contacts to spurious mid-flight bends):
+        # 1. Must have a clear bend (>= min_snap_angle_deg).
+        # 2. If we're moving, the new angle must be at least
+        #    min_improvement_ratio× the angle at the original frame
+        #    (don't move based on marginal improvements).
+        if best_frame == orig_frame or best_angle < min_snap_angle_deg:
+            continue
+        if orig_angle > 0 and best_angle < min_improvement_ratio * orig_angle:
+            continue
+
+        new_ball = ball_by_frame.get(best_frame)
+        if new_ball is not None:
+            contact.frame = best_frame
+            contact.ball_x = new_ball.x
+            contact.ball_y = new_ball.y
+            n_changed += 1
+
+    if n_changed:
+        contacts.sort(key=lambda c: c.frame)
+        logger.info(
+            f"Snapped {n_changed}/{len(contacts)} contact frames to "
+            "trajectory direction-change maxima",
+        )
+    return n_changed
+
+
 def detect_contacts(
     ball_positions: list[BallPosition],
     player_positions: list[PlayerPosition] | None = None,
@@ -2918,6 +3030,16 @@ def detect_contacts(
                 f"Seq-anchored rescue: +{n_seq_rescued} contacts "
                 f"(from {len(pending_seq_anchored_rescue)} rejected candidates)"
             )
+
+    # Snap each contact's frame to the local ball-trajectory direction-change
+    # maximum (the actual moment of impact). Empirically determined 2026-05-17:
+    # contact candidates fire at the START of the direction change (~6-9
+    # frames before GT in 93% of NEAR cases on trusted-29), while the actual
+    # contact moment is at the APEX of the bend. Snapping recovers ~78% of
+    # placement-off cases — see contact_fn_investigation_2026_05_17.md.
+    _snap_contacts_to_direction_change_max(
+        contacts, ball_by_frame, window=10,
+    )
 
     # Deduplicate contacts from proximity + standard candidates at similar frames
     pre_dedup = len(contacts)
