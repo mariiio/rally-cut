@@ -52,6 +52,14 @@ FEATURE_NAMES = (
     "pose_confidence_mean",
     # v2.1 (2026-05-15): target ATTACK contest residual
     "wrist_y_velocity",  # vertical wrist velocity at contact; attacker descends, blocker stays
+    # v3 (2026-05-17): team-awareness — 63% of v2 ATTACK errors were CROSS_TEAM
+    # picks where the scorer chose the blocker on the opposite team. Without
+    # a team-context signal the scorer can't distinguish "geometrically
+    # similar near-ball candidate" from "actual attacker on the right team".
+    # 1.0 if candidate's team matches the team-chain expected team for this
+    # action, 0.0 if mismatched, 0.5 if uninformative (no team chain or no
+    # team assignment for this candidate).
+    "team_matches_expected",
 )
 
 # COCO 17-keypoint indices used in pose features.
@@ -91,6 +99,8 @@ class CandidateFeatures:
     pose_confidence_mean: float = 0.0
     # v2.1
     wrist_y_velocity: float = 0.0
+    # v3 — default 0.5 = uninformative (no team chain or no assignment)
+    team_matches_expected: float = 0.5
 
     def as_vector(self) -> list[float]:
         return [
@@ -111,6 +121,7 @@ class CandidateFeatures:
             self.wrist_post_alignment,
             self.pose_confidence_mean,
             self.wrist_y_velocity,
+            self.team_matches_expected,
         ]
 
 
@@ -173,6 +184,25 @@ def _bbox_upper_quarter_dist(p: PlayerPositionLike, ball_x: float, ball_y: float
     return math.hypot(px - ball_x, py - ball_y)
 
 
+def _team_match_feature(
+    track_id: int,
+    expected_team: int | None,
+    team_assignments: dict[int, int] | None,
+) -> float:
+    """0.5 = uninformative, 1.0 = candidate's team matches expected, 0.0 = mismatch.
+
+    The default-0.5 fallback ensures the scorer gets no team signal (rather
+    than a misleading one) when the team-chain is broken or the candidate
+    has no team assignment.
+    """
+    if expected_team is None or team_assignments is None:
+        return 0.5
+    cand_team = team_assignments.get(track_id)
+    if cand_team is None:
+        return 0.5
+    return 1.0 if int(cand_team) == int(expected_team) else 0.0
+
+
 def extract_features(
     positions: list[PlayerPositionLike],
     track_id: int,
@@ -182,6 +212,8 @@ def extract_features(
     prev_action_tid: int = -1,
     post_ball_x: float | None = None,
     post_ball_y: float | None = None,
+    expected_team: int | None = None,
+    team_assignments: dict[int, int] | None = None,
 ) -> CandidateFeatures | None:
     """Compute the 9-feature vector for one candidate at one contact.
 
@@ -243,6 +275,9 @@ def extract_features(
         positions, track_id, contact_frame, ball_x, ball_y,
         post_ball_x, post_ball_y,
     )
+    team_matches_expected = _team_match_feature(
+        track_id, expected_team, team_assignments,
+    )
     return CandidateFeatures(
         track_id=track_id,
         bbox_dist=bbox_dist,
@@ -255,6 +290,7 @@ def extract_features(
         top_y_change=top_y_change,
         height_change=height_change,
         same_as_prev=same_as_prev,
+        team_matches_expected=team_matches_expected,
         **pose,
     )
 
@@ -542,11 +578,12 @@ _singleton: DynamicAttributionScorer | None = None
 def get_scorer(models_dir: Path | str | None = None) -> DynamicAttributionScorer | None:
     """Return the process-wide scorer if env flag enables it AND models exist.
 
-    Env flag: `USE_DYNAMIC_ATTRIBUTION_SCORER` ∈ {"1", "true"} to enable.
+    Env flag: `USE_DYNAMIC_ATTRIBUTION_SCORER` — default "1" (ON) as of v3.1
+    ship (2026-05-17). Set to "0" / "false" / "no" to disable for rollback.
     """
     import os
 
-    enabled = os.environ.get("USE_DYNAMIC_ATTRIBUTION_SCORER", "0").lower() in ("1", "true", "yes")
+    enabled = os.environ.get("USE_DYNAMIC_ATTRIBUTION_SCORER", "1").lower() in ("1", "true", "yes")
     if not enabled:
         return None
     global _singleton

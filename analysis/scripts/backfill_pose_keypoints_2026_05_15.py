@@ -38,6 +38,7 @@ TRUSTED_CODENAMES = (
     "titi", "toto", "lulu", "wawa", "caco", "cece", "cici", "cuco",
     "gaga", "kaka", "kiki", "juju", "yeye", "keke",
     "gigi", "gugu", "mame", "meme", "mimi", "moma", "mumu",
+    "papa", "pepe", "pipi", "popo", "pupu", "veve", "vivi", "vovo",
 )
 VIDEOS_DIR = Path("/tmp/rca_videos")
 WINDOW_HALF = 5

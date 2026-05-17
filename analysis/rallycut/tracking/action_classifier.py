@@ -52,7 +52,12 @@ logger = logging.getLogger(__name__)
 #          synthetic-serve placement helpers, or any classifier dependency
 #          that materially changes the serialized output.
 # v2 (2026-05-13): Rule 3 dedupes synth+real serve pairs symmetrically (WS-B).
-ACTION_PIPELINE_VERSION = "v2"
+# v3 (2026-05-17): Default ON for dynamic-attribution scorer with v3.1
+#          team-awareness (SET-masked). +5.7pp matched attribution on
+#          trusted-29 (83.9 → 89.6%), LOO 88.6% (generalizes), coherence
+#          violations −24 total (C-5 −35 cross-team wins). Spec:
+#          docs/superpowers/specs/2026-05-14-dynamic-attribution-scorer-design.md
+ACTION_PIPELINE_VERSION = "v3"
 
 # Cached default action type classifier (loaded once from disk on first use)
 _default_action_classifier_cache: dict[str, ActionTypeClassifier | None] = {}
@@ -3606,6 +3611,7 @@ def _apply_dynamic_scorer_attribution(
     contacts: list[Contact],
     player_positions: list[PlayerPosition],
     ball_positions: list[BallPosition] | None = None,
+    team_assignments: dict[int, int] | None = None,
 ) -> int:
     """Re-attribute actions using the per-action-type dynamic-feature scorer.
 
@@ -3653,6 +3659,20 @@ def _apply_dynamic_scorer_attribution(
     if ball_positions:
         for b in ball_positions:
             ball_by_frame[b.frame_number] = b
+    # v3: precompute team-chain expected teams once per rally. None entries
+    # mean the chain is broken at that index → scorer gets the 0.5
+    # uninformative default for team_matches_expected.
+    expected_teams: list[int | None] = (
+        _compute_expected_teams(actions, team_assignments or {})
+        if team_assignments else [None] * len(actions)
+    )
+    # v3.1 (2026-05-17 refinement): mask team_matches_expected for SET. The
+    # empirical A/B showed SET regressed −2.1pp matched under v3 because
+    # the team-chain cascade propagates upstream RECEIVE errors into the
+    # SET pick. ATTACK / DIG / RECEIVE benefited; SET specifically suffers
+    # from the cascade. Mask by passing expected_team=None for SET so
+    # the feature defaults to 0.5 (uninformative).
+    team_feature_masked_actions = {ActionType.SET}
     n_swapped = 0
     for i, action in enumerate(actions):
         if action.confidence < 0.3:
@@ -3686,12 +3706,18 @@ def _apply_dynamic_scorer_attribution(
                 break
         # Build CandidateFeatures for each primary track in candidates.
         feats: list[CandidateFeatures] = []
+        expected_for_this = (
+            None if action.action_type in team_feature_masked_actions
+            else expected_teams[i]
+        )
         for tid, _dist in contact.player_candidates:
             f = extract_features(pp_like, int(tid), action.frame,
                                  action.ball_x, action.ball_y,
                                  prev_action_tid=prev_action_tid,
                                  post_ball_x=post_ball_x,
-                                 post_ball_y=post_ball_y)
+                                 post_ball_y=post_ball_y,
+                                 expected_team=expected_for_this,
+                                 team_assignments=team_assignments)
             if f is not None:
                 feats.append(f)
         # Coverage gate: only override when the scorer has features for at
@@ -3958,6 +3984,7 @@ def classify_rally_actions(
         result.actions, contact_sequence.contacts,
         contact_sequence.player_positions,
         ball_positions=contact_sequence.ball_positions,
+        team_assignments=reattrib_teams,
     )
 
     # Visual attribution pass (overrides proximity-based attribution)

@@ -28,6 +28,54 @@ import numpy as np
 import psycopg
 from sklearn.ensemble import GradientBoostingClassifier
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from rallycut.tracking.match_tracker import build_match_team_assignments  # noqa: E402
+
+# Net-crossing actions for team-chain forward propagation. Mirrors
+# `_NET_CROSSING_ACTIONS` in rallycut/tracking/action_classifier.py.
+_NET_CROSSING = {"SERVE", "ATTACK"}
+
+
+def _compute_expected_teams_train(
+    actions: list[dict], team_assignments: dict[int, int] | None,
+) -> list[int | None]:
+    """Mirror `_compute_expected_teams` from action_classifier.py for training.
+
+    Returns parallel list of team-chain-derived expected team (0 or 1) per
+    action; None where the chain can't be determined (no SERVE, or before
+    the seeding SERVE, or chain broken by UNKNOWN / non-seed synthetic).
+    """
+    expected: list[int | None] = [None] * len(actions)
+    if not team_assignments:
+        return expected
+    serve_team: int | None = None
+    for a in actions:
+        if (a.get("action") or "").upper() != "SERVE":
+            continue
+        tid = int(a.get("playerTrackId", -1))
+        if tid < 0:
+            continue
+        st = team_assignments.get(tid)
+        if st is not None:
+            serve_team = int(st)
+            break
+    if serve_team is None:
+        return expected
+    current_team = serve_team
+    for i, a in enumerate(actions):
+        at = (a.get("action") or "").upper()
+        if at == "UNKNOWN" or not at:
+            continue
+        if a.get("synthetic") or a.get("isSynthetic"):
+            if at == "SERVE":
+                expected[i] = serve_team
+                current_team = 1 - serve_team
+            continue
+        expected[i] = current_team
+        if at in _NET_CROSSING:
+            current_team = 1 - current_team
+    return expected
+
 DB_DSN = os.environ.get(
     "DATABASE_URL",
     "postgresql://postgres:postgres@localhost:5436/rallycut",
@@ -38,6 +86,8 @@ TRUSTED_CODENAMES = (
     "gaga", "kaka", "kiki", "juju", "yeye", "keke",
     # 7 added 2026-05-15 — trusted-21 corpus
     "gigi", "gugu", "mame", "meme", "mimi", "moma", "mumu",
+    # 8 added 2026-05-17 — trusted-29 corpus
+    "papa", "pepe", "pipi", "popo", "pupu", "veve", "vivi", "vovo",
 )
 FRAME_TOLERANCE = 5
 FEATURE_NAMES = [
@@ -50,6 +100,8 @@ FEATURE_NAMES = [
     "arms_raised", "wrist_post_alignment", "pose_confidence_mean",
     # v2.1 — target ATTACK contest
     "wrist_y_velocity",
+    # v3 (2026-05-17) — team-awareness; 0.5 = uninformative
+    "team_matches_expected",
 ]
 # COCO 17-keypoint indices
 KPT_LEFT_SHOULDER = 5
@@ -217,12 +269,28 @@ def _compute_pose_features(
     }
 
 
+def _team_match_feature_train(
+    tid: int,
+    expected_team: int | None,
+    team_assignments: dict[int, int] | None,
+) -> float:
+    """Mirrors dynamic_attribution_scorer._team_match_feature exactly."""
+    if expected_team is None or team_assignments is None:
+        return 0.5
+    cand_team = team_assignments.get(tid)
+    if cand_team is None:
+        return 0.5
+    return 1.0 if int(cand_team) == int(expected_team) else 0.0
+
+
 def _compute_features(
     positions: list[dict], tid: int, contact_frame: int,
     ball_x: float, ball_y: float,
     prev_action_tid: int = -1,
     post_ball_x: float | None = None,
     post_ball_y: float | None = None,
+    expected_team: int | None = None,
+    team_assignments: dict[int, int] | None = None,
 ) -> list[float] | None:
     p_at = _find_pos(positions, tid, contact_frame, tolerance=5)
     if p_at is None:
@@ -266,6 +334,7 @@ def _compute_features(
         positions, tid, contact_frame, ball_x, ball_y,
         post_ball_x, post_ball_y,
     )
+    team_match = _team_match_feature_train(tid, expected_team, team_assignments)
     return [
         bbox_dist, bbox_area, bbox_aspect_ratio, inside,
         velocity_mag, velocity_toward_ball,
@@ -275,6 +344,7 @@ def _compute_features(
         pose["body_orientation_diff"], pose["arms_raised"],
         pose["wrist_post_alignment"], pose["pose_confidence_mean"],
         pose["wrist_y_velocity"],
+        team_match,
     ]
 
 
@@ -284,6 +354,12 @@ class CandidateRow:
     candidate_tid: int
     is_gt: bool
     features: list[float]
+    # Provenance fields (added 2026-05-17 for LOO CV) — pure metadata,
+    # not used in training. Allows the LOO measurement script to
+    # leave-one-video-out and group by GT row identity.
+    video: str = ""
+    rally_id: str = ""
+    gt_frame: int = -1
 
 
 def build_dataset() -> list[CandidateRow]:
@@ -304,6 +380,21 @@ def build_dataset() -> list[CandidateRow]:
     n_gt_matched = 0
     n_gt_skipped_no_match = 0
     with psycopg.connect(DB_DSN) as conn:
+        # Build per-rally team_assignments once for the v3 team-awareness
+        # feature, mirroring what redetect_all_actions does at inference time
+        # (so training distribution matches inference distribution).
+        match_teams_by_rally: dict[str, dict[int, int]] = {}
+        vcur = conn.execute(
+            "SELECT v.match_analysis_json FROM videos v "
+            "WHERE v.name = ANY(%s) AND v.match_analysis_json IS NOT NULL",
+            [list(TRUSTED_CODENAMES)],
+        )
+        for (mj_raw,) in vcur.fetchall():
+            if not mj_raw:
+                continue
+            match_teams_by_rally.update(
+                build_match_team_assignments(mj_raw, min_confidence=0.0)
+            )
         cur = conn.execute(
             """
             SELECT v.name, r.id, pt.primary_track_ids, pt.positions_json,
@@ -323,6 +414,9 @@ def build_dataset() -> list[CandidateRow]:
             primary_tids = [int(t) for t in primary_raw]
             aj = json.loads(actions_json) if isinstance(actions_json, str) else actions_json
             actions = aj.get("actions") or []
+            # v3: team_assignments + expected_teams chain for this rally
+            team_assignments = match_teams_by_rally.get(str(rally_id))
+            expected_teams = _compute_expected_teams_train(actions, team_assignments)
             # Load ball_positions_json for post-contact ball lookup (wrist_post_alignment)
             bcur = conn.execute(
                 "SELECT ball_positions_json FROM player_tracks WHERE rally_id=%s",
@@ -401,6 +495,14 @@ def build_dataset() -> list[CandidateRow]:
                         post_ball_y = float(b.get("y") or 0)
                         break
                 # Use PIPELINE's frame + ball position (production-matched).
+                # v3.1 (2026-05-17): mask team_matches_expected for SET to
+                # avoid the cascade regression (-2.1pp matched under v3).
+                # Must stay in lockstep with _TEAM_FEATURE_MASKED_ACTIONS in
+                # action_classifier.py::_apply_dynamic_scorer_attribution.
+                if gt_action.upper() == "SET":
+                    expected_team = None
+                else:
+                    expected_team = expected_teams[best_idx]
                 for tid in primary_tids:
                     feats = _compute_features(
                         positions, tid, pipe_frame,
@@ -408,6 +510,8 @@ def build_dataset() -> list[CandidateRow]:
                         prev_action_tid=prev_action_tid,
                         post_ball_x=post_ball_x,
                         post_ball_y=post_ball_y,
+                        expected_team=expected_team,
+                        team_assignments=team_assignments,
                     )
                     if feats is None:
                         continue
@@ -416,6 +520,9 @@ def build_dataset() -> list[CandidateRow]:
                         candidate_tid=tid,
                         is_gt=(tid == gt_tid),
                         features=feats,
+                        video=video_name,
+                        rally_id=str(rally_id),
+                        gt_frame=int(gt_frame),
                     ))
     print(f"  GT rows: {n_gt_seen} seen, {n_gt_matched} matched to pipeline action, "
           f"{n_gt_skipped_no_match} skipped (no matching pipeline action / contact-FN)",
@@ -427,7 +534,7 @@ def main() -> int:
     print(f"Output dir: {OUTPUT_DIR}", flush=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    print("Building feature dataset from full trusted-14 corpus…", flush=True)
+    print(f"Building feature dataset from full trusted-{len(TRUSTED_CODENAMES)} corpus…", flush=True)
     rows = build_dataset()
     by_action = defaultdict(list)
     for r in rows:
@@ -447,7 +554,7 @@ def main() -> int:
         "models": {},
         "trained_at": __import__("datetime").datetime.utcnow().isoformat() + "Z",
         "training_notes": (
-            "Trained on FULL trusted-14 corpus (no hold-out). "
+            f"Trained on FULL trusted-{len(TRUSTED_CODENAMES)} corpus (no hold-out). "
             "For honest LOO CV measurements see "
             "scripts/train_dynamic_attribution_scorer_2026_05_14.py."
         ),
