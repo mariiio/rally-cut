@@ -1,5 +1,12 @@
 """Joint Viterbi over (action_type, player_track_id) — task #72.
 
+Env-var probe support (2026-05-17): if `JOINT_VITERBI_TRANSITIONS_PATH`
+is set, load empirical transitions from that JSON file (overrides the
+hand-coded `_TYPICAL_NEXT_GIVEN_PREV` defaults). Used to validate
+whether learned transitions would close the naive-Viterbi vs cascade
+gap before committing to full CRF training.
+
+
 Replaces the cascade of repair rules + scorer + sequence-override with a
 single structured prediction. State per contact is the joint
 (action_type, player_track_id) pair. Emissions combine the action-type
@@ -28,8 +35,11 @@ Architectural design: [[repair_cascade_audit_2026_05_17]]
 """
 from __future__ import annotations
 
+import json
 import math
+import os
 from dataclasses import dataclass
+from pathlib import Path
 
 from rallycut.tracking.action_classifier import ActionType
 
@@ -46,7 +56,35 @@ _NET_CROSSING: set[ActionType] = {ActionType.SERVE, ActionType.ATTACK}
 # matrix is only consulted when team constraints permit the transition
 # (so e.g. SERVE→SERVE same-team is already disallowed by the team
 # constraint and never reaches the typical-transitions lookup).
-_TYPICAL_NEXT_GIVEN_PREV: dict[ActionType, dict[ActionType, float]] = {
+def _load_empirical_transitions_if_available() -> (
+    dict[ActionType, dict[ActionType, float]] | None
+):
+    """If JOINT_VITERBI_TRANSITIONS_PATH env var is set, load empirical
+    transition probs from that JSON. Otherwise return None (caller uses
+    hand-coded defaults)."""
+    path_str = os.environ.get("JOINT_VITERBI_TRANSITIONS_PATH")
+    if not path_str:
+        return None
+    path = Path(path_str)
+    if not path.exists():
+        return None
+    raw = json.loads(path.read_text())
+    out: dict[ActionType, dict[ActionType, float]] = {}
+    name_to_enum = {at.value.upper(): at for at in ActionType}
+    for prev_name, this_dict in raw.items():
+        prev = name_to_enum.get(prev_name.upper())
+        if prev is None:
+            continue
+        out[prev] = {}
+        for this_name, prob in this_dict.items():
+            this = name_to_enum.get(this_name.upper())
+            if this is None:
+                continue
+            out[prev][this] = float(prob)
+    return out
+
+
+_TYPICAL_NEXT_GIVEN_PREV_DEFAULT: dict[ActionType, dict[ActionType, float]] = {
     ActionType.SERVE: {
         ActionType.RECEIVE: 0.85,
         ActionType.DIG: 0.10,  # dig on a hard serve
@@ -86,6 +124,11 @@ _TYPICAL_NEXT_GIVEN_PREV: dict[ActionType, dict[ActionType, float]] = {
         ActionType.RECEIVE: 0.05,
     },
 }
+
+# Load empirical transitions if env override is set; else use defaults.
+_TYPICAL_NEXT_GIVEN_PREV: dict[ActionType, dict[ActionType, float]] = (
+    _load_empirical_transitions_if_available() or _TYPICAL_NEXT_GIVEN_PREV_DEFAULT
+)
 
 # Discounts applied multiplicatively on top of the typical transition.
 _DISCOUNT_SAME_PLAYER_BACK_TO_BACK = 0.05
