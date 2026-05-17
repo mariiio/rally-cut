@@ -675,6 +675,34 @@ class ActionTypeClassifier:
             results.append((classes[best_idx], float(row[best_idx])))
         return results
 
+    def predict_proba(
+        self, features: list[ActionFeatures],
+    ) -> list[dict[str, float]]:
+        """Predict full action-type probability distribution per contact.
+
+        Returns: per-contact dict from action class name → probability.
+        For joint sequence models (task #72 joint Viterbi) that need the
+        full emission distribution, not just the argmax. When the model
+        is untrained or features is empty, returns uniform-zero dicts.
+        """
+        if not self.is_trained or not features:
+            return [{} for _ in features]
+        x_mat = np.array([f.to_array() for f in features])
+        expected = self.model.n_features_in_
+        if x_mat.shape[1] > expected:
+            x_mat = x_mat[:, :expected]
+        # ActionFeatures may contain NaN when ball-tracking or pose data
+        # is incomplete for a contact. sklearn GBM rejects NaN; replace
+        # with 0 (the GBM has learned reasonable splits at 0 since the
+        # training data has many 0-valued features).
+        x_mat = np.nan_to_num(x_mat, nan=0.0)
+        probas = self.model.predict_proba(x_mat)
+        classes = list(self.model.classes_)
+        return [
+            {classes[i]: float(p) for i, p in enumerate(row)}
+            for row in probas
+        ]
+
     def train(
         self,
         x_train: np.ndarray,
