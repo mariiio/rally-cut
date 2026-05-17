@@ -87,9 +87,17 @@ router.get(
       res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
       res.setHeader("Accept-Ranges", "bytes");
 
-      // Cache headers - trimmed videos can be cached for a long time
-      res.setHeader("Cache-Control", "public, max-age=31536000");
-      res.setHeader("ETag", `"${confirmationId}-${filename}"`);
+      // Cache headers - trimmed videos can be cached for a long time.
+      // Use the S3 object's content-MD5 ETag so caches invalidate if the
+      // underlying file is regenerated; see the matching note on the
+      // /videos/ route below.
+      const contentEtag =
+        s3Response.ETag ||
+        (s3Response.LastModified ? `"${s3Response.LastModified.getTime()}"` : null);
+      res.setHeader("Cache-Control", "public, max-age=31536000, must-revalidate");
+      if (contentEtag) {
+        res.setHeader("ETag", contentEtag);
+      }
 
       // Handle range request response
       if (rangeHeader && s3Response.ContentRange) {
@@ -165,12 +173,23 @@ router.get(
       res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
       res.setHeader("Accept-Ranges", "bytes");
 
-      // Cache headers - allow browser to cache video
-      // Use longer cache for optimized videos (filename contains _optimized)
+      // Cache headers - allow browser to cache video.
+      // Use longer cache for optimized variants (filename contains _optimized).
+      // CRITICAL: ETag is derived from the S3 object's content-MD5 (or
+      // LastModified as fallback) so it CHANGES when the underlying file is
+      // regenerated. A static `${videoId}-${filename}` ETag previously caused
+      // stale-cache bugs after server-side re-encodes (e.g. running
+      // `undoVideoRotation.ts` on a video left users seeing the old rotated
+      // proxy until the browser cache expired).
       const isOptimized = filename.includes("_optimized");
       const maxAge = isOptimized ? 31536000 : 86400; // 1 year vs 1 day
-      res.setHeader("Cache-Control", `public, max-age=${maxAge}`);
-      res.setHeader("ETag", `"${videoId}-${filename}"`);
+      const contentEtag =
+        s3Response.ETag ||
+        (s3Response.LastModified ? `"${s3Response.LastModified.getTime()}"` : null);
+      res.setHeader("Cache-Control", `public, max-age=${maxAge}, must-revalidate`);
+      if (contentEtag) {
+        res.setHeader("ETag", contentEtag);
+      }
 
       // Handle range request response
       if (rangeHeader && s3Response.ContentRange) {
