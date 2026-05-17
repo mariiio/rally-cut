@@ -3774,6 +3774,182 @@ def _apply_dynamic_scorer_attribution(
     return n_swapped
 
 
+def _classify_rally_via_joint_viterbi(
+    contact_sequence: ContactSequence,
+    rally_id: str,
+    team_assignments: dict[int, int] | None,
+    calibrator: CourtCalibrator | None = None,
+    camera_height: float = 0.0,
+) -> RallyActions | None:
+    """Phase 1C of task #72: joint Viterbi production integration.
+
+    Builds emissions from the action-type classifier + dynamic
+    attribution scorer, runs joint_viterbi over the joint
+    (action_type, player_track_id) state space, and converts the best
+    path into a RallyActions. Returns None when preconditions fail
+    (scorer unavailable, no contacts, etc.) so the caller can fall back
+    to the cascade.
+
+    This implementation:
+      - Doesn't generate synthetic SERVE actions when the first contact
+        isn't classified as SERVE (cascade does this; Phase 5 will fold
+        synthetic-state insertion into the Viterbi).
+      - Doesn't run visual attribution or MS-TCN++ override (those are
+        external to the Viterbi state space).
+      - Uses ActionTypeClassifier emissions for action types and the
+        dynamic scorer (per-action-type GBM) for player attributions.
+    """
+    try:
+        from rallycut.tracking.action_type_classifier import (
+            extract_action_features,
+        )
+        from rallycut.tracking.dynamic_attribution_scorer import (
+            DynamicAttributionScorer,
+            extract_features,
+            position_from_dict,
+        )
+        from rallycut.tracking.joint_viterbi import (
+            StateCandidate,
+            joint_viterbi,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.debug("Joint Viterbi imports failed: %s", exc)
+        return None
+
+    contacts = list(contact_sequence.contacts)
+    if not contacts:
+        return RallyActions(actions=[], rally_id=rally_id,
+                            team_assignments=team_assignments or {})
+
+    classifier = _get_default_action_classifier()
+    scorer = DynamicAttributionScorer()
+    if not scorer.is_available:
+        return None  # falls back to cascade
+
+    pp_like = []
+    for p in contact_sequence.player_positions or []:
+        # Reuse the inference module's PlayerPositionLike conversion via a
+        # dict round-trip — keeps lockstep with how features are computed.
+        pp_like.append(position_from_dict({
+            "frameNumber": p.frame_number,
+            "trackId": p.track_id,
+            "x": p.x, "y": p.y,
+            "width": p.width, "height": p.height,
+            "keypoints": getattr(p, "keypoints", None),
+        }))
+
+    ball_by_frame = {b.frame_number: b for b in (contact_sequence.ball_positions or [])}
+
+    # Per-contact action-type emissions
+    classifier_probs_per_contact: list[dict[str, float]] = []
+    if classifier is not None and classifier.is_trained:
+        feats = []
+        for i, c in enumerate(contacts):
+            feats.append(extract_action_features(
+                contact=c, index=i, all_contacts=contacts,
+                ball_positions=contact_sequence.ball_positions or [],
+                net_y=contact_sequence.net_y,
+                rally_start_frame=0,
+                team_assignments=team_assignments,
+                player_positions=contact_sequence.player_positions or None,
+                calibrator=calibrator,
+                camera_height=camera_height,
+            ))
+        classifier_probs_per_contact = classifier.predict_proba(feats)
+    else:
+        # Uniform prior over the 6 action types
+        uniform = {at.value: 1.0 / 6 for at in (
+            ActionType.SERVE, ActionType.RECEIVE, ActionType.SET,
+            ActionType.ATTACK, ActionType.DIG, ActionType.BLOCK,
+        )}
+        classifier_probs_per_contact = [uniform for _ in contacts]
+
+    # Per-contact (action_type, player_tid) state candidates
+    emissions_per_contact: list[list[StateCandidate]] = []
+    for i, c in enumerate(contacts):
+        states: list[StateCandidate] = []
+        cand_tids = [int(pc[0]) for pc in c.player_candidates]
+        if not cand_tids:
+            emissions_per_contact.append(states)
+            continue
+
+        prev_action_tid = -1
+        if i > 0 and contacts[i - 1].player_track_id >= 0:
+            prev_action_tid = contacts[i - 1].player_track_id
+
+        post_ball = None
+        for offset in range(5, 16):
+            bp = ball_by_frame.get(c.frame + offset)
+            if bp is not None:
+                post_ball = (bp.x, bp.y)
+                break
+
+        cand_features = []
+        for tid in cand_tids:
+            cf = extract_features(
+                pp_like, tid, c.frame, c.ball_x, c.ball_y,
+                prev_action_tid=prev_action_tid,
+                post_ball_x=(post_ball[0] if post_ball else None),
+                post_ball_y=(post_ball[1] if post_ball else None),
+                expected_team=None,  # team-aware applied via Viterbi transitions, not via feature
+                team_assignments=team_assignments,
+            )
+            if cf is not None:
+                cand_features.append(cf)
+        if not cand_features:
+            emissions_per_contact.append(states)
+            continue
+
+        for at in (ActionType.SERVE, ActionType.RECEIVE, ActionType.SET,
+                   ActionType.ATTACK, ActionType.DIG, ActionType.BLOCK):
+            atp = classifier_probs_per_contact[i].get(at.value, 0.0)
+            if atp <= 0.005:
+                continue
+            scorer_probs = scorer.score(at.value, cand_features)
+            if scorer_probs is None:
+                continue
+            ssum = sum(scorer_probs) or 1.0
+            for cf, sp in zip(cand_features, scorer_probs, strict=False):
+                states.append(StateCandidate(
+                    action_type=at,
+                    player_track_id=cf.track_id,
+                    emission_prob=atp * (sp / ssum),
+                ))
+        emissions_per_contact.append(states)
+
+    if not any(emissions_per_contact):
+        return None
+
+    path = joint_viterbi(
+        emissions_per_contact,
+        team_assignments=team_assignments,
+        seed_serve_team=None,
+    )
+    if not path:
+        return None
+
+    actions: list[ClassifiedAction] = []
+    for c, state in zip(contacts, path, strict=False):
+        actions.append(ClassifiedAction(
+            action_type=state.action_type,
+            frame=c.frame,
+            ball_x=c.ball_x,
+            ball_y=c.ball_y,
+            velocity=c.velocity,
+            player_track_id=state.player_track_id,
+            court_side=c.court_side,
+            confidence=state.emission_prob,
+            is_synthetic=False,
+            team=team_label(state.player_track_id, team_assignments),
+        ))
+
+    return RallyActions(
+        actions=actions,
+        rally_id=rally_id,
+        team_assignments=team_assignments or {},
+    )
+
+
 def classify_rally_actions(
     contact_sequence: ContactSequence,
     rally_id: str = "",
@@ -3860,6 +4036,23 @@ def classify_rally_actions(
         `result.formation_serving_team`) over contact-based serve detection
         when `config.use_formation_serving_team` is True (default).
     """
+    # Phase 1C joint-Viterbi opt-in (task #72). Env-flag gated default
+    # OFF — when ON, route through the joint Viterbi instead of the
+    # cascade below. Falls back to cascade on any precondition failure
+    # (no scorer, no team assignments, etc.) so the flag is safe.
+    import os as _os
+    if _os.environ.get("USE_JOINT_VITERBI", "0").lower() in ("1", "true", "yes"):
+        viterbi_result = _classify_rally_via_joint_viterbi(
+            contact_sequence, rally_id,
+            team_assignments=match_team_assignments or team_assignments,
+            calibrator=calibrator,
+            camera_height=camera_height,
+        )
+        if viterbi_result is not None:
+            return viterbi_result
+        logger.info("Joint Viterbi unavailable for rally %s; falling back to cascade",
+                    rally_id)
+
     # Only re-attribute with match-level teams (high-confidence cross-rally data).
     # Per-rally team_assignments are too unreliable and cause net regressions.
     reattrib_teams = match_team_assignments
