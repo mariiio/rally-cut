@@ -49,7 +49,13 @@ logger = logging.getLogger(__name__)
 #          on trusted-29 (93% of NEAR_PIPELINE_CONTACT cases were
 #          pipeline-early). Spec:
 #          analysis/reports/contact_fn_trusted29_2026_05_17/findings.md
-CONTACT_PIPELINE_VERSION = "v2"
+#  - v3: 2026-05-17 — player-position guard on snap. Snap target frame
+#          must have a player within 0.15 normalized units of the ball
+#          (upper-quarter distance). Prevents snapping to spurious
+#          mid-flight bends where no player is present (e.g. off-screen
+#          serve trajectories). Fixes the 8-case SERVE regression v2
+#          introduced and adds +4pp SERVE matched accuracy on trusted-29.
+CONTACT_PIPELINE_VERSION = "v3"
 
 # Minimum confidence to treat a ball position as a real detection.
 # Ball detector confidence is bimodal: either 0.0 (no detection) or >=0.3 (confident).
@@ -2389,10 +2395,12 @@ def _prepare_candidates(
 def _snap_contacts_to_direction_change_max(
     contacts: list[Contact],
     ball_by_frame: dict[int, BallPosition],
+    player_positions: list[PlayerPosition] | None = None,
     window: int = 10,
     neighbor_step: int = 3,
     min_snap_angle_deg: float = 30.0,
     min_improvement_ratio: float = 1.5,
+    max_player_dist_at_snapped: float = 0.15,
 ) -> int:
     """Refine each contact's frame to the local ball-trajectory direction-
     change MAXIMUM within ±window frames.
@@ -2422,6 +2430,29 @@ def _snap_contacts_to_direction_change_max(
     """
     if not contacts or not ball_by_frame:
         return 0
+
+    # Pre-index player positions by frame for fast nearest-player lookup at
+    # candidate snap targets. The player-position guard prevents snapping
+    # to spurious mid-flight trajectory bends where no player is actually
+    # present (e.g. serve trajectories that curve mid-air with the server
+    # off-screen at the actual contact frame).
+    players_by_frame: dict[int, list[PlayerPosition]] = {}
+    if player_positions:
+        for p in player_positions:
+            players_by_frame.setdefault(int(p.frame_number), []).append(p)
+
+    def _min_player_dist(frame: int, ball: BallPosition) -> float:
+        """Min upper-quarter distance from ball to any player at frame."""
+        ps = players_by_frame.get(frame, [])
+        if not ps:
+            return float("inf")
+        best = float("inf")
+        for p in ps:
+            py_uq = p.y - p.height * 0.25
+            d = math.hypot(p.x - ball.x, py_uq - ball.y)
+            if d < best:
+                best = d
+        return best
 
     sorted_contacts = sorted(contacts, key=lambda c: c.frame)
     n_changed = 0
@@ -2476,11 +2507,25 @@ def _snap_contacts_to_direction_change_max(
             continue
 
         new_ball = ball_by_frame.get(best_frame)
-        if new_ball is not None:
-            contact.frame = best_frame
-            contact.ball_x = new_ball.x
-            contact.ball_y = new_ball.y
-            n_changed += 1
+        if new_ball is None:
+            continue
+
+        # Player-position guard (2026-05-17): the snapped frame must have
+        # a player within `max_player_dist_at_snapped` of the ball. Without
+        # this guard, the snap can move to spurious bends where no player
+        # is present (e.g. ball curving in flight, off-screen server
+        # trajectories). Visually confirmed: serves with off-screen
+        # servers can have their contact "snapped" to mid-flight bends
+        # where no player exists — physically impossible.
+        if players_by_frame:
+            snap_player_dist = _min_player_dist(best_frame, new_ball)
+            if snap_player_dist > max_player_dist_at_snapped:
+                continue
+
+        contact.frame = best_frame
+        contact.ball_x = new_ball.x
+        contact.ball_y = new_ball.y
+        n_changed += 1
 
     if n_changed:
         contacts.sort(key=lambda c: c.frame)
@@ -3038,7 +3083,9 @@ def detect_contacts(
     # contact moment is at the APEX of the bend. Snapping recovers ~78% of
     # placement-off cases — see contact_fn_investigation_2026_05_17.md.
     _snap_contacts_to_direction_change_max(
-        contacts, ball_by_frame, window=10,
+        contacts, ball_by_frame,
+        player_positions=player_positions,
+        window=10,
     )
 
     # Deduplicate contacts from proximity + standard candidates at similar frames
