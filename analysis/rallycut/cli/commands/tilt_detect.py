@@ -53,7 +53,7 @@ def tilt_detect(
 
 
 def compute_tilt_from_frames(frames: list[np.ndarray]) -> dict:
-    """Return `{tiltDeg, linesScored, dispersionDeg}`.
+    """Return `{tiltDeg, linesScored}`.
 
     `tiltDeg` is signed: positive = top of the frame is tilted clockwise
     (right side lower than left in image coordinates). A rotation filter
@@ -61,24 +61,14 @@ def compute_tilt_from_frames(frames: list[np.ndarray]) -> dict:
 
     `linesScored` is the total number of near-horizontal line segments
     contributing to the median across all input frames.
-
-    `dispersionDeg` is the length-weighted median absolute deviation of the
-    line angles around `tiltDeg`. Low values mean the supporting lines all
-    agree on the angle; high values mean they disagree. The auto-rotate
-    decision predicate uses this as a confidence gate.
     """
     collected: list[tuple[float, float]] = []  # (angle_deg, length_px)
     for f in frames:
         collected.extend(_near_horizontal_lines(f))
     if not collected:
-        return {"tiltDeg": 0.0, "linesScored": 0, "dispersionDeg": 0.0}
+        return {"tiltDeg": 0.0, "linesScored": 0}
     tilt = _weighted_median(collected)
-    dispersion = _weighted_mad(collected, tilt)
-    return {
-        "tiltDeg": float(tilt),
-        "linesScored": len(collected),
-        "dispersionDeg": float(dispersion),
-    }
+    return {"tiltDeg": float(tilt), "linesScored": len(collected)}
 
 
 def _near_horizontal_lines(bgr: np.ndarray) -> list[tuple[float, float]]:
@@ -140,9 +130,3 @@ def _weighted_median(values_and_weights: list[tuple[float, float]]) -> float:
         if cum >= half:
             return v
     return sorted_pairs[-1][0]
-
-
-def _weighted_mad(values_and_weights: list[tuple[float, float]], center: float) -> float:
-    """Weighted median absolute deviation around `center`."""
-    deviations = [(abs(v - center), w) for v, w in values_and_weights]
-    return _weighted_median(deviations)

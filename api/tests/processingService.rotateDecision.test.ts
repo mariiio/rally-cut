@@ -19,9 +19,9 @@ import {
 } from '../src/services/processingService.js';
 
 describe('shouldAutoRotate', () => {
-  const baseGood = { linesScored: 15, dispersionDeg: 1.2 };
+  const baseGood = { linesScored: 15 };
 
-  it('fires when |tilt| is in (5, 8] with strong confident evidence', () => {
+  it('fires when |tilt| is in (5, 8] with enough supporting lines', () => {
     expect(shouldAutoRotate({ ...baseGood, tiltDeg: 7 })).toBe(true);
   });
   it('fires on negative tilt within the band', () => {
@@ -39,22 +39,14 @@ describe('shouldAutoRotate', () => {
   it('does not fire when |tilt| exceeds 8° cap (perspective territory)', () => {
     expect(shouldAutoRotate({ ...baseGood, tiltDeg: 9 })).toBe(false);
   });
-  it('rejects the 952e1bf8 false-positive case (20° with 973 confident lines)', () => {
-    expect(
-      shouldAutoRotate({ tiltDeg: -19.97, linesScored: 973, dispersionDeg: 0.5 }),
-    ).toBe(false);
+  it('rejects the 952e1bf8 false-positive case (20° with 973 lines)', () => {
+    expect(shouldAutoRotate({ tiltDeg: -19.97, linesScored: 973 })).toBe(false);
   });
   it('does not fire when linesScored is below 10', () => {
     expect(shouldAutoRotate({ ...baseGood, linesScored: 8, tiltDeg: 7 })).toBe(false);
   });
   it('fires when linesScored is exactly 10 (inclusive lower bound)', () => {
     expect(shouldAutoRotate({ ...baseGood, linesScored: 10, tiltDeg: 7 })).toBe(true);
-  });
-  it('does not fire when dispersionDeg ≥ 2.5 (lines disagree)', () => {
-    expect(shouldAutoRotate({ ...baseGood, tiltDeg: 7, dispersionDeg: 5 })).toBe(false);
-  });
-  it('does not fire when dispersionDeg is missing (defaults to Infinity)', () => {
-    expect(shouldAutoRotate({ tiltDeg: 7, linesScored: 15 })).toBe(false);
   });
   it('does not fire when already autoRotated', () => {
     expect(shouldAutoRotate({ ...baseGood, autoRotated: true, tiltDeg: 7 })).toBe(false);
@@ -103,6 +95,12 @@ describe('buildRotateFilterChain', () => {
     const M = parseScaleFactor(buildRotateFilterChain(rad, 1920, 1080)[0]);
     expect(M).toBeGreaterThan(1.23);
     expect(M).toBeLessThan(1.25);
+  });
+
+  it('throws on invalid dimensions', () => {
+    expect(() => buildRotateFilterChain(0.1, 0, 1080)).toThrow(/invalid dimensions/);
+    expect(() => buildRotateFilterChain(0.1, 1920, -1)).toThrow(/invalid dimensions/);
+    expect(() => buildRotateFilterChain(0.1, NaN, 1080)).toThrow(/invalid dimensions/);
   });
 });
 

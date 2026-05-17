@@ -108,8 +108,7 @@ export async function generatePosterImmediate(
       tiltResult = await runTiltDetect(inputPath);
       console.log(
         `[TILT] Video ${videoId} tiltDeg=${tiltResult.tiltDeg.toFixed(2)} ` +
-        `linesScored=${tiltResult.linesScored} ` +
-        `dispersionDeg=${tiltResult.dispersionDeg.toFixed(2)}`,
+        `linesScored=${tiltResult.linesScored}`,
       );
     } catch (err) {
       console.log(`[TILT] Failed to detect tilt for ${videoId}:`, err);
@@ -169,7 +168,6 @@ export async function generatePosterImmediate(
           issues: [],
           tiltDeg: tiltResult.tiltDeg,
           linesScored: tiltResult.linesScored,
-          dispersionDeg: tiltResult.dispersionDeg,
           autoRotated: false,
         });
       }
@@ -615,37 +613,35 @@ async function triggerLambdaProcessing(
 /**
  * Predicate: should we apply auto-rotation correction during optimize?
  *
- * Fires only for SUBTLE, HIGH-CONFIDENCE tilts: |tilt| in (5°, 8°],
- * supported by ≥10 Hough lines that agree (dispersion < 2.5°), and the
- * video hasn't already been rotated. `tiltDeg` is signed — the rotate
- * filter uses the sign to pick direction; this predicate takes the
- * absolute value so ±7° trigger the fix the same way.
+ * Fires only for SUBTLE tilts: |tilt| in (5°, 8°], supported by ≥10
+ * near-horizontal Hough lines, and the video hasn't already been rotated.
+ * `tiltDeg` is signed — the rotate filter uses the sign to pick direction;
+ * this predicate takes the absolute value so ±7° trigger the fix the
+ * same way.
  *
- * The 8° upper cap exists because the Hough-line detector cannot
- * distinguish "world-horizontal lines viewed in oblique perspective"
+ * The 8° upper cap is the load-bearing defense. The Hough-line detector
+ * cannot distinguish "world-horizontal lines viewed in oblique perspective"
  * from "actual frame tilt". On sand-level beach footage the net cable,
  * court boundaries, and building rooflines all project at ~10-20° in
  * image space, which produced confident false positives (e.g. video
  * 952e1bf8 was mis-rotated by -20° driven by 973 perspective lines).
  * Anything beyond ~8° is almost certainly perspective, not real tilt.
  *
- * Combined with `ANGLE_FILTER_DEG=15°` in the detector (was 30°), the
- * line-count floor (was 3), and the dispersion gate (new), false
- * positives like 952e1bf8 are rejected at multiple stages.
+ * The ≥10-line floor (raised from 3) plus the detector's tightened
+ * `ANGLE_FILTER_DEG=15°` (was 30°) give defensive depth against weak
+ * or perspective-contaminated detections.
  */
 export function shouldAutoRotate(qr: {
   autoRotated?: boolean;
   tiltDeg?: number | null;
   linesScored?: number | null;
-  dispersionDeg?: number | null;
 }): boolean {
   const tilt = Math.abs(qr.tiltDeg ?? 0);
   return (
     !qr.autoRotated &&
     tilt > 5 &&
     tilt <= 8 &&
-    (qr.linesScored ?? 0) >= 10 &&
-    (qr.dispersionDeg ?? Infinity) < 2.5
+    (qr.linesScored ?? 0) >= 10
   );
 }
 
@@ -915,13 +911,19 @@ async function probeVideoDimensions(
  * the inscribed axis-aligned W×H rect exactly fills the output — no
  * black corners. `c=black` is left as a safety net for sub-pixel rounding.
  *
- * Exported for cross-test parity with the Lambda implementation.
+ * Exported so the unit tests can validate the math directly. The matching
+ * Lambda implementation (`_build_rotate_filter_chain` in
+ * `lambda/video-optimize/handler.py`) must stay in sync — they're not
+ * cross-tested, just hand-verified to emit the same filter string.
  */
 export function buildRotateFilterChain(
   rotationRad: number,
   width: number,
   height: number,
 ): string[] {
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    throw new Error(`buildRotateFilterChain: invalid dimensions ${width}×${height}`);
+  }
   const absRad = Math.abs(rotationRad);
   const longShort = Math.max(width, height) / Math.min(width, height);
   const M = Math.cos(absRad) + Math.sin(absRad) * longShort;

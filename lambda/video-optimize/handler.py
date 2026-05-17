@@ -291,6 +291,8 @@ def _build_rotate_filter_chain(rotation_rad: float, width: int, height: int) -> 
     sub-pixel rounding. Mirrors `buildRotateFilterChain` in
     `api/src/services/processingService.ts` — keep in sync.
     """
+    if width <= 0 or height <= 0:
+        raise ValueError(f"_build_rotate_filter_chain: invalid dimensions {width}x{height}")
     abs_rad = abs(rotation_rad)
     long_short = max(width, height) / min(width, height)
     m = math.cos(abs_rad) + math.sin(abs_rad) * long_short

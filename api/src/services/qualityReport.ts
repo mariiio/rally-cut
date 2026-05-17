@@ -38,12 +38,10 @@ export interface QualityReport {
   // frame tilted clockwise in image coordinates). `linesScored` is the
   // number of near-horizontal Hough line segments that supported the
   // tilt measurement — the rotate predicate requires a minimum count
-  // before acting on the signal. `dispersionDeg` is the weighted MAD of
-  // those line angles around `tiltDeg`; low values = lines agree.
+  // before acting on the signal.
   autoRotated?: boolean;
   tiltDeg?: number | null;
   linesScored?: number | null;
-  dispersionDeg?: number | null;
   // Raw court-keypoint detection from the preflight CLI. Drives the
   // auto-save into Video.courtCalibrationJson — `corners` follow the
   // canonical [near-left, near-right, far-right, far-left] order.
@@ -103,8 +101,6 @@ export function mergeQualityReports(reports: Array<Partial<QualityReport>>): Qua
     reports.map((r) => r.tiltDeg).find((v) => v != null) ?? null;
   const linesScored =
     reports.map((r) => r.linesScored).find((v) => v != null) ?? null;
-  const dispersionDeg =
-    reports.map((r) => r.dispersionDeg).find((v) => v != null) ?? null;
   // Last non-null wins — opposite of brightness/resolution/preflight.
   // Court detection is cheap to re-run and reflects what the detector
   // saw on the latest invocation; carrying forward an old snapshot when
@@ -124,7 +120,6 @@ export function mergeQualityReports(reports: Array<Partial<QualityReport>>): Qua
     autoRotated,
     tiltDeg,
     linesScored,
-    dispersionDeg,
     court,
   };
 }

@@ -95,7 +95,6 @@ export interface QualityReport {
   autoRotated?: boolean;
   tiltDeg?: number | null;
   linesScored?: number | null;
-  dispersionDeg?: number | null;
 }
 
 /** A session containing multiple matches */

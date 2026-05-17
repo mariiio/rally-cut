@@ -119,14 +119,11 @@ async function main(): Promise<void> {
     );
   }
 
-  const originalKey = video.originalS3Key ?? video.s3Key;
-  const optimizedKey = video.s3Key; // currently points at the rotated _optimized.mp4
+  // Both non-null and distinct by the precondition above.
+  const originalKey = video.originalS3Key;
+  const optimizedKey = video.s3Key; // currently points at the (possibly bad) _optimized.mp4
   const proxyKey = video.proxyS3Key; // 720p variant, read first by the web editor
   const posterKey = video.posterS3Key; // 1280px JPEG thumb
-  if (!originalKey || !optimizedKey) {
-    console.error(`Video ${videoId} missing s3Key/originalS3Key`);
-    process.exit(1);
-  }
 
   console.log(`[undo-rotation] video=${videoId}`);
   console.log(`[undo-rotation]   original  = ${originalKey}`);
