@@ -292,14 +292,23 @@ def build_dataset() -> list[CandidateRow]:
                         post_ball_y = float(b.get("y") or 0)
                         break
                 # Use PIPELINE's frame + ball position (production-matched).
-                # v3.1 (2026-05-17): mask team_matches_expected for SET to
-                # avoid the cascade regression (-2.1pp matched under v3).
-                # Must stay in lockstep with _TEAM_FEATURE_MASKED_ACTIONS in
-                # action_classifier.py::_apply_dynamic_scorer_attribution.
-                if gt_action.upper() == "SET":
-                    expected_team = None
-                else:
-                    expected_team = expected_teams[best_idx]
+                # v3.2 (2026-05-17): generic candidate-team-uniformity gate.
+                # When the candidate set spans only one team, team_match
+                # provides no discriminating signal — pass None so feature
+                # defaults to 0.5 (uninformative) for all candidates. Must
+                # stay in lockstep with action_classifier.py's
+                # team_aware_is_informative check in
+                # _apply_dynamic_scorer_attribution.
+                candidate_teams = (
+                    {team_assignments.get(t) for t in primary_tids}
+                    if team_assignments else set()
+                )
+                candidate_teams.discard(None)
+                team_aware_is_informative = len(candidate_teams) > 1
+                expected_team = (
+                    expected_teams[best_idx] if team_aware_is_informative
+                    else None
+                )
                 for tid in primary_tids:
                     feats = _compute_features(
                         positions_like, tid, pipe_frame,

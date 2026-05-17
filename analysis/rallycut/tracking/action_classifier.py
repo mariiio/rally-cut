@@ -57,7 +57,14 @@ logger = logging.getLogger(__name__)
 #          trusted-29 (83.9 → 89.6%), LOO 88.6% (generalizes), coherence
 #          violations −24 total (C-5 −35 cross-team wins). Spec:
 #          docs/superpowers/specs/2026-05-14-dynamic-attribution-scorer-design.md
-ACTION_PIPELINE_VERSION = "v3"
+# v4 (2026-05-17): Replace per-action SET-mask with generic
+#          candidate-team-uniformity gate. Same principle (team_match
+#          can't discriminate when all candidates share a team) but
+#          applies uniformly to any action whose candidates are
+#          intra-team. Modest +0.3pp matched accuracy (91.3 → 91.6%
+#          on trusted-29) with RECEIVE +1.3pp showing the gate captures
+#          cases the per-action mask missed.
+ACTION_PIPELINE_VERSION = "v4"
 
 # Cached default action type classifier (loaded once from disk on first use)
 _default_action_classifier_cache: dict[str, ActionTypeClassifier | None] = {}
@@ -3666,13 +3673,16 @@ def _apply_dynamic_scorer_attribution(
         _compute_expected_teams(actions, team_assignments or {})
         if team_assignments else [None] * len(actions)
     )
-    # v3.1 (2026-05-17 refinement): mask team_matches_expected for SET. The
-    # empirical A/B showed SET regressed −2.1pp matched under v3 because
-    # the team-chain cascade propagates upstream RECEIVE errors into the
-    # SET pick. ATTACK / DIG / RECEIVE benefited; SET specifically suffers
-    # from the cascade. Mask by passing expected_team=None for SET so
-    # the feature defaults to 0.5 (uninformative).
-    team_feature_masked_actions = {ActionType.SET}
+    # v3.2 (2026-05-17 refinement, task #71): replace per-action SET-mask
+    # with a generic per-contact uniformity gate. The team_matches_expected
+    # feature can only discriminate among candidates when at least two
+    # teams are represented in the candidate set. When all candidates are
+    # on the same team (typical for SET, occasional for other actions),
+    # the feature is uninformative and pulling on it can mislead the
+    # scorer toward whichever same-team candidate the GBM happened to
+    # learn correlations for during training. Pass expected_team=None in
+    # those cases so the feature defaults to 0.5 (uninformative). The
+    # original v3.1 SET-only mask was a special case of this rule.
     n_swapped = 0
     for i, action in enumerate(actions):
         if action.confidence < 0.3:
@@ -3706,9 +3716,21 @@ def _apply_dynamic_scorer_attribution(
                 break
         # Build CandidateFeatures for each primary track in candidates.
         feats: list[CandidateFeatures] = []
+        # v3.2: gate team_matches_expected by candidate-team uniformity.
+        # When all candidates are on the same team (e.g. an intra-team
+        # SET contest), the feature value is identical for every
+        # candidate and provides no discriminating signal. Pass
+        # expected_team=None so the feature defaults to 0.5 for all,
+        # letting bbox/pose features decide the within-team contest
+        # without team-aware noise.
+        candidate_tids_for_action = [int(tid) for tid, _ in contact.player_candidates]
+        candidate_teams = {
+            team_assignments.get(t) for t in candidate_tids_for_action
+        } if team_assignments else set()
+        candidate_teams.discard(None)
+        team_aware_is_informative = len(candidate_teams) > 1
         expected_for_this = (
-            None if action.action_type in team_feature_masked_actions
-            else expected_teams[i]
+            expected_teams[i] if team_aware_is_informative else None
         )
         for tid, _dist in contact.player_candidates:
             f = extract_features(pp_like, int(tid), action.frame,
