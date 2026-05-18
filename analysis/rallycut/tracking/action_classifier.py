@@ -106,14 +106,30 @@ logger = logging.getLogger(__name__)
 #          (+0.4pp), sanity violations 40→35; per-class action F1
 #          +0.5pp to +7.4pp, 0 classes regress. LOO CV (469 folds):
 #          88.8% (vs Apr-19 baseline ~88.0% on a different dataset).
-#          ms_tcn_production.pt UNCHANGED — the parallel ms_tcn
-#          candidate trained this session (kept at
-#          ms_tcn_v5_candidate.pt) regressed Action Acc -0.8pp /
-#          Attribution -1.1pp / Court-side -1.0pp on the same eval
-#          despite +1.3pp Contact F1 and +2.1pp ATTACK F1, so it was
-#          not promoted. Hybrid team-source implementation:
-#          scripts/train_action_classifier.py (new _apply_snapshot_team_overrides).
-ACTION_PIPELINE_VERSION = "v8"
+#          Initial v8 ship kept ms_tcn_production.pt unchanged
+#          pending re-evaluation; see v9 for the ms_tcn decision.
+# v9 (2026-05-18): Promoted ms_tcn_production.pt to the candidate
+#          trained this session (60 epochs, focal loss, 90/10 random
+#          val split, early-stopped epoch 38 with val_acc 88.1%).
+#          Initial v8 ship deferred ms_tcn because the rate-based
+#          A/B (NEW act + OLD ms_tcn vs NEW act + NEW ms_tcn on
+#          trusted-31) showed Action Acc 88.9→88.1 (-0.8pp) and
+#          Attribution 88.2→87.1 (-1.1pp). The absolute-count diff
+#          tells the opposite story: new ms_tcn finds +39 more
+#          contact TPs (Contact F1 92.5→93.8, Contact Precision flat
+#          at 95.2%), produces +25 more correct action-type labels
+#          and +20 more correct attributions per panel. The
+#          per-class rate dip is denominator inflation from contact
+#          detection improving — marginal recovered contacts have
+#          worse-than-average typing/attribution. Only real
+#          per-class absolute regression is SERVE attribution -4
+#          (out of 228 GT). Net more-correct outputs in production
+#          terms, so promoted. Pre-promotion ms_tcn_production.pt
+#          (Apr-22, md5 a27244ebd09cd921b4fd0116e1f991fe) preserved
+#          at .pre_retrain_2026_05_18 sidecar for revert. Coherence
+#          audit re-run post-promotion (see catalog
+#          reports/coherence_c4_catalog/2026-05-18_post_v9.csv).
+ACTION_PIPELINE_VERSION = "v9"
 
 # Cached default action type classifier (loaded once from disk on first use)
 _default_action_classifier_cache: dict[str, ActionTypeClassifier | None] = {}
