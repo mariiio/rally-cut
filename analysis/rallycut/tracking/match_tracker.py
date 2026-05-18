@@ -980,6 +980,25 @@ class MatchPlayerTracker:
             track_to_player = self._initialize_first_rally(
                 top_tracks, track_avg_y, track_court_sides
             )
+            # F1 (v9): emit a placeholder diagnostic for the seed rally so
+            # `tracker.diagnostics` aligns 1:1 with `results` downstream
+            # (build_team_templates zips them). Pre-v9 the seed never
+            # appended → off-by-one → silent "team-template input length
+            # mismatch" warning → fallback to legacy partition. Cost
+            # matrix is a zero ndarray since there's no Hungarian here.
+            if self.collect_diagnostics:
+                all_player_ids = sorted(self.state.players.keys())
+                self.diagnostics.append(RallyAssignmentDiagnostics(
+                    rally_index=self.rally_count - 1,
+                    cost_matrix=np.zeros(
+                        (len(top_tracks), len(all_player_ids)), dtype=float,
+                    ),
+                    track_ids=list(top_tracks),
+                    player_ids=list(all_player_ids),
+                    track_court_sides=dict(track_court_sides),
+                    assignment=dict(track_to_player),
+                    assignment_margins={},
+                ))
         else:
             # Optional pre-Hungarian within-track split (Task 4, 2026-04-26).
             # Currently a stub — the classifier path was ref-crop-driven and
@@ -3498,6 +3517,134 @@ class MatchPlayerTracker:
         ]
 
 
+# ---------------------------------------------------------------------------
+# Stable-presence appearance filter (F1, MATCHER_VERSION v9)
+# ---------------------------------------------------------------------------
+
+# Drop bbox samples whose aspect ratio is below this. Full-body player
+# bboxes are tall (h/w >= 1.4); below it the crop is a zoomed arm,
+# mid-jump pose, or partial detection.
+APPEARANCE_FILTER_MIN_ASPECT_RATIO = 1.4
+
+# Drop bbox samples whose detection confidence is below this.
+APPEARANCE_FILTER_MIN_CONFIDENCE = 0.5
+
+# Drop bbox samples whose IoU with another primary track at the same
+# frame is >= this. ≥0.3 = significant overlap → player obscured.
+APPEARANCE_FILTER_MAX_OCCLUSION_IOU = 0.3
+
+# Drop bbox samples whose area is below this fraction of the track's
+# median bbox area. Catches motion-blur / partial-detection crops that
+# survive the aspect-ratio gate but still contaminate the appearance
+# signal. Tuned 0.5 to be permissive (only the bottom half of the area
+# distribution is rejected).
+APPEARANCE_FILTER_MIN_AREA_FRACTION = 0.5
+
+# Court-interior gate (asymmetric margins, metres). Beach volleyball
+# allows defensive play behind the baseline (4m) and out-of-bounds chases
+# along the sidelines (2m); a sideline / post bystander is typically well
+# beyond both. Mirrors `is_point_in_court_with_margin` defaults.
+APPEARANCE_FILTER_SIDELINE_MARGIN_M = 2.0
+APPEARANCE_FILTER_BASELINE_MARGIN_M = 4.0
+
+
+def _bbox_iou(a: PlayerPosition, b: PlayerPosition) -> float:
+    """IoU of two PlayerPosition bboxes in normalized image space."""
+    ax1, ay1 = a.x - a.width / 2, a.y - a.height / 2
+    ax2, ay2 = a.x + a.width / 2, a.y + a.height / 2
+    bx1, by1 = b.x - b.width / 2, b.y - b.height / 2
+    bx2, by2 = b.x + b.width / 2, b.y + b.height / 2
+    ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+    ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+    iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
+    inter = iw * ih
+    if inter <= 0:
+        return 0.0
+    area_a = (ax2 - ax1) * (ay2 - ay1)
+    area_b = (bx2 - bx1) * (by2 - by1)
+    union = area_a + area_b - inter
+    return float(inter / union) if union > 0 else 0.0
+
+
+def _foot_in_court(
+    p: PlayerPosition,
+    calibrator: CourtCalibrator | None,
+    *,
+    sideline_margin_m: float = APPEARANCE_FILTER_SIDELINE_MARGIN_M,
+    baseline_margin_m: float = APPEARANCE_FILTER_BASELINE_MARGIN_M,
+) -> bool:
+    """True if bbox foot point projects inside court polygon (with margin).
+
+    When no calibrator is provided, returns True (filter disabled).
+    """
+    if calibrator is None or not calibrator.is_calibrated:
+        return True
+    foot_x = float(p.x)
+    foot_y = float(p.y) + float(p.height) / 2.0
+    try:
+        court_pt = calibrator.image_to_court(
+            (foot_x, foot_y),
+            image_width=1,  # unused; homography operates in normalized coords
+            image_height=1,
+        )
+    except RuntimeError:
+        return True
+    return calibrator.is_point_in_court_with_margin(
+        court_pt,
+        sideline_margin=sideline_margin_m,
+        baseline_margin=baseline_margin_m,
+    )
+
+
+def is_appearance_clean_position(
+    tid: int,
+    p: PlayerPosition,
+    *,
+    primary_by_frame: dict[int, list[tuple[int, PlayerPosition]]],
+    median_area_by_track: dict[int, float],
+    calibrator: CourtCalibrator | None = None,
+) -> bool:
+    """Stable-presence filter for per-rally appearance extraction (F1, v9).
+
+    Returns True iff the position is suitable for inclusion in the
+    per-track appearance sample window. Rejection in order:
+
+    1. Invalid bbox (zero/negative width or height).
+    2. Aspect ratio < ``APPEARANCE_FILTER_MIN_ASPECT_RATIO``.
+    3. Detection confidence < ``APPEARANCE_FILTER_MIN_CONFIDENCE``.
+    4. Bbox area < ``APPEARANCE_FILTER_MIN_AREA_FRACTION`` × this track's
+       median area. Catches motion-blur / partial-detection crops that
+       survive the aspect-ratio gate (added v9).
+    5. Bbox foot point outside court polygon when a calibrator is
+       provided. Asymmetric margins via ``is_point_in_court_with_margin``
+       (added v9).
+    6. IoU >= ``APPEARANCE_FILTER_MAX_OCCLUSION_IOU`` with any other
+       primary track at the same frame.
+
+    The helper is module-level (not closed over) for unit-testability.
+    """
+    if p.width <= 0 or p.height <= 0:
+        return False
+    if (p.height / p.width) < APPEARANCE_FILTER_MIN_ASPECT_RATIO:
+        return False
+    if (p.confidence or 0.0) < APPEARANCE_FILTER_MIN_CONFIDENCE:
+        return False
+    median_area = median_area_by_track.get(tid, 0.0)
+    if median_area > 0:
+        area = float(p.width) * float(p.height)
+        if area < median_area * APPEARANCE_FILTER_MIN_AREA_FRACTION:
+            return False
+    if not _foot_in_court(p, calibrator):
+        return False
+    other_in_frame = primary_by_frame.get(p.frame_number, [])
+    for other_tid, other_p in other_in_frame:
+        if other_tid == tid:
+            continue
+        if _bbox_iou(p, other_p) >= APPEARANCE_FILTER_MAX_OCCLUSION_IOU:
+            return False
+    return True
+
+
 def extract_rally_appearances(
     video_path: Path,
     positions: list[PlayerPosition],
@@ -3507,6 +3654,7 @@ def extract_rally_appearances(
     num_samples: int = 12,
     extract_reid: bool = False,
     reid_model: GeneralReIDModel | None = None,
+    calibrator: CourtCalibrator | None = None,
 ) -> dict[int, TrackAppearanceStats]:
     """
     Extract appearance features from video frames for primary tracks.
@@ -3524,6 +3672,14 @@ def extract_rally_appearances(
         extract_reid: If True, also extract DINOv2 embeddings per track.
         reid_model: Optional GeneralReIDModel for embedding extraction.
             When provided, uses its projection head instead of raw backbone.
+        calibrator: Optional ``CourtCalibrator``. When provided, the
+            stable-presence filter (F1, MATCHER_VERSION v9) drops frames
+            where the bbox foot point is outside the court polygon (with
+            asymmetric ``sideline_margin=2.0``, ``baseline_margin=4.0``
+            metres). Required to reject sideline / post bystanders + off-
+            screen serve entry frames from polluting the appearance
+            sample. When ``None``, falls through to the legacy filter
+            (aspect ratio + confidence + occlusion + area-floor only).
 
     Returns:
         Dict mapping track_id to TrackAppearanceStats with computed averages.
@@ -3544,22 +3700,11 @@ def extract_rally_appearances(
     if not track_positions:
         return {}
 
-    # Quality filter: drop bad-frame samples before they pollute the
-    # per-track aggregated histograms. Without this, the average HSV
-    # signal is contaminated by occluded / cropped / partial-player
-    # frames (visual feedback 2026-05-02 on 5c756c41), making per-track
-    # features non-discriminative across rallies even when players are
-    # visually distinct. We filter on:
-    #   1. Aspect ratio: full-body player bboxes are tall (h/w >= 1.4).
-    #      Squashed bboxes (zoomed arm, mid-jump w/ legs out) are noise.
-    #   2. Detection confidence (>= 0.5).
-    #   3. Occlusion: max IoU with ANY OTHER primary track's bbox at the
-    #      same frame (>= 0.3 = significant overlap → player obscured).
-    # If fewer than 4 clean positions remain after filtering, fall back
-    # to ANY positions (better some signal than none).
-    bbox_min_aspect_ratio = 1.4
-    bbox_min_confidence = 0.5
-    bbox_max_occlusion_iou = 0.3
+    # Stable-presence quality filter (F1, MATCHER_VERSION v9). See
+    # `is_appearance_clean_position` for the rejection criteria; the
+    # closure here just curries the per-rally context for the per-track
+    # call. If fewer than 4 clean positions remain, fall back to ALL
+    # positions so very short tracks still contribute some signal.
 
     # Build a per-frame index of all primary-track bboxes for IoU lookup.
     primary_by_frame: dict[int, list[tuple[int, PlayerPosition]]] = {}
@@ -3567,39 +3712,30 @@ def extract_rally_appearances(
         if p.track_id in primary_set:
             primary_by_frame.setdefault(p.frame_number, []).append((p.track_id, p))
 
-    def _bbox_iou(a: PlayerPosition, b: PlayerPosition) -> float:
-        ax1, ay1 = a.x - a.width / 2, a.y - a.height / 2
-        ax2, ay2 = a.x + a.width / 2, a.y + a.height / 2
-        bx1, by1 = b.x - b.width / 2, b.y - b.height / 2
-        bx2, by2 = b.x + b.width / 2, b.y + b.height / 2
-        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
-        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
-        iw, ih = max(0.0, ix2 - ix1), max(0.0, iy2 - iy1)
-        inter = iw * ih
-        if inter <= 0:
-            return 0.0
-        area_a = (ax2 - ax1) * (ay2 - ay1)
-        area_b = (bx2 - bx1) * (by2 - by1)
-        union = area_a + area_b - inter
-        return float(inter / union) if union > 0 else 0.0
+    # Per-track median bbox area (F1, v9). Used as the reference for the
+    # area-floor check. Computed once over ALL positions for each track
+    # (pre-filter) so the reference is stable; tracks with mostly-blurred
+    # output naturally have a low median and the floor is correspondingly
+    # forgiving.
+    median_area_by_track: dict[int, float] = {}
+    for tid, pos_list in track_positions.items():
+        areas = [
+            float(p.width) * float(p.height)
+            for p in pos_list
+            if p.width > 0 and p.height > 0
+        ]
+        if areas:
+            areas.sort()
+            median_area_by_track[tid] = areas[len(areas) // 2]
 
     def _is_clean(tid: int, p: PlayerPosition) -> bool:
-        # Aspect ratio
-        if p.width <= 0 or p.height <= 0:
-            return False
-        if (p.height / p.width) < bbox_min_aspect_ratio:
-            return False
-        # Confidence
-        if (p.confidence or 0.0) < bbox_min_confidence:
-            return False
-        # Occlusion: IoU with any OTHER primary track at this frame
-        other_in_frame = primary_by_frame.get(p.frame_number, [])
-        for other_tid, other_p in other_in_frame:
-            if other_tid == tid:
-                continue
-            if _bbox_iou(p, other_p) >= bbox_max_occlusion_iou:
-                return False
-        return True
+        return is_appearance_clean_position(
+            tid,
+            p,
+            primary_by_frame=primary_by_frame,
+            median_area_by_track=median_area_by_track,
+            calibrator=calibrator,
+        )
 
     # For each track, pick evenly-spaced sample frames from the CLEAN subset.
     frame_requests: dict[int, list[tuple[int, PlayerPosition]]] = {}
@@ -3885,7 +4021,24 @@ ANCHOR_MIN_CONFIDENCE = 0.50
 #          PERMUTED panel. DB column Video.canonicalPidMapJson and
 #          table player_reference_crops kept dormant for a future
 #          post-hoc cluster-pick UX.
-MATCHER_VERSION = "v8"
+#  - v9: 2026-05-18 — F1 stable-presence sampling in
+#          `extract_rally_appearances`. Adds two filters to `_is_clean`:
+#          (1) bbox-area floor relative to track median (drops
+#          motion-blur / partial-detection frames that were silently
+#          inflating the appearance window), and (2) court-interior
+#          gate using `CourtCalibrator.is_point_in_court_with_margin`
+#          on the bbox foot point (drops off-court frames from
+#          sideline/post bystanders + off-screen serve entry).
+#          Existing aspect-ratio / confidence / occlusion checks
+#          retained; fallback to full track positions when < 4
+#          samples survive. Also bundles a freebie: rally 1 (first-
+#          rally seed) now emits a placeholder
+#          `RallyAssignmentDiagnostics` so `tracker.diagnostics`
+#          aligns 1:1 with `results` for `build_team_templates`
+#          (fixes the long-standing "team-template input length
+#          mismatch" warning). Bump invalidates anchors so the
+#          cleaned-sampling track_stats propagate cleanly.
+MATCHER_VERSION = "v9"
 
 
 def scratchpad_to_dict(tracker: MatchPlayerTracker) -> dict[str, Any]:
@@ -4039,6 +4192,7 @@ def match_players_across_rallies(
             num_samples=num_samples,
             extract_reid=extract_reid,
             reid_model=reid_model,
+            calibrator=calibrator,
         )
 
         # Process rally
