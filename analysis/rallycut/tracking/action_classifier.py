@@ -78,7 +78,19 @@ logger = logging.getLogger(__name__)
 #          the fix inert. Re-enabling resolves the (synth-prepend +
 #          real classifier serve) duplicate-serve pattern observed on
 #          kuku rally 7 and across the fleet.
-ACTION_PIPELINE_VERSION = "v6"
+# v7 (2026-05-18): Re-enable Rule 6 (attack→attack same-side → first
+#          becomes set) at the production call site. The 2026-04
+#          ablation that originally disabled it ran on a pre-v4 contact
+#          regressor / pre-v2 scorer pipeline; the spot-check on the
+#          current v4/v5 pipeline across 231 rallies in the trusted-31
+#          attribution corpus shows +91 net correct (+6.3pp overall,
+#          +20pp SET, +7.6pp DIG, +1.9pp ATTACK, 0 classes regress)
+#          with 113 trigger fires. Override (apply_sequence_override)
+#          acts as a correctness filter: it reverts Rule 6's bad fires
+#          (where MS-TCN++ argmax remains strongly ATTACK with prob
+#          >= 0.72) while keeping the good fires. Spot-check report:
+#          analysis/scripts/spotcheck_rules_56_2026_05_18.py
+ACTION_PIPELINE_VERSION = "v7"
 
 # Cached default action type classifier (loaded once from disk on first use)
 _default_action_classifier_cache: dict[str, ActionTypeClassifier | None] = {}
@@ -3818,8 +3830,9 @@ def classify_rally_actions(
     Pipeline:
     1. classify_rally() — initial action types + serve detection
        (uses match_team_assignments for team-aware touch counting when available)
-    2. repair_action_sequence(Rules 1, 3, 4, 8) — recv/dig consecutivity,
-       duplicate-serve and duplicate-receive dedupe, dig-after-serve fix
+    2. repair_action_sequence(Rules 1, 3, 4, 6, 8) — recv/dig consecutivity,
+       duplicate-serve and duplicate-receive dedupe, same-side attack→attack
+       repair (first becomes set), dig-after-serve fix
     3. viterbi_decode_actions() — sequence-level smoothing
     4. validate_action_sequence() — log constraint violations
     5. assign_court_side_from_teams() — overwrite court_side from match teams
@@ -3991,15 +4004,20 @@ def classify_rally_actions(
     #            rule body made symmetric in 0c60b42a but call site never
     #            updated — re-enabled 2026-05-18 with ACTION v6 bump)
     #   Rule 4 — duplicate receives → set
+    #   Rule 6 — attack→attack same-side → first becomes set
+    #            (re-enabled 2026-05-18 with ACTION v7 bump after
+    #            trusted-31 spot-check on v4/v5 pipeline showed +91
+    #            net correct, +20pp SET, no class regresses).
     #   Rule 8 — dig immediately after serve → receive
-    # Rules 0, 2, 5, 6 remain disabled per the 2026-04 ablation (rerun
-    # on v4/v5 pipeline before re-enabling — see scripts/ablate_repair_rules.py).
+    # Rules 0, 2, 5 remain disabled. Rule 0 regressed -30 on the same
+    # spot-check; Rule 5 fired only 4 times (+2 correct, noise);
+    # Rule 2 has not been re-validated since the 2026-04 ablation.
     result.actions, _ = repair_action_sequence(
         result.actions,
         net_y=contact_sequence.net_y,
         ball_positions=contact_sequence.ball_positions,
         rally_start_frame=contact_sequence.rally_start_frame,
-        disabled_rules={0, 2, 5, 6},
+        disabled_rules={0, 2, 5},
         sequence_probs=sequence_probs,
     )
 
