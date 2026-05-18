@@ -143,16 +143,37 @@ logger = logging.getLogger(__name__)
 #          87.5→89.7% (+2.2pp), correct 239→245 (+6 absolute), wrong
 #          34→28 (-6), CROSS_TEAM errors 23→18. Probed v3.5 variant
 #          (hybrid team source mirroring v8 action_classifier): v3.5
-#          REGRESSED vs v2.1 (89.7→88.3, CROSS_TEAM +4). Hybrid
-#          works for action_classifier because next_contact_team_transition
-#          is a sequence-derived feature, but hurts scorer because
-#          team_matches_expected is a per-candidate feature and the
-#          training-time corrected labels diverge from runtime's
-#          noisy teamAssignments — train/inference distribution
-#          mismatch outweighs the cleaner-label gain. v3.5 NO-GO;
-#          v2.1 shipped. Pre-session weights preserved at
+#          REGRESSED vs v2.1 (89.7→88.3, CROSS_TEAM +4). v3.5 NO-GO
+#          attributed to per-candidate train/inference mismatch.
+#          v2.1 shipped. Pre-session scorer weights preserved at
 #          weights/dynamic_attribution_scorer.pre_v3_2026_05_18/.
-ACTION_PIPELINE_VERSION = "v10"
+# v11 (2026-05-18): Reverted action_classifier.pkl hybrid-team-source
+#          training that v8 shipped — it was eating ~2.9pp of action
+#          accuracy. Audit followup to v3.5 NO-GO: tested whether the
+#          same train/inference mismatch applies to the GBM by
+#          retraining with --no-hybrid-teams and A/B-ing on the v9+v10
+#          pipeline (trusted-31, eval_action_detection.py, swap-based).
+#          The no-hybrid variant won UNAMBIGUOUSLY: Action Accuracy
+#          88.1→91.0% (+2.9pp), 0 classes regress, every class improves
+#          (SERVE +3.2pp, RECEIVE +4.9pp, SET +1.4pp, ATTACK +1.0pp,
+#          DIG +5.2pp F1). Sanity violations 35→31. Player Attribution
+#          flat (+0.2pp). The v8 ship's +3.5pp lift was almost entirely
+#          DATA FRESHNESS (Apr-19 → current GT); hybrid teams ate ~2.9pp
+#          on top. Same root cause as v3.5 scorer NO-GO: per-PID team
+#          labels diverge between training (GT-cleaned snapshot_team)
+#          and inference (noisy teamAssignments). Even though
+#          next_contact_team_transition is "sequence-derived" in name,
+#          the underlying per-PID team values are per-instance, so the
+#          same physical contact gets different transition values at
+#          train vs inference. Lesson generalised in memory:
+#          [[retrain_action_models_plan_2026_05_18]] — hybrid team source
+#          is NOT a universal pattern; it hurts whenever it diverges
+#          per-instance from the runtime team source.
+#          scripts/train_action_classifier.py flipped to default-OFF;
+#          --hybrid-teams flag retained as opt-in for future A/Bs.
+#          Hybrid pkl preserved at action_classifier.pkl.hybrid_v8_2026_05_18
+#          (md5 974179b...) for revert; v11 weights md5 d2077ea...
+ACTION_PIPELINE_VERSION = "v11"
 
 # Cached default action type classifier (loaded once from disk on first use)
 _default_action_classifier_cache: dict[str, ActionTypeClassifier | None] = {}

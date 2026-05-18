@@ -352,12 +352,24 @@ def main() -> None:
         action="store_true",
         help="Inject YOLO-Pose keypoints from pose cache for pose-aware features",
     )
+    # Hybrid team source is DEFAULT-OFF as of 2026-05-18 audit (v11). On the
+    # v9+v10 pipeline, hybrid training (snapshot_team overriding teamAssignments
+    # per resolved_track_id) NET-REGRESSED action accuracy by 2.9pp vs the
+    # teamAssignments-only baseline (eval_action_detection.py on trusted-31
+    # with v9 ms_tcn + v10 scorer). Same mechanism as the v3.5 scorer NO-GO:
+    # per-PID team labels diverge between training (GT-cleaned snapshot_team)
+    # and inference (noisy teamAssignments), so the GBM learns associations
+    # the runtime can't reproduce. The original v8 ship's +3.5pp lift was
+    # almost entirely data-freshness (Apr-19 GT → current 2026-05-18 GT);
+    # hybrid was eating ~2.9pp on top. Flag kept available as opt-in for
+    # diagnostic A/Bs (e.g., if inference is ever changed to also use hybrid).
     parser.add_argument(
-        "--no-hybrid-teams",
+        "--hybrid-teams",
         action="store_true",
         help=(
-            "Disable snapshot_team override of teamAssignments during training. "
-            "Use only for A/B against legacy teamAssignments-only baseline."
+            "Override teamAssignments with snapshot_team where GT speaks. "
+            "DEFAULT OFF after v11 audit: hurts v9+v10 pipeline by -2.9pp "
+            "action accuracy (train/inference team-source mismatch)."
         ),
     )
     add_split_argument(parser)
@@ -401,7 +413,7 @@ def main() -> None:
     # (~33% on the rest of the corpus). snapshot_team comes from the same
     # labelers whose action labels we trust, so we let GT win where present and
     # use teamAssignments only as a coverage filler for non-GT contacts.
-    if not args.no_hybrid_teams:
+    if args.hybrid_teams:
         _apply_snapshot_team_overrides(
             rallies=rallies, match_teams_by_rally=match_teams_by_rally,
         )
