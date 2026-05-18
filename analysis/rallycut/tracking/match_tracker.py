@@ -2979,6 +2979,108 @@ class MatchPlayerTracker:
             )
         return new_results
 
+    def _appearance_validates_perm(
+        self,
+        rally_idx: int,
+        results: list[RallyTrackingResult],
+        perm: dict[int, int],
+        *,
+        tolerance: float = 0.05,
+    ) -> bool:
+        """Return True iff applying ``perm`` to ``results[rally_idx]`` does
+        not increase cross-rally appearance cost beyond ``tolerance``.
+
+        Computes mean appearance cost using the same primitive MatchSolver
+        uses internally (``compute_track_similarity`` between rally i's
+        tracks and other-rally tracks in the same cluster).
+        The guard is intentionally one-sided: legitimate Bug C snaps
+        (viewpoint-dependent appearance at switch boundary) have
+        proposed_cost ≲ current_cost and clear this check easily;
+        spurious snaps driven by tid→pid alignment of mis-clustered
+        upstream IDs have proposed_cost ≫ current_cost (the solver was
+        right) and fail.
+
+        Tolerance is loose (0.05) on purpose: the guard's job is to
+        reject ONLY perms with a meaningful appearance regression. Small
+        numerical noise must not block the legitimate Bug C path.
+
+        Falls back to ``True`` (accept perm; preserve legacy behaviour)
+        when track_stats are unavailable, e.g. in scratchpad replay or
+        when fewer than 2 rallies have appearance data.
+        """
+        if not self.stored_rally_data or rally_idx >= len(self.stored_rally_data):
+            return True
+        stored = self.stored_rally_data[rally_idx]
+        if not stored.track_stats:
+            return True
+
+        # Build cluster_members from CURRENT results (excluding rally_idx).
+        # Each `results[j].track_to_player` reflects the post-MatchSolver
+        # (and any prior consensus-pass-applied) state for rally j.
+        cluster_members: dict[int, list[tuple[int, int]]] = {}
+        for j, r in enumerate(results):
+            if j == rally_idx:
+                continue
+            for tid_raw, pid_raw in r.track_to_player.items():
+                tid_int = int(tid_raw)
+                pid_int = int(pid_raw)
+                if tid_int <= 0 or not (1 <= pid_int <= 4):
+                    continue
+                cluster_members.setdefault(pid_int, []).append((j, tid_int))
+
+        def _mean_cost(afm: dict[int, int]) -> float:
+            sims_total = 0.0
+            n = 0
+            for tid_raw, pid_raw in afm.items():
+                tid_int = int(tid_raw)
+                pid_int = int(pid_raw)
+                if tid_int <= 0:
+                    continue
+                track_stat = stored.track_stats.get(tid_int)
+                if track_stat is None:
+                    continue
+                members = cluster_members.get(pid_int, [])
+                if not members:
+                    continue
+                sims: list[float] = []
+                for (mr, mt) in members:
+                    if not (0 <= mr < len(self.stored_rally_data)):
+                        continue
+                    m_stat = self.stored_rally_data[mr].track_stats.get(mt)
+                    if m_stat is None:
+                        continue
+                    sims.append(
+                        compute_track_similarity(track_stat, m_stat, REID_BLEND),
+                    )
+                if sims:
+                    sims_total += sum(sims) / len(sims)
+                    n += 1
+            return sims_total / n if n > 0 else 0.0
+
+        current_afm = {
+            int(t): int(p)
+            for t, p in results[rally_idx].track_to_player.items()
+        }
+        proposed_afm = {
+            int(t): perm.get(int(p), int(p))
+            for t, p in current_afm.items()
+        }
+        current_cost = _mean_cost(current_afm)
+        proposed_cost = _mean_cost(proposed_afm)
+
+        # Reject perm when proposed is meaningfully worse. Equal-cost
+        # cases (no appearance evidence either way) accept the perm so
+        # legitimate Bug C cases keep firing.
+        if proposed_cost > current_cost + tolerance:
+            logger.info(
+                "_appearance_validates_perm: rally %d perm REJECTED — "
+                "current_cost=%.4f, proposed_cost=%.4f "
+                "(tolerance=%.4f, perm=%s)",
+                rally_idx, current_cost, proposed_cost, tolerance, perm,
+            )
+            return False
+        return True
+
     def _post_switch_consensus_pass(
         self,
         results: list[RallyTrackingResult],
@@ -3213,6 +3315,34 @@ class MatchPlayerTracker:
             if best_perm is None:
                 continue
             perm = best_perm
+
+            # Appearance-validation guard (F-consensus, MATCHER_VERSION v11).
+            # `_score_perm` ranks candidates by per-track tid→pid alignment
+            # with neighbors, which assumes the upstream tracker re-uses the
+            # same stable ID for the same player across rallies. When the
+            # upstream re-IDs the same player to different track IDs in
+            # different rallies (lolo cyan-shirt at t3 in rally 1, t4 in
+            # rally 6+), structural alignment converges to "every rally uses
+            # identity" — overriding MatchSolver's correct appearance-based
+            # decision. Probe data (lolo r6, 2026-05-18) showed solver
+            # converged on T4→P3 (cyan correctly clustered) with margin
+            # 0.176, but the consensus pass re-permuted to identity
+            # (T4→P4, wrong).
+            #
+            # Guard: compute mean cross-rally appearance similarity for
+            # rally i under CURRENT vs PROPOSED AFM. Skip the perm if the
+            # proposed AFM is worse by more than the tolerance — the
+            # solver's appearance evidence wins. Tolerance allows the
+            # legitimate Bug C case (viewpoint-dependent appearance at
+            # switch boundary where appearance is genuinely noisy) to
+            # still snap to consensus when costs are near-tied.
+            if not self._appearance_validates_perm(i, results, perm):
+                logger.info(
+                    "post-switch consensus pass: rally %d perm "
+                    "%s SKIPPED — appearance evidence disagrees",
+                    i, perm,
+                )
+                continue
 
             # Step 4: apply the permutation to rally i's result.
             old = results[i]
@@ -4194,7 +4324,29 @@ ANCHOR_MIN_CONFIDENCE = 0.50
 #          legacy top-by-frames when calibrator / positions are
 #          unavailable. Bump invalidates anchors so freshly-filtered
 #          primary sets propagate cleanly.
-MATCHER_VERSION = "v10"
+#  - v11: 2026-05-18 — appearance-validation guard on
+#          `_post_switch_consensus_pass`. The consensus pass ranks
+#          candidate perms by tid→pid alignment with neighbors,
+#          which silently assumes upstream tracker IDs are stable
+#          across rallies. When the upstream re-IDs the same player
+#          to different track IDs in different rallies (lolo's
+#          cyan-shirt player at t3 in rally 1, t4 in rally 6+), the
+#          structural alignment dominates and the consensus pass
+#          OVERRIDES MatchSolver's correct appearance-based decision.
+#          The new `_appearance_validates_perm` guard computes
+#          cross-rally appearance cost under CURRENT vs PROPOSED
+#          AFM (using the same `compute_track_similarity` primitive
+#          MatchSolver uses internally) and rejects any perm whose
+#          proposed cost exceeds current by more than 0.05. The
+#          legitimate Bug C case (viewpoint-dependent appearance
+#          where appearance is genuinely noisy and ≲ current) still
+#          fires; spurious snaps from mis-clustered upstream IDs
+#          (≫ current) get rejected. End-to-end verification on
+#          lolo: rallies 6 and 23 (previously cyan→P4 wrong) now
+#          assign cyan→P3 correctly. 4-fixture panel byte-identical
+#          to baseline. Bump invalidates anchors so the new gate
+#          fires on previously-anchored rallies.
+MATCHER_VERSION = "v11"
 
 
 def scratchpad_to_dict(tracker: MatchPlayerTracker) -> dict[str, Any]:
