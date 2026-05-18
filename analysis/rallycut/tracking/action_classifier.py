@@ -71,7 +71,14 @@ logger = logging.getLogger(__name__)
 #          (strike vs apex), shifting feature distributions enough that
 #          v1 scorer regressed -8.4pp ATTACK on trusted-29. v2 scorer
 #          re-learns the decision boundary at v4 frames. Combined v4+v2.
-ACTION_PIPELINE_VERSION = "v5"
+# v6 (2026-05-18): Re-enable Rule 3 (duplicate-serve dedupe) at the
+#          production call site. Rule body was made synth+real
+#          symmetric in commit 0c60b42a (F4 dedupe, 2026-05-13) but
+#          the call-site disabled_rules set was never updated, leaving
+#          the fix inert. Re-enabling resolves the (synth-prepend +
+#          real classifier serve) duplicate-serve pattern observed on
+#          kuku rally 7 and across the fleet.
+ACTION_PIPELINE_VERSION = "v6"
 
 # Cached default action type classifier (loaded once from disk on first use)
 _default_action_classifier_cache: dict[str, ActionTypeClassifier | None] = {}
@@ -3811,7 +3818,8 @@ def classify_rally_actions(
     Pipeline:
     1. classify_rally() — initial action types + serve detection
        (uses match_team_assignments for team-aware touch counting when available)
-    2. repair_action_sequence(Rule 1 only) — fix consecutive recv/dig → set
+    2. repair_action_sequence(Rules 1, 3, 4, 8) — recv/dig consecutivity,
+       duplicate-serve and duplicate-receive dedupe, dig-after-serve fix
     3. viterbi_decode_actions() — sequence-level smoothing
     4. validate_action_sequence() — log constraint violations
     5. assign_court_side_from_teams() — overwrite court_side from match teams
@@ -3977,14 +3985,21 @@ def classify_rally_actions(
                         re_first.is_synthetic = True
                         re_first.player_track_id = -1
 
-    # Repair with only Rule 1 (consecutive recv/dig → set, +0.8pp LOO-CV).
-    # All other rules hurt accuracy — see scripts/ablate_repair_rules.py.
+    # Repair rules enabled at the call site:
+    #   Rule 1 — consecutive recv/dig → set (+0.8pp LOO-CV, 2026-04 ablation)
+    #   Rule 3 — duplicate serves → receive (synth+real symmetric anchor;
+    #            rule body made symmetric in 0c60b42a but call site never
+    #            updated — re-enabled 2026-05-18 with ACTION v6 bump)
+    #   Rule 4 — duplicate receives → set
+    #   Rule 8 — dig immediately after serve → receive
+    # Rules 0, 2, 5, 6 remain disabled per the 2026-04 ablation (rerun
+    # on v4/v5 pipeline before re-enabling — see scripts/ablate_repair_rules.py).
     result.actions, _ = repair_action_sequence(
         result.actions,
         net_y=contact_sequence.net_y,
         ball_positions=contact_sequence.ball_positions,
         rally_start_frame=contact_sequence.rally_start_frame,
-        disabled_rules={0, 2, 3, 5, 6},
+        disabled_rules={0, 2, 5, 6},
         sequence_probs=sequence_probs,
     )
 
