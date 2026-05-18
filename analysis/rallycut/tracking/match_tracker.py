@@ -2979,405 +2979,6 @@ class MatchPlayerTracker:
             )
         return new_results
 
-    def _appearance_validates_perm(
-        self,
-        rally_idx: int,
-        results: list[RallyTrackingResult],
-        perm: dict[int, int],
-        *,
-        tolerance: float = 0.05,
-    ) -> bool:
-        """Return True iff applying ``perm`` to ``results[rally_idx]`` does
-        not increase cross-rally appearance cost beyond ``tolerance``.
-
-        Computes mean appearance cost using the same primitive MatchSolver
-        uses internally (``compute_track_similarity`` between rally i's
-        tracks and other-rally tracks in the same cluster).
-        The guard is intentionally one-sided: legitimate Bug C snaps
-        (viewpoint-dependent appearance at switch boundary) have
-        proposed_cost ≲ current_cost and clear this check easily;
-        spurious snaps driven by tid→pid alignment of mis-clustered
-        upstream IDs have proposed_cost ≫ current_cost (the solver was
-        right) and fail.
-
-        Tolerance is loose (0.05) on purpose: the guard's job is to
-        reject ONLY perms with a meaningful appearance regression. Small
-        numerical noise must not block the legitimate Bug C path.
-
-        Falls back to ``True`` (accept perm; preserve legacy behaviour)
-        when track_stats are unavailable, e.g. in scratchpad replay or
-        when fewer than 2 rallies have appearance data.
-        """
-        if not self.stored_rally_data or rally_idx >= len(self.stored_rally_data):
-            return True
-        stored = self.stored_rally_data[rally_idx]
-        if not stored.track_stats:
-            return True
-
-        # Build cluster_members from CURRENT results (excluding rally_idx).
-        # Each `results[j].track_to_player` reflects the post-MatchSolver
-        # (and any prior consensus-pass-applied) state for rally j.
-        cluster_members: dict[int, list[tuple[int, int]]] = {}
-        for j, r in enumerate(results):
-            if j == rally_idx:
-                continue
-            for tid_raw, pid_raw in r.track_to_player.items():
-                tid_int = int(tid_raw)
-                pid_int = int(pid_raw)
-                if tid_int <= 0 or not (1 <= pid_int <= 4):
-                    continue
-                cluster_members.setdefault(pid_int, []).append((j, tid_int))
-
-        def _mean_cost(afm: dict[int, int]) -> float:
-            sims_total = 0.0
-            n = 0
-            for tid_raw, pid_raw in afm.items():
-                tid_int = int(tid_raw)
-                pid_int = int(pid_raw)
-                if tid_int <= 0:
-                    continue
-                track_stat = stored.track_stats.get(tid_int)
-                if track_stat is None:
-                    continue
-                members = cluster_members.get(pid_int, [])
-                if not members:
-                    continue
-                sims: list[float] = []
-                for (mr, mt) in members:
-                    if not (0 <= mr < len(self.stored_rally_data)):
-                        continue
-                    m_stat = self.stored_rally_data[mr].track_stats.get(mt)
-                    if m_stat is None:
-                        continue
-                    sims.append(
-                        compute_track_similarity(track_stat, m_stat, REID_BLEND),
-                    )
-                if sims:
-                    sims_total += sum(sims) / len(sims)
-                    n += 1
-            return sims_total / n if n > 0 else 0.0
-
-        current_afm = {
-            int(t): int(p)
-            for t, p in results[rally_idx].track_to_player.items()
-        }
-        proposed_afm = {
-            int(t): perm.get(int(p), int(p))
-            for t, p in current_afm.items()
-        }
-        current_cost = _mean_cost(current_afm)
-        proposed_cost = _mean_cost(proposed_afm)
-
-        # Reject perm when proposed is meaningfully worse. Equal-cost
-        # cases (no appearance evidence either way) accept the perm so
-        # legitimate Bug C cases keep firing.
-        if proposed_cost > current_cost + tolerance:
-            logger.info(
-                "_appearance_validates_perm: rally %d perm REJECTED — "
-                "current_cost=%.4f, proposed_cost=%.4f "
-                "(tolerance=%.4f, perm=%s)",
-                rally_idx, current_cost, proposed_cost, tolerance, perm,
-            )
-            return False
-        return True
-
-    def _post_switch_consensus_pass(
-        self,
-        results: list[RallyTrackingResult],
-        switches: list[int],
-    ) -> list[RallyTrackingResult]:
-        """Bug C fix (2026-05-04): snap outlier rallies near side-switch
-        boundaries to the cross-rally team-partition consensus.
-
-        At side-switch boundaries the per-rally Hungarian sometimes produces
-        an outlier permutation due to viewpoint-dependent appearance
-        (uniforms look different from front vs back). Surrounding rallies
-        converge on a stable team partition, but the boundary rally has a
-        deviation that self-corrects within 1-2 rallies. This pass detects
-        such outliers and applies the cross-team permutation that snaps
-        them to the consensus.
-
-        Conservative gates (all must pass to fire on rally i):
-        1. Rally i has exactly 4 primary tracks classified into clean
-           2-near + 2-far covering all of {1,2,3,4}.
-        2. The "expected" partition is unambiguous, sourced as either:
-           (a) ``sideSwitchDetected[i]`` is True AND rally i+1 has a valid
-               partition (post-switch reference); OR
-           (b) Both i-1 and i+1 have valid partitions that agree with
-               each other AND disagree with rally i (consensus
-               disagreement).
-        3. The implied permutation is a valid bijection over {1,2,3,4}.
-        4. ``DISABLE_POST_SWITCH_CONSENSUS=1`` env var is not set
-           (emergency rollback).
-
-        The cross-team partition is determined by ``(actual → expected)``;
-        within each team there are 2 valid pairings (sorted vs reversed),
-        yielding 4 total candidate permutations. We score each candidate
-        by track→PID alignment with nearby stable rallies (those with the
-        same `expected` partition) and pick the highest-scoring perm.
-        This recovers within-team rank correctly when BoT-SORT track IDs
-        persist across rallies (the common case). When they don't, the
-        scoring falls back to lower hit counts and may pick the same
-        perm as sorted-pairing — safe default.
-
-        Known limitations:
-        - Detection requires the per-rally team partition (near_pids vs
-          far_pids) to disagree with neighbors. When the side classifier
-          itself returns inverted/wrong sides at a switch boundary
-          (e.g. cross-team grouping), the partition computation produces
-          a "matching" partition by coincidence and the outlier isn't
-          detected. Catching those cases would require cross-rally
-          appearance comparison or AFM-equality across rallies, which
-          have their own false-positive risks (BoT-SORT track ID
-          renumbering across rallies).
-        - When `track_court_sides` is degenerate (3:1 or 1:3 split,
-          common at switch boundaries due to transition geometry),
-          falls back to Y-sort over `early_positions` to derive a clean
-          2v2 partition. Falls through to no-op if even that's
-          ambiguous.
-
-        Args:
-            results: Per-rally results post Stages 1+2 (or post-MatchSolver
-                in the blind path).
-            switches: Rally indices where side-switch was detected (only
-                used to decide the expected-partition source).
-
-        Returns:
-            Results with outlier rallies snapped to consensus. Other
-            rallies returned unchanged. Refuses to fire on any ambiguous
-            case.
-        """
-        if os.environ.get("DISABLE_POST_SWITCH_CONSENSUS") == "1":
-            return results
-        if len(results) < 3 or len(self.stored_rally_data) != len(results):
-            return results
-
-        # Step 1: per-rally near-team partition (frozenset of near-side PIDs).
-        # Returns None for rallies that don't have a clean 4-player 2-near +
-        # 2-far layout — those are skipped from both source and target.
-        partitions: list[frozenset[int] | None] = []
-        for i, data in enumerate(self.stored_rally_data):
-            afm = results[i].track_to_player
-            sides = data.track_court_sides or {}
-            near = frozenset(
-                int(pid) for tid, pid in afm.items()
-                if int(tid) > 0 and sides.get(int(tid)) == 0 and int(pid) > 0
-            )
-            far = frozenset(
-                int(pid) for tid, pid in afm.items()
-                if int(tid) > 0 and sides.get(int(tid)) == 1 and int(pid) > 0
-            )
-            if not (
-                len(near) == 2 and len(far) == 2
-                and (near | far) == {1, 2, 3, 4}
-            ):
-                # Fallback: when track_court_sides is degenerate (3:1 or 1:3
-                # split, common at side-switch boundaries when players are
-                # transitioning across the net), use Y-sort over
-                # early_positions to derive a clean 2v2 partition. Top 2 in
-                # Y (lower-on-screen = closer to camera) = near team.
-                primary_pids = [
-                    int(pid) for tid, pid in afm.items()
-                    if int(tid) > 0 and 1 <= int(pid) <= 4
-                ]
-                if len(set(primary_pids)) == 4:
-                    by_y: list[tuple[int, int, float]] = []  # (tid, pid, avg_y)
-                    for tid, pid in afm.items():
-                        tid_int, pid_int = int(tid), int(pid)
-                        if tid_int <= 0 or not (1 <= pid_int <= 4):
-                            continue
-                        pos = data.early_positions.get(tid_int)
-                        if pos is None:
-                            by_y = []
-                            break
-                        by_y.append((tid_int, pid_int, float(pos[1])))
-                    if len(by_y) == 4:
-                        # Sort ascending Y (smaller Y = top of image = far court).
-                        by_y.sort(key=lambda x: x[2])
-                        far = frozenset(p[1] for p in by_y[:2])
-                        near = frozenset(p[1] for p in by_y[2:])
-            if (
-                len(near) == 2 and len(far) == 2
-                and (near | far) == {1, 2, 3, 4}
-            ):
-                partitions.append(near)
-            else:
-                partitions.append(None)
-
-        switch_set = set(switches)
-        n_changes = 0
-
-        for i in range(len(partitions)):
-            actual = partitions[i]
-            if actual is None:
-                continue
-
-            # Step 2: determine the unambiguous expected partition.
-            expected: frozenset[int] | None = None
-            reason = ""
-
-            if i in switch_set:
-                # Switch boundary: post-switch reference is the next stable
-                # rally. Look ahead up to 2 rallies for one with a valid
-                # partition (in case rally i+1 itself is degenerate).
-                for j in range(i + 1, min(i + 3, len(partitions))):
-                    if partitions[j] is not None:
-                        expected = partitions[j]
-                        reason = f"sideSwitchDetected[{i}]; expected from rally {j}"
-                        break
-
-            if expected is None:
-                # Non-switch rally: require both immediate neighbors to have
-                # valid partitions that AGREE with each other.
-                prev_idx = i - 1
-                next_idx = i + 1
-                if prev_idx < 0 or next_idx >= len(partitions):
-                    continue
-                prev = partitions[prev_idx]
-                nxt = partitions[next_idx]
-                if prev is None or nxt is None or prev != nxt:
-                    continue
-                expected = prev
-                reason = (
-                    f"neighbors {prev_idx} and {next_idx} agree on partition"
-                )
-
-            if expected == actual:
-                continue  # no disagreement → no change needed
-
-            # Step 3: build the cross-team permutation. The team partition
-            # is fixed by `(actual → expected)`; within each team there are
-            # 2 valid pairings (sorted vs reversed), so 4 candidate perms.
-            # Pick the one that maximizes track→PID alignment with nearby
-            # stable rallies — this gets the within-team rank right when
-            # BoT-SORT track IDs persist across rallies (the common case).
-            actual_near_l = sorted(actual)
-            expected_near_l = sorted(expected)
-            actual_far_l = sorted({1, 2, 3, 4} - actual)
-            expected_far_l = sorted({1, 2, 3, 4} - expected)
-            if len(actual_near_l) != 2 or len(expected_near_l) != 2:
-                continue
-
-            # Reference AFMs: rallies within ±2 whose partition matches
-            # `expected` (i.e., agrees with the consensus). Excludes the
-            # outlier itself by partition mismatch.
-            reference_afms: list[dict[int, int]] = []
-            for j in range(max(0, i - 2), min(len(partitions), i + 3)):
-                if j == i or partitions[j] != expected:
-                    continue
-                reference_afms.append({
-                    int(tid): int(pid)
-                    for tid, pid in results[j].track_to_player.items()
-                    if int(tid) > 0 and 1 <= int(pid) <= 4
-                })
-
-            def _score_perm(p: dict[int, int]) -> int:
-                """Count post-perm AFM track→PID assignments matching any
-                reference rally's AFM at the SAME track ID."""
-                if not reference_afms:
-                    return 0
-                hits = 0
-                for tid, old_pid in results[i].track_to_player.items():
-                    tid_int = int(tid)
-                    if tid_int <= 0 or not (1 <= int(old_pid) <= 4):
-                        continue
-                    new_pid = p.get(int(old_pid), int(old_pid))
-                    for ref in reference_afms:
-                        if ref.get(tid_int) == new_pid:
-                            hits += 1
-                            break
-                return hits
-
-            best_perm: dict[int, int] | None = None
-            best_score = -1
-            for near_pairing in (
-                list(zip(actual_near_l, expected_near_l)),
-                list(zip(actual_near_l, list(reversed(expected_near_l)))),
-            ):
-                for far_pairing in (
-                    list(zip(actual_far_l, expected_far_l)),
-                    list(zip(actual_far_l, list(reversed(expected_far_l)))),
-                ):
-                    cand: dict[int, int] = {}
-                    for a, e in near_pairing:
-                        cand[a] = e
-                    for a, e in far_pairing:
-                        cand[a] = e
-                    if (
-                        set(cand.keys()) != {1, 2, 3, 4}
-                        or set(cand.values()) != {1, 2, 3, 4}
-                    ):
-                        continue
-                    s = _score_perm(cand)
-                    if s > best_score:
-                        best_score = s
-                        best_perm = cand
-            if best_perm is None:
-                continue
-            perm = best_perm
-
-            # Appearance-validation guard (F-consensus, MATCHER_VERSION v11).
-            # `_score_perm` ranks candidates by per-track tid→pid alignment
-            # with neighbors, which assumes the upstream tracker re-uses the
-            # same stable ID for the same player across rallies. When the
-            # upstream re-IDs the same player to different track IDs in
-            # different rallies (lolo cyan-shirt at t3 in rally 1, t4 in
-            # rally 6+), structural alignment converges to "every rally uses
-            # identity" — overriding MatchSolver's correct appearance-based
-            # decision. Probe data (lolo r6, 2026-05-18) showed solver
-            # converged on T4→P3 (cyan correctly clustered) with margin
-            # 0.176, but the consensus pass re-permuted to identity
-            # (T4→P4, wrong).
-            #
-            # Guard: compute mean cross-rally appearance similarity for
-            # rally i under CURRENT vs PROPOSED AFM. Skip the perm if the
-            # proposed AFM is worse by more than the tolerance — the
-            # solver's appearance evidence wins. Tolerance allows the
-            # legitimate Bug C case (viewpoint-dependent appearance at
-            # switch boundary where appearance is genuinely noisy) to
-            # still snap to consensus when costs are near-tied.
-            if not self._appearance_validates_perm(i, results, perm):
-                logger.info(
-                    "post-switch consensus pass: rally %d perm "
-                    "%s SKIPPED — appearance evidence disagrees",
-                    i, perm,
-                )
-                continue
-
-            # Step 4: apply the permutation to rally i's result.
-            old = results[i]
-            new_track_to_player = {
-                tid: perm.get(int(pid), int(pid))
-                for tid, pid in old.track_to_player.items()
-            }
-            new_server = old.server_player_id
-            if new_server is not None:
-                new_server = perm.get(int(new_server), int(new_server))
-            # SubTrackCandidate carries no pid field; the pid is stored in
-            # track_to_player keyed on synthetic_track_id, which we already
-            # permuted above. Sub-tracks pass through unchanged.
-            results[i] = RallyTrackingResult(
-                rally_index=old.rally_index,
-                track_to_player=new_track_to_player,
-                server_player_id=new_server,
-                side_switch_detected=old.side_switch_detected,
-                assignment_confidence=old.assignment_confidence,
-                sub_tracks=old.sub_tracks,
-            )
-            n_changes += 1
-            logger.info(
-                "post-switch consensus snap: rally %d near_pids %s → %s "
-                "(perm=%s; %s)",
-                i, sorted(actual), sorted(expected), perm, reason,
-            )
-
-        if n_changes > 0:
-            logger.info(
-                "post-switch consensus pass corrected %d rally/rallies",
-                n_changes,
-            )
-        return results
-
     def refine_assignments(
         self,
         initial_results: list[RallyTrackingResult],
@@ -3459,14 +3060,17 @@ class MatchPlayerTracker:
 
         # Blind-path short-circuit: solver replaces Stages 1 and 2.
         if skip_stages_1_and_2:
-            # Stage 3 (Bug C fix) still runs in the blind path — it acts on
-            # whichever per-rally AFMs reached this point.
-            after_consensus = self._post_switch_consensus_pass(
-                initial_results, sorted(switch_set),
-            )
+            # Stage 3 (Bug C fix / `_post_switch_consensus_pass`) removed in
+            # MATCHER_VERSION v12. The v11 appearance-validation guard had
+            # made the stage effectively a no-op on the panel + lolo/koko
+            # corpus (it rejected every proposed perm because the proposed
+            # AFM was appearance-worse than the solver's choice). Removing
+            # the stage is byte-identical to v11 on the panel; see the
+            # `v12` block in `MATCHER_VERSION` history below.
+            #
             # Stage 4 (Bug D fix, default OFF): identity-first re-assign for
             # partial-cardinality rallies. No-op when flag disabled.
-            return self._identity_first_partial_pass(after_consensus)
+            return self._identity_first_partial_pass(initial_results)
 
         # Stage 1: Re-score ALL rallies (including rally 0) with final profiles.
         # Rally 0 was initialized by Y-sort only; re-scoring with accumulated
@@ -3552,11 +3156,12 @@ class MatchPlayerTracker:
         # Stage 2: Global within-team voting using raw track comparisons
         refined = self._global_within_team_voting(refined)
 
-        # Stage 3 (Bug C fix): post-switch consensus pass. Snaps outlier
-        # rallies near side-switch boundaries to the surrounding consensus
-        # team partition. See `_post_switch_consensus_pass` docstring.
-        refined = self._post_switch_consensus_pass(refined, sorted(switch_set))
-
+        # Stage 3 (Bug C fix / `_post_switch_consensus_pass`) removed in
+        # MATCHER_VERSION v12. See the v11→v12 entry in the version
+        # history for the rationale (the v11 appearance-validation guard
+        # was rejecting every proposed perm; removing the stage is
+        # byte-identical to keeping it).
+        #
         # Stage 4 (Bug D fix, default OFF): identity-first re-assign for
         # partial-cardinality rallies. See `_identity_first_partial_pass`.
         refined = self._identity_first_partial_pass(refined)
@@ -4337,16 +3942,24 @@ ANCHOR_MIN_CONFIDENCE = 0.50
 #          cross-rally appearance cost under CURRENT vs PROPOSED
 #          AFM (using the same `compute_track_similarity` primitive
 #          MatchSolver uses internally) and rejects any perm whose
-#          proposed cost exceeds current by more than 0.05. The
-#          legitimate Bug C case (viewpoint-dependent appearance
-#          where appearance is genuinely noisy and ≲ current) still
-#          fires; spurious snaps from mis-clustered upstream IDs
-#          (≫ current) get rejected. End-to-end verification on
-#          lolo: rallies 6 and 23 (previously cyan→P4 wrong) now
-#          assign cyan→P3 correctly. 4-fixture panel byte-identical
-#          to baseline. Bump invalidates anchors so the new gate
-#          fires on previously-anchored rallies.
-MATCHER_VERSION = "v11"
+#          proposed cost exceeds current by more than 0.05.
+#  - v12: 2026-05-18 — DELETE `_post_switch_consensus_pass` entirely
+#          (and its v11 guard `_appearance_validates_perm`). Audit
+#          finding: the v11 guard was rejecting every proposed perm
+#          on lolo/koko/5c756c41, making the stage a no-op in the
+#          measured corpus. Empirically verified: panel byte-identical
+#          with the stage removed AND with the stage + v11 guard.
+#          A staged-redundancy that lives only to be no-op'd is dead
+#          code — better to remove it than keep the maintenance
+#          surface. If a future video genuinely exhibits the "Bug C"
+#          viewpoint-flip pattern the stage was designed for, the
+#          right fix is to revisit MatchSolver itself (multi-restart
+#          / spectral init per the deferred Day-2+ work in
+#          ``match_solver.py``), not to resurrect a structurally
+#          questionable post-stage. Bump invalidates anchors so any
+#          rally that DID get consensus-snapped under v10 re-solves
+#          cleanly on read.
+MATCHER_VERSION = "v12"
 
 
 def scratchpad_to_dict(tracker: MatchPlayerTracker) -> dict[str, Any]:
