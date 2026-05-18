@@ -56,8 +56,13 @@ TRUSTED_31 = (
     "pepe", "pipi", "popo", "pupu", "veve", "vivi", "vovo",
 )
 
-# Production baseline: disabled_rules={0, 2, 5, 6}  (post-v6 ship)
-# Rules enabled in baseline: 1, 3, 4, 8
+# BASELINE_DISABLED preserved at its pre-v7-ship value so the table layout
+# remains stable across runs. After the 2026-05-18 v7 ship (Rule 6 re-enabled)
+# and the 2026-05-18 v8 retrain, current production = the `+rule6` row in
+# the output, NOT the `baseline` row. The `baseline` row continues to show
+# the rules-only pre-v7 reference point; read deltas accordingly.
+# Pre-v7 production: disabled_rules={0, 2, 5, 6}  (rules enabled: 1, 3, 4, 8)
+# Post-v7 production: disabled_rules={0, 2, 5}    (rules enabled: 1, 3, 4, 6, 8)
 BASELINE_DISABLED = frozenset({0, 2, 5, 6})
 
 CONFIGS: dict[str, frozenset[int]] = {
