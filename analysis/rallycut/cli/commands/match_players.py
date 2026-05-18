@@ -176,7 +176,16 @@ def match_players(
                 reversed_ids.add(rally.rally_id)
 
         # Persist reversed positions to DB so remap-track-ids sees original IDs.
-        # All updates are committed atomically.
+        # Also NULL out `pre_remap_state_json` for the reversed rallies: the
+        # cached snapshot reflected the prior tracker output and is stale
+        # relative to today's reverse. Leaving it stale causes the next
+        # `remap-track-ids` run to refuse rallies where the snapshot's
+        # `primaryTrackIds` reference original IDs absent from the fresh
+        # `trackToPlayer` (the "snapshot's primaryTrackIds contains raw
+        # tracks absent from the resolved raw_mapping" fail-closed branch).
+        # Nulling triggers `remap-track-ids` to auto-recapture from current
+        # row state on its next run — same outcome as
+        # `--reset-snapshot`. All updates committed atomically.
         if reversed_ids:
             with get_connection() as conn:
                 with conn.cursor() as cur:
@@ -191,7 +200,9 @@ def match_players(
                         ]
                         cur.execute(
                             "UPDATE player_tracks SET positions_json = %s, "
-                            "primary_track_ids = %s WHERE rally_id = %s",
+                            "primary_track_ids = %s, "
+                            "pre_remap_state_json = NULL "
+                            "WHERE rally_id = %s",
                             [json.dumps(pos_data),
                              json.dumps([int(t) for t in rally.primary_track_ids]),
                              rally.rally_id],
@@ -200,7 +211,8 @@ def match_players(
 
         if reversed_ids and not quiet:
             console.print(
-                f"  Reversed previous remap on {len(reversed_ids)} rallies"
+                f"  Reversed previous remap on {len(reversed_ids)} rallies "
+                f"(pre_remap_state cleared so remap-track-ids re-captures)"
             )
 
     # Resolve video path
