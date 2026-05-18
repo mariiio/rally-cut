@@ -90,7 +90,30 @@ logger = logging.getLogger(__name__)
 #          (where MS-TCN++ argmax remains strongly ATTACK with prob
 #          >= 0.72) while keeping the good fires. Spot-check report:
 #          analysis/scripts/spotcheck_rules_56_2026_05_18.py
-ACTION_PIPELINE_VERSION = "v7"
+# v8 (2026-05-18): Retrained action_classifier.pkl on current GT
+#          (2965 rows × 500 rallies × 76 videos) with hybrid team
+#          source — snapshot_team from rally_action_ground_truth
+#          overrides teamAssignments per (rally_id, resolved_track_id)
+#          where GT speaks, teamAssignments fills coverage for non-GT
+#          contacts. Hybrid corrects 26 PID-label flips across 15
+#          rallies (~14% trusted-31 disagreement / ~33% rest-of-corpus)
+#          and seeds 309 rallies that previously had no
+#          teamAssignments at all, so next_contact_team_transition
+#          ceases defaulting to unknown=0.5 for those samples. v7→v8
+#          A/B on trusted-31 via eval_action_detection.py (swap-based):
+#          Action Accuracy 85.4→88.9% (+3.5pp), Contact F1
+#          91.9→92.5% (+0.6pp), Player Attribution 87.8→88.2%
+#          (+0.4pp), sanity violations 40→35; per-class action F1
+#          +0.5pp to +7.4pp, 0 classes regress. LOO CV (469 folds):
+#          88.8% (vs Apr-19 baseline ~88.0% on a different dataset).
+#          ms_tcn_production.pt UNCHANGED — the parallel ms_tcn
+#          candidate trained this session (kept at
+#          ms_tcn_v5_candidate.pt) regressed Action Acc -0.8pp /
+#          Attribution -1.1pp / Court-side -1.0pp on the same eval
+#          despite +1.3pp Contact F1 and +2.1pp ATTACK F1, so it was
+#          not promoted. Hybrid team-source implementation:
+#          scripts/train_action_classifier.py (new _apply_snapshot_team_overrides).
+ACTION_PIPELINE_VERSION = "v8"
 
 # Cached default action type classifier (loaded once from disk on first use)
 _default_action_classifier_cache: dict[str, ActionTypeClassifier | None] = {}

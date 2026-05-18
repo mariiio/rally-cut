@@ -263,6 +263,72 @@ def _build_calibrators_and_heights(
     return calibrators, heights
 
 
+def _apply_snapshot_team_overrides(
+    rallies: list[RallyData],
+    match_teams_by_rally: dict[str, dict[int, int]],
+) -> None:
+    """Override teamAssignments with snapshot_team where GT speaks.
+
+    Mutates match_teams_by_rally in place. For each rally with GT rows
+    carrying both snapshot_team and resolved_track_id, sets
+    match_teams_by_rally[rally_id][resolved_track_id] = 0 if 'A' else 1.
+    Seeds a fresh team map when the rally lacks teamAssignments entirely.
+    """
+    from rallycut.evaluation.tracking.db import get_connection  # noqa: PLC0415
+
+    rally_ids = [r.rally_id for r in rallies]
+    if not rally_ids:
+        return
+
+    overrides_by_rally: dict[str, dict[int, int]] = {}
+    with get_connection() as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT rally_id::text, resolved_track_id, snapshot_team::text
+            FROM rally_action_ground_truth
+            WHERE rally_id = ANY(%s)
+              AND resolved_track_id IS NOT NULL
+              AND snapshot_team IS NOT NULL
+            """,
+            [rally_ids],
+        )
+        for row in cur.fetchall():
+            rid = str(row[0])
+            resolved_tid = int(row[1])  # type: ignore[call-overload]
+            snap_team = str(row[2])
+            new_team = 0 if snap_team == "A" else 1
+            overrides_by_rally.setdefault(rid, {})[resolved_tid] = new_team
+
+    n_pids_set = 0
+    n_pids_flipped = 0
+    n_rallies_with_flip = 0
+    n_rallies_seeded = 0
+    for rid, overrides in overrides_by_rally.items():
+        team_map = match_teams_by_rally.get(rid)
+        if team_map is None:
+            match_teams_by_rally[rid] = dict(overrides)
+            n_rallies_seeded += 1
+            n_pids_set += len(overrides)
+            continue
+        rally_flipped = False
+        for pid, new_team in overrides.items():
+            old_team = team_map.get(pid)
+            if old_team is not None and old_team != new_team:
+                n_pids_flipped += 1
+                rally_flipped = True
+            team_map[pid] = new_team
+            n_pids_set += 1
+        if rally_flipped:
+            n_rallies_with_flip += 1
+
+    console.print(
+        f"  Hybrid team source: applied snapshot_team to {n_pids_set} PIDs "
+        f"across {len(overrides_by_rally)} rallies "
+        f"({n_pids_flipped} PID labels flipped in {n_rallies_with_flip} rallies; "
+        f"{n_rallies_seeded} rallies seeded from GT only)"
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train action type classifier")
     parser.add_argument(
@@ -285,6 +351,14 @@ def main() -> None:
         "--pose",
         action="store_true",
         help="Inject YOLO-Pose keypoints from pose cache for pose-aware features",
+    )
+    parser.add_argument(
+        "--no-hybrid-teams",
+        action="store_true",
+        help=(
+            "Disable snapshot_team override of teamAssignments during training. "
+            "Use only for A/B against legacy teamAssignments-only baseline."
+        ),
     )
     add_split_argument(parser)
     args = parser.parse_args()
@@ -319,6 +393,18 @@ def main() -> None:
     )
     n_with_teams = sum(1 for r in rallies if r.rally_id in match_teams_by_rally)
     console.print(f"  Match teams: {n_with_teams}/{len(rallies)} rallies")
+
+    # Hybrid team source (2026-05-18): override teamAssignments with snapshot_team
+    # where rally_action_ground_truth speaks. teamAssignments-from-positions is
+    # geometrically inferred and flips wholesale on missed side switches; on the
+    # trusted-31 panel it disagrees with snapshot_team on ~14% of GT rows
+    # (~33% on the rest of the corpus). snapshot_team comes from the same
+    # labelers whose action labels we trust, so we let GT win where present and
+    # use teamAssignments only as a coverage filler for non-GT contacts.
+    if not args.no_hybrid_teams:
+        _apply_snapshot_team_overrides(
+            rallies=rallies, match_teams_by_rally=match_teams_by_rally,
+        )
 
     # Build court calibrators + camera heights per video
     calibrators, camera_heights = _build_calibrators_and_heights(video_ids)
