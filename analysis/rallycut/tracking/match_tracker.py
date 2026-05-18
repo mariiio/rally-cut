@@ -134,6 +134,26 @@ IDENTITY_FIRST_MIN_ANCHORS = 3
 # Protects against regressions from unrepresentative reference crops.
 REID_MIN_MARGIN = 0.08
 
+# F2 (MATCHER_VERSION v10): top-N candidate selection gates.
+#
+# Minimum court-interior frame fraction for a candidate to remain in the
+# top-N set. Below this, the track is treated as a likely non-player
+# (sideline / post bystander) and demoted to the fallback list — only
+# promoted back if fewer than N real candidates remain. Tuned permissive:
+# real players occasionally chase balls into the margin or briefly leave
+# the court; a photographer / scorekeeper at a post sits OUTSIDE the
+# court for the entire rally, so 30% is well above the legitimate-player
+# range observed on the 46-GT panel and well below the bystander range.
+TOP_TRACKS_MIN_COURT_INTERIOR_FRACTION = 0.30
+
+# Minimum appearance-sample count for a bench candidate to be eligible
+# for a cardinality-rebalance swap. A track with very few frames can't
+# build a stable cross-rally appearance profile, so swapping it into the
+# top-N to balance cardinality would just trade one bad input for
+# another. Tuned to roughly half of the typical short-rally feature
+# count (~ ``num_samples`` default of 12).
+TOP_TRACKS_MIN_FRAMES_FLOOR = 6
+
 # Phase 3 global k-means seeding is a closed NO-GO workstream (see
 # memory/attribution_primitive_first_phase0_2026_04_24.md §dormant flags).
 # The flag was env-gated and the env-read line was removed during the
@@ -945,9 +965,17 @@ class MatchPlayerTracker:
                     self.rally_count, disagreements,
                 )
 
-        # Step 3: Select top 4 tracks globally by feature count
+        # Step 3: Select top 4 tracks globally by feature count, gated
+        # on court-interior fraction (F2, v10) so sideline / post
+        # bystanders fall out of the matcher's candidate set.
         all_track_ids = list(track_court_sides.keys())
-        top_tracks = self._top_tracks_by_frames(all_track_ids, track_stats, 4)
+        top_tracks = self._top_tracks_by_frames(
+            all_track_ids,
+            track_stats,
+            4,
+            track_court_sides=track_court_sides,
+            player_positions=player_positions,
+        )
 
         # Compute early-rally positions for position continuity
         early_positions = _compute_track_positions(
@@ -2146,15 +2174,128 @@ class MatchPlayerTracker:
         track_ids: list[int],
         track_stats: dict[int, TrackAppearanceStats],
         n: int,
+        *,
+        track_court_sides: dict[int, int] | None = None,
+        player_positions: list[PlayerPosition] | None = None,
     ) -> list[int]:
-        """Return top N tracks by feature count (most observations)."""
-        if len(track_ids) <= n:
-            return track_ids
-        return sorted(
-            track_ids,
-            key=lambda t: len(track_stats[t].features) if t in track_stats else 0,
-            reverse=True,
-        )[:n]
+        """Return top N tracks for the matcher's per-rally Hungarian.
+
+        Default ranking is by appearance-sample count (most observations
+        first). When optional context is provided, two extra gates fire
+        (F2, MATCHER_VERSION v10):
+
+        1. **Court-interior gate.** When a calibrator is loaded and
+           ``player_positions`` is provided, demote candidates whose
+           foot-point court-interior frame fraction is below
+           ``TOP_TRACKS_MIN_COURT_INTERIOR_FRACTION``. Targets sideline /
+           post bystanders (photographer at lolo r23) that the upstream
+           ``player_filter`` lets through.
+        2. **2v2 cardinality preference.** When ``track_court_sides`` is
+           provided, prefer a balanced 2-near/2-far top-N. If the strict
+           top-N would produce a 3-1 / 1-3 / 4-0 split, swap the lowest-
+           by-frames over-represented track for the highest-by-frames
+           under-represented track that still has at least
+           ``TOP_TRACKS_MIN_FRAMES_FLOOR`` samples.
+
+        Either gate can drop a candidate but never grows ``n``.
+        """
+        if not track_ids:
+            return []
+
+        def _frame_count(t: int) -> int:
+            return len(track_stats[t].features) if t in track_stats else 0
+
+        # Legacy fast-path: when no F2 context is provided AND there are
+        # no more candidates than slots, preserve input order so existing
+        # callers (Pass 2 sub-track flow, identity-first probes, tests)
+        # observe pre-v10 behaviour.
+        if (
+            len(track_ids) <= n
+            and track_court_sides is None
+            and player_positions is None
+        ):
+            return list(track_ids)
+
+        ordered = sorted(track_ids, key=_frame_count, reverse=True)
+        if len(ordered) <= n and (track_court_sides is None or player_positions is None):
+            return ordered
+
+        # Gate 1: court-interior frame fraction. Only enforced when both
+        # a calibrator and positions are available.
+        accepted: list[int] = []
+        demoted: list[int] = []
+        if (
+            self.calibrator is not None
+            and self.calibrator.is_calibrated
+            and player_positions is not None
+        ):
+            positions_by_track: dict[int, list[PlayerPosition]] = {}
+            for p in player_positions:
+                positions_by_track.setdefault(p.track_id, []).append(p)
+
+            for tid in ordered:
+                pos_list = positions_by_track.get(tid, [])
+                if not pos_list:
+                    accepted.append(tid)
+                    continue
+                inside = 0
+                for p in pos_list:
+                    if _foot_in_court(p, self.calibrator):
+                        inside += 1
+                fraction = inside / len(pos_list)
+                if fraction < TOP_TRACKS_MIN_COURT_INTERIOR_FRACTION:
+                    demoted.append(tid)
+                else:
+                    accepted.append(tid)
+        else:
+            accepted = list(ordered)
+
+        # Promote demoted tracks as a fallback if accepted < n (very
+        # rare; e.g. all candidates partially off-court).
+        if len(accepted) < n:
+            for tid in demoted:
+                if len(accepted) >= n:
+                    break
+                accepted.append(tid)
+
+        # Gate 2: 2v2 cardinality preference. Only enforced when n == 4
+        # (the typical 2v2 beach setup) and side labels are available.
+        if track_court_sides is not None and n == 4:
+            chosen = list(accepted[:n])
+            sides_chosen = [track_court_sides.get(t) for t in chosen]
+            near_count = sum(1 for s in sides_chosen if s == 0)
+            far_count = sum(1 for s in sides_chosen if s == 1)
+            # Only adjust on a 3-1 / 4-0 split. 2-2 is already balanced;
+            # genuinely 1-side rallies (e.g., near server occlusion)
+            # stay as-is.
+            if max(near_count, far_count) >= 3 and (near_count + far_count) == 4:
+                over_side = 0 if near_count > far_count else 1
+                under_side = 1 - over_side
+                # Bench is candidates beyond the top-n with the under-rep side.
+                bench = [
+                    t for t in accepted[n:]
+                    if track_court_sides.get(t) == under_side
+                ]
+                # Bench candidates must clear the floor frame count.
+                bench = [
+                    t for t in bench
+                    if _frame_count(t) >= TOP_TRACKS_MIN_FRAMES_FLOOR
+                ]
+                # Over-rep candidates to drop, lowest frames first.
+                over_in_chosen = [t for t in chosen if track_court_sides.get(t) == over_side]
+                over_in_chosen.sort(key=_frame_count)  # lowest first
+                # Swap at most one (max(near,far) - 2) per swap.
+                swap_count = max(near_count, far_count) - 2
+                for _ in range(min(swap_count, len(bench), len(over_in_chosen) - 2)):
+                    drop = over_in_chosen[0]
+                    add = bench[0]
+                    chosen.remove(drop)
+                    chosen.append(add)
+                    over_in_chosen.pop(0)
+                    bench.pop(0)
+                return chosen[:n]
+
+        return accepted[:n]
 
     def _update_profiles(
         self,
@@ -4038,7 +4179,22 @@ ANCHOR_MIN_CONFIDENCE = 0.50
 #          (fixes the long-standing "team-template input length
 #          mismatch" warning). Bump invalidates anchors so the
 #          cleaned-sampling track_stats propagate cleanly.
-MATCHER_VERSION = "v9"
+#  - v10: 2026-05-18 — F2 non-player rejection at top-N selection.
+#          `_top_tracks_by_frames` gains two optional gates:
+#          (1) court-interior frame fraction (≥30%) using the
+#          calibrator's `is_point_in_court_with_margin` — drops
+#          sideline/post bystanders that were previously surviving
+#          `player_filter` (e.g. the photographer at lolo r23).
+#          (2) 2v2 cardinality preference: when the strict top-N
+#          would produce a 3-1 / 4-0 side split, swap the lowest-
+#          frame over-represented track for the highest-frame
+#          under-represented track that clears the
+#          ``TOP_TRACKS_MIN_FRAMES_FLOOR`` of 6 samples. Either gate
+#          can drop a candidate but never grows N. Falls back to
+#          legacy top-by-frames when calibrator / positions are
+#          unavailable. Bump invalidates anchors so freshly-filtered
+#          primary sets propagate cleanly.
+MATCHER_VERSION = "v10"
 
 
 def scratchpad_to_dict(tracker: MatchPlayerTracker) -> dict[str, Any]:
