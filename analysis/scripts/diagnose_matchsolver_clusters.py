@@ -29,18 +29,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import numpy as np  # noqa: E402
 
 from rallycut.court.calibration import CourtCalibrator  # noqa: E402
 from rallycut.evaluation.db import get_connection  # noqa: E402
 from rallycut.evaluation.tracking.db import (  # noqa: E402
     get_video_path,
     load_rallies_for_video,
-)
-from rallycut.tracking.match_solver import (  # noqa: E402
-    MatchSolver,
-    _propose_team_partitions,
-    _team_assignments_to_sides,
 )
 from rallycut.tracking.match_tracker import (  # noqa: E402
     match_players_across_rallies,
@@ -115,13 +109,10 @@ def main() -> None:
         reid_model=reid_model,
     )
 
-    # Print per-rally seed/MatchSolver decision and cluster membership.
-    stored_rally_data = []
-    # Recover stored_rally_data via the same path. We can re-run solver
-    # ourselves but the easiest is to walk result.rally_results to know
-    # the FINAL track_to_player and then reverse to cluster membership.
+    # Print per-rally MatchSolver decision and cluster membership.
     # Cluster IDs in MatchSolver are 1..NUM_CLUSTERS and used directly
-    # as the PID labels.
+    # as the PID labels; we recover cluster membership by inverting
+    # `result.rally_results[i].track_to_player`.
     cluster_members: dict[int, list[tuple[int, int]]] = {1: [], 2: [], 3: [], 4: []}
     for rally_idx, rr in enumerate(result.rally_results):
         for tid, pid in rr.track_to_player.items():
@@ -170,9 +161,6 @@ def main() -> None:
         # Build cluster medoid stats via members. We use compute_track_similarity
         # against each cluster's other-rally members (averaged), matching
         # what MatchSolver does internally.
-        from rallycut.tracking.player_features import (
-            compute_track_similarity,
-        )
 
         # Recover stored_rally_data via the match_players_across_rallies
         # internal — easiest: walk per-rally top_tracks + track_stats from

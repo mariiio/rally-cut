@@ -7,7 +7,6 @@ that do.
 from __future__ import annotations
 
 import numpy as np
-import pytest
 
 from rallycut.tracking.match_tracker import (
     MatchPlayerTracker,
@@ -17,9 +16,9 @@ from rallycut.tracking.match_tracker import (
 from rallycut.tracking.player_features import (
     HS_BINS,
     HS_RANGES,
-    TrackAppearanceStats,
     V_BINS,
     V_RANGES,
+    TrackAppearanceStats,
 )
 
 
