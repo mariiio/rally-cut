@@ -129,7 +129,30 @@ logger = logging.getLogger(__name__)
 #          at .pre_retrain_2026_05_18 sidecar for revert. Coherence
 #          audit re-run post-promotion (see catalog
 #          reports/coherence_c4_catalog/2026-05-18_post_v9.csv).
-ACTION_PIPELINE_VERSION = "v9"
+# v10 (2026-05-18): Retrained dynamic_attribution_scorer per-action
+#          GBMs (ATTACK/SET/SERVE/RECEIVE/DIG/BLOCK) on current v9
+#          DB state (post-fleet-refresh) using
+#          scripts/train_and_save_dynamic_scorer_2026_05_14.py with
+#          no code changes. Trigger: the attack_residual probe re-run
+#          on v9 showed ATTACK attribution dipped 88.3→87.5% with
+#          CROSS_TEAM share rising 63%→68% of residual errors — but
+#          the dip was almost entirely a stale-training-data effect
+#          (the prior scorer was trained 2026-05-17 on pre-v4-contact
+#          frames; v9 has different contact frames + recovered
+#          contacts). v2.1 retrain on v9 data: ATTACK attribution
+#          87.5→89.7% (+2.2pp), correct 239→245 (+6 absolute), wrong
+#          34→28 (-6), CROSS_TEAM errors 23→18. Probed v3.5 variant
+#          (hybrid team source mirroring v8 action_classifier): v3.5
+#          REGRESSED vs v2.1 (89.7→88.3, CROSS_TEAM +4). Hybrid
+#          works for action_classifier because next_contact_team_transition
+#          is a sequence-derived feature, but hurts scorer because
+#          team_matches_expected is a per-candidate feature and the
+#          training-time corrected labels diverge from runtime's
+#          noisy teamAssignments — train/inference distribution
+#          mismatch outweighs the cleaner-label gain. v3.5 NO-GO;
+#          v2.1 shipped. Pre-session weights preserved at
+#          weights/dynamic_attribution_scorer.pre_v3_2026_05_18/.
+ACTION_PIPELINE_VERSION = "v10"
 
 # Cached default action type classifier (loaded once from disk on first use)
 _default_action_classifier_cache: dict[str, ActionTypeClassifier | None] = {}
