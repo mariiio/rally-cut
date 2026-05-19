@@ -1,0 +1,41 @@
+Loaded 475 GT Serve actions with stored predictions
+
+cohort      CORRECT  EMPTY  GT_OUT WRONG_RANK  NO_SERVE  TOTAL
+60fps            58     26       0         19        25    128  attrib_acc=45.3%
+30fps           193     35       4         71        44    347  attrib_acc=55.6%
+
+Sample failures per cohort per class:
+
+--- 30fps_EMPTY_CANDIDATES (5 samples) ---
+  cece     79ecfb2d frame=86 GT=1 picked=2 gt_rank=None cands=[]
+  cuco     d0d64de1 frame=37 GT=2 picked=1 gt_rank=None cands=[]
+  gigi     5b6f0474 frame=47 GT=1 picked=-1 gt_rank=None cands=[]
+  jaja     d1faa2b4 frame=116 GT=4 picked=-1 gt_rank=None cands=[]
+  keke     3bd436b6 frame=100 GT=2 picked=1 gt_rank=None cands=[]
+
+--- 30fps_GT_NOT_IN_CANDS (4 samples) ---
+  cucu     7d5fbfb2 frame=98 GT=4 picked=6 gt_rank=None cands=[(6, 0.152), (3, 0.249), (1, 0.277), (2, 0.357)]
+  gigi     bc9345c1 frame=113 GT=2 picked=1 gt_rank=None cands=[(1, 0.06), (4, 0.164), (3, 0.226)]
+  koko     0c58108f frame=122 GT=2 picked=4 gt_rank=None cands=[(1, 0.063), (4, 0.182), (3, 0.245)]
+  koko     648bf6f2 frame=102 GT=1 picked=2 gt_rank=None cands=[(2, 0.072), (4, 0.126), (3, 0.183)]
+
+--- 30fps_WRONG_RANK (5 samples) ---
+  caco     5b23ee5f frame=51 GT=3 picked=4 gt_rank=2 cands=[(4, 0.037), (3, 0.057), (2, 0.227), (1, 0.231)]
+  cucu     47379221 frame=86 GT=3 picked=1 gt_rank=4 cands=[(1, 0.116), (4, 0.46), (2, 0.367), (3, 0.427)]
+  cucu     7063ea7b frame=92 GT=2 picked=4 gt_rank=4 cands=[(4, 0.067), (1, 0.114), (3, 0.188), (2, 0.329)]
+  gigi     72c8229b frame=92 GT=2 picked=1 gt_rank=2 cands=[(1, 0.057), (2, 0.062), (4, 0.172), (3, 0.218)]
+  jaja     0102cbba frame=108 GT=4 picked=3 gt_rank=2 cands=[(3, 0.043), (4, 0.064), (2, 0.168), (1, 0.174)]
+
+--- 60fps_EMPTY_CANDIDATES (5 samples) ---
+  ruru     cc2b967b frame=224 GT=3 picked=-1 gt_rank=None cands=[]
+  yoyo     9d24aa93 frame=90 GT=3 picked=-1 gt_rank=None cands=[]
+  haha     18175bae frame=203 GT=3 picked=-1 gt_rank=None cands=[]
+  kaka     ca5d5f57 frame=169 GT=3 picked=-1 gt_rank=None cands=[]
+  kaka     f33d7ac8 frame=213 GT=3 picked=-1 gt_rank=None cands=[]
+
+--- 60fps_WRONG_RANK (5 samples) ---
+  ruru     3655eb69 frame=143 GT=4 picked=3 gt_rank=4 cands=[(3, 0.18), (1, 0.38), (2, 0.463), (4, 0.483)]
+  wiwi     0f82a711 frame=212 GT=2 picked=3 gt_rank=3 cands=[(3, 0.035), (4, 0.159), (2, 0.225), (1, 0.23)]
+  wiwi     5b486730 frame=181 GT=2 picked=3 gt_rank=4 cands=[(3, 0.03), (4, 0.117), (1, 0.213), (2, 0.236)]
+  wiwi     682130d2 frame=241 GT=3 picked=1 gt_rank=3 cands=[(1, 0.026), (2, 0.11), (3, 0.172), (4, 0.294)]
+  wiwi     8f008df7 frame=186 GT=2 picked=3 gt_rank=3 cands=[(3, 0.023), (4, 0.128), (2, 0.229), (1, 0.253)]

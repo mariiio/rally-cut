@@ -1,0 +1,50 @@
+=== haha rally=18175bae GT_frame=203 GT_tid=3 ===
+  primary_track_ids = [2, 1, 4, 3]
+  GT_tid in primary? True
+  GT_tid appears in positions_json at 1126 frames total
+  Min frame-distance from GT_frame: 0
+  GT_tid in window ±15: 31, ±30: 61, ±60: 121, ±120: 241, ±240: 422
+  All track IDs in rally: [1, 2, 3, 4]
+  Tracks within ±15f of GT: [1, 2, 3, 4]
+  Tracks within ±30f of GT: [1, 2, 3, 4]
+
+=== kaka rally=ca5d5f57 GT_frame=169 GT_tid=3 ===
+  primary_track_ids = [1, 2, 4, 3]
+  GT_tid in primary? True
+  GT_tid appears in positions_json at 656 frames total
+  Min frame-distance from GT_frame: 0
+  GT_tid in window ±15: 31, ±30: 61, ±60: 121, ±120: 241, ±240: 406
+  All track IDs in rally: [1, 2, 3, 4]
+  Tracks within ±15f of GT: [1, 2, 3, 4]
+  Tracks within ±30f of GT: [1, 2, 3, 4]
+
+=== kaka rally=f33d7ac8 GT_frame=213 GT_tid=3 ===
+  primary_track_ids = [1, 2, 4, 3]
+  GT_tid in primary? True
+  GT_tid appears in positions_json at 707 frames total
+  Min frame-distance from GT_frame: 0
+  GT_tid in window ±15: 31, ±30: 61, ±60: 121, ±120: 241, ±240: 454
+  All track IDs in rally: [1, 2, 3, 4]
+  Tracks within ±15f of GT: [1, 2, 3, 4]
+  Tracks within ±30f of GT: [1, 2, 3, 4]
+
+=== ruru rally=cc2b967b GT_frame=224 GT_tid=3 ===
+  primary_track_ids = [2, 1, 3, 4]
+  GT_tid in primary? True
+  GT_tid appears in positions_json at 727 frames total
+  Min frame-distance from GT_frame: 0
+  GT_tid in window ±15: 31, ±30: 61, ±60: 121, ±120: 241, ±240: 465
+  All track IDs in rally: [1, 2, 3, 4]
+  Tracks within ±15f of GT: [1, 2, 3, 4]
+  Tracks within ±30f of GT: [1, 2, 3, 4]
+
+=== yoyo rally=9d24aa93 GT_frame=90 GT_tid=3 ===
+  primary_track_ids = [1, 2, 4, 3]
+  GT_tid in primary? True
+  GT_tid appears in positions_json at 449 frames total
+  Min frame-distance from GT_frame: 0
+  GT_tid in window ±15: 31, ±30: 61, ±60: 121, ±120: 211, ±240: 331
+  All track IDs in rally: [1, 2, 3, 4]
+  Tracks within ±15f of GT: [1, 2, 3, 4]
+  Tracks within ±30f of GT: [1, 2, 3, 4]
+

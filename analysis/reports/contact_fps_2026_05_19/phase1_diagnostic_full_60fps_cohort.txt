@@ -1,0 +1,52 @@
+# Mode: DB v4 contacts
+
+video      fps    gt  matched    fn    fn%    C    D    A    B
+haha      59.9    68       57    11  16.2%    0    7    3    1
+kaka      59.9    80       77     3   3.8%    0    0    3    0
+kiki      59.9    54       50     4   7.4%    2    1    1    0
+kuku      59.9    97       86    11  11.3%    1    4    6    0
+lulu      59.9    37       31     6  16.2%    4    1    1    0
+matchc    59.9    13        9     4  30.8%    0    1    2    1
+ruru      60.0    55       47     8  14.5%    4    2    1    1
+vivi      59.3    15       13     2  13.3%    1    0    1    0
+vovo      59.9    27       22     5  18.5%    3    2    0    0
+vuvu      59.9    22       14     8  36.4%    3    3    2    0
+wawa      59.9    51       40    11  21.6%    4    4    3    0
+wewe      59.9    43       35     8  18.6%    5    0    3    0
+wiwi      60.0    54       51     3   5.6%    2    1    0    0
+wowo      59.9    17       14     3  17.6%    1    0    1    1
+wuwu      59.9    43       33    10  23.3%    6    0    3    1
+yaya      59.9    39       35     4  10.3%    0    3    1    0
+yeye      60.0    83       71    12  14.5%    5    3    1    3
+yiyi      59.9    14        9     5  35.7%    2    1    0    2
+yoyo      60.0    45       40     5  11.1%    2    1    2    0
+titi      30.0    86       79     7   8.1%    3    3    1    0
+toto      29.9    58       51     7  12.1%    4    3    0    0
+jaja      30.0    88       87     1   1.1%    0    0    1    0
+
+cohort        gt  matched    fn    fn%    C%    D%    A%    B%
+60fps        857      734   123  14.4%  5.3%  4.0%  4.0%  1.2%
+30fps        232      217    15   6.5%  3.0%  2.6%  0.9%  0.0%
+
+Generator-fire breakdown on class A (which generator produced the candidate that the GBM/dedup then rejected):
+  [60fps]
+    A_decel: 7
+    A_dirchange: 14
+    A_inflection: 21
+    A_netcross: 9
+    A_parabolic: 2
+    A_velocity: 7
+    B_no_generator_fired: 10
+  [30fps]
+    A_decel: 1
+    A_dirchange: 2
+    A_inflection: 2
+    A_netcross: 2
+    A_velocity: 1
+
+
+Legend:
+  C = no confident ball detection within ±2f of GT (upstream FN)
+  D = ball present but no player within 0.15 (attribution FN)
+  A = candidate WAS generated within ±5f, GBM/dedup rejected it (FIX = GBM retrain)
+  B = NO candidate generated within ±5f, gates filtered everything (FIX = scale culprit gate)

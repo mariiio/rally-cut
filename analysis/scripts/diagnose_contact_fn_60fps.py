@@ -53,7 +53,13 @@ PLAYER_CONTACT_RADIUS = 0.15  # normalized image units; same as ContactDetection
 BALL_CONFIDENCE_THRESHOLD = 0.3  # mirrors _CONFIDENCE_THRESHOLD in contact_detector
 
 COHORTS = {
-    "60fps": ["kuku", "lulu", "wawa"],
+    # All 60fps videos in the GT corpus (19 videos, ~727 GT actions). caca has
+    # only 4 GT and is excluded for noise reduction.
+    "60fps": [
+        "haha", "kaka", "kiki", "kuku", "lulu", "matchc", "ruru", "vivi",
+        "vovo", "vuvu", "wawa", "wewe", "wiwi", "wowo", "wuwu", "yaya",
+        "yeye", "yiyi", "yoyo",
+    ],
     "30fps": ["titi", "toto", "jaja"],
 }
 
