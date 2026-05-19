@@ -706,11 +706,10 @@ export async function remapSingleRally(videoId: string, rallyId: string): Promis
   const outputPath = path.join(TEMP_DIR, `rematch_${videoId}.json`);
 
   try {
-    // Run match-players with existing profiles as frozen anchors.
-    // This classifies the re-tracked rally against established player profiles
-    // instead of rebuilding from scratch — prevents ambiguous assignments
-    // that cause player teleports on single-rally retrack.
-    await runMatchPlayersCli(videoId, outputPath, true);
+    // The assignment-anchor cache on match_analysis_json pins every rally
+    // whose structural fingerprint is unchanged, so only the retracked rally
+    // re-solves against the established profiles. No special CLI flag needed.
+    await runMatchPlayersCli(videoId, outputPath);
 
     // Read the fresh match analysis from DB (camelCase, written by CLI)
     const updatedVideo = await prisma.video.findUnique({
@@ -999,12 +998,8 @@ async function computeAndSaveMatchStats(videoId: string): Promise<void> {
 async function runMatchPlayersCli(
   videoId: string,
   outputPath: string,
-  useExistingProfiles?: boolean,
 ): Promise<MatchAnalysisResult> {
   const args = ['match-players', videoId, '--output', outputPath, '--quiet'];
-  if (useExistingProfiles) {
-    args.push('--use-existing-profiles');
-  }
   return runCli<MatchAnalysisResult>(args, outputPath, 'MATCH_ANALYSIS');
 }
 
