@@ -66,7 +66,26 @@ logger = logging.getLogger(__name__)
 #          REQUIRES retrained dynamic_attribution_scorer (v3.2 scorer
 #          was calibrated for v3 contact frames; v4 shifts frames ~3f
 #          earlier on average, requires co-aligned scorer).
-CONTACT_PIPELINE_VERSION = "v4"
+#  - v5: 2026-05-19 — contact_classifier GBM retrained on multi-fps corpus
+#          (10486 candidates, 2642 positive, 492-fold LOO CV F1 86.6%).
+#          Addresses fps-bias confirmed by 3-probe validation: (a) Probe B
+#          showed +3.4pp contact recall when 60fps content is downsampled
+#          to 30fps (direct causal proof fps drives Phase 1 class-A gap),
+#          (b) Probe A visually confirmed empty-candidate Serves are real
+#          misses, (c) per-GT-action measurement shows the candidate is a
+#          strict win — 60fps Serve Attribution 73.2→80.4% (+7.2pp),
+#          Player Attribution 83.5→84.9% (+1.4pp), 30fps Attribution
+#          +1.2pp (5 wins, 3 losses on per-GT framing), Action Accuracy
+#          holds on both cohorts. The Probe C "−2.2pp 30fps Serve" framing
+#          was a denominator artifact: the new GBM detects MORE serves
+#          (Contact F1 +0.5pp) so the % drops while absolute correct count
+#          holds. v4 GBM weights file backed up at
+#          .backup_pre_2026_05_19_60fps_retrain. Downstream regressor +
+#          action_classifier + scorer UNCHANGED — per-GT validation showed
+#          they handle the new candidate distribution without rule
+#          redesign (contrary to earlier Phase 2.5 hypothesis). Full
+#          analysis: analysis/reports/contact_fps_2026_05_19/PROBE_RESULTS.md
+CONTACT_PIPELINE_VERSION = "v5"
 
 # Minimum confidence to treat a ball position as a real detection.
 # Ball detector confidence is bimodal: either 0.0 (no detection) or >=0.3 (confident).
