@@ -790,6 +790,11 @@ export async function saveTrackingResult(
     );
 
     await invalidateMatcherCachesForRally(tx, rallyId, videoId);
+  }, {
+    // Up to ~60s rallies produce ~7k+ filtered positions, ~6.5k raw positions,
+    // and ~1.5k ball positions in a single upsert. Default 5s blows the cap.
+    timeout: 30000,
+    maxWait: 10000,
   });
 
   // Auto-populate Rally.servingTeam from detected serve team
