@@ -26,8 +26,8 @@ const __dirname = path.dirname(__filename);
 // Temp directory for video segments
 const TEMP_DIR = path.join(os.tmpdir(), 'rallycut-player-tracking');
 
-// Max duration for synchronous single-rally processing (30 seconds)
-const MAX_DURATION_MS = 30000;
+// Max duration for synchronous single-rally processing (60 seconds)
+const MAX_DURATION_MS = 60000;
 
 // Max duration for batch processing (60 seconds per rally — more lenient for batch)
 const MAX_BATCH_RALLY_DURATION_MS = 60000;
