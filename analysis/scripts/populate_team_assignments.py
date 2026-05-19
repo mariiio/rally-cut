@@ -22,6 +22,7 @@ from rich.console import Console
 from rallycut.evaluation.db import get_connection
 from rallycut.tracking.action_classifier import _team_label
 from rallycut.tracking.match_tracker import build_match_team_assignments
+from rallycut.tracking.player_tracker import PlayerPosition
 
 console = Console()
 
@@ -75,6 +76,38 @@ def main() -> None:
     if dry_run:
         console.print("[yellow]Dry run — no DB changes[/yellow]")
 
+    # Pre-load per-rally positions so build_match_team_assignments can take
+    # the positional path (_teams_from_positions + verify_team_assignments)
+    # instead of the legacy pid-pairing fallback. Without positions the
+    # fallback assumes PIDs 1,2 are near, which inverts wholesale on the
+    # ~18% of fleet videos where the matcher anchored PIDs 1,2 to far.
+    rally_ids_needing_teams = [row["rally_id"] for row in needs_teams]
+    rally_positions_by_rid: dict[str, list[PlayerPosition]] = {}
+    if rally_ids_needing_teams:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT rally_id, positions_json FROM player_tracks "
+                    "WHERE rally_id = ANY(%s) AND positions_json IS NOT NULL",
+                    (rally_ids_needing_teams,),
+                )
+                for rid_raw, pos_raw in cur.fetchall():
+                    rid_str = str(rid_raw)
+                    pos_list = pos_raw if isinstance(pos_raw, list) else []
+                    rally_positions_by_rid[rid_str] = [
+                        PlayerPosition(
+                            frame_number=p.get("frameNumber", 0),
+                            track_id=p.get("trackId", 0),
+                            x=p.get("x", 0),
+                            y=p.get("y", 0),
+                            width=p.get("width", 0),
+                            height=p.get("height", 0),
+                            confidence=p.get("confidence", 0),
+                        )
+                        for p in pos_list
+                        if isinstance(p, dict)
+                    ]
+
     # Build team assignments per video from match_analysis
     video_teams: dict[str, dict[str, dict[int, int]]] = {}
     for row in needs_teams:
@@ -83,6 +116,7 @@ def main() -> None:
             match_analysis = cast(dict[str, Any], row["match_analysis"])
             teams_by_rally = build_match_team_assignments(
                 match_analysis, min_confidence=0.0,
+                rally_positions=rally_positions_by_rid,
             )
             video_teams[vid] = teams_by_rally
 

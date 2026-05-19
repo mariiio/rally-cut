@@ -52,6 +52,35 @@ def main() -> None:
 
     with get_connection() as conn:
         with conn.cursor() as cur:
+            # Pre-load per-rally positions so build_match_team_assignments can
+            # use _teams_from_positions + verify_team_assignments (positional
+            # path) instead of the legacy pid-pairing fallback. Without
+            # positions, the fallback assumes PIDs 1,2 are on the near side —
+            # silently wrong on the ~18% of fleet videos where the matcher's
+            # blind PID anchor put 1,2 on far instead (kuku, koko, ~10
+            # others). See side_switch_kuku_koko_diagnostic_2026_05_19.
+            cur.execute(
+                "SELECT rally_id, positions_json FROM player_tracks "
+                "WHERE positions_json IS NOT NULL"
+            )
+            rally_positions_by_rid: dict[str, list[PlayerPos]] = {}
+            for rid_raw, pos_raw in cur.fetchall():
+                rid_str = str(rid_raw)
+                pos_list = pos_raw if isinstance(pos_raw, list) else []
+                rally_positions_by_rid[rid_str] = [
+                    PlayerPos(
+                        frame_number=p.get("frameNumber", 0),
+                        track_id=p.get("trackId", 0),
+                        x=p.get("x", 0),
+                        y=p.get("y", 0),
+                        width=p.get("width", 0),
+                        height=p.get("height", 0),
+                        confidence=p.get("confidence", 0),
+                    )
+                    for p in pos_list
+                    if isinstance(p, dict)
+                ]
+
             cur.execute(
                 "SELECT v.id, v.match_analysis_json FROM videos v "
                 "WHERE v.match_analysis_json IS NOT NULL"
@@ -68,7 +97,10 @@ def main() -> None:
                 if not mj:
                     continue
                 match_teams_by_rally.update(
-                    build_match_team_assignments(mj, min_confidence=0.0)
+                    build_match_team_assignments(
+                        mj, min_confidence=0.0,
+                        rally_positions=rally_positions_by_rid,
+                    )
                 )
 
             cur.execute(f"""

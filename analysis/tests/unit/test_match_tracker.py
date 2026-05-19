@@ -13,6 +13,7 @@ from rallycut.tracking.match_tracker import (
     StoredRallyData,
     _compute_track_positions,
     _dist,
+    build_match_team_assignments,
 )
 from rallycut.tracking.player_features import (
     HS_BINS,
@@ -1985,3 +1986,108 @@ class TestIdentityFirstPartialPass:
                                        {10: 1, 11: 3, 12: 4})
         out = tracker._identity_first_partial_pass(results)
         assert out[0].track_to_player == {10: 1, 11: 3, 12: 4}
+
+
+class TestBuildMatchTeamAssignmentsCallerContract:
+    """Regression tests for the redetect/populate callsite bug
+    (side_switch_kuku_koko_diagnostic_2026_05_19).
+
+    build_match_team_assignments has a positional path (correct) and a
+    legacy pid-pairing fallback (`team = 0 if pid <= 2 else 1`). The
+    fallback is only correct when the matcher's blind PID anchoring put
+    PIDs 1,2 on the near side. For ~18% of fleet videos the matcher
+    anchored PIDs 1,2 to FAR, and the fallback then produces wholesale-
+    inverted teamAssignments.
+
+    Two callsites (redetect_all_actions.py, populate_team_assignments.py)
+    omitted `rally_positions=`, hitting the fallback fleet-wide on the
+    2026-05-18 retrain. These tests pin the documented divergence so any
+    future change to either path is visible.
+    """
+
+    @staticmethod
+    def _positions_pids_34_near(rally_id: str) -> dict[str, list[PlayerPosition]]:
+        """PIDs 3,4 high foot-y (near); PIDs 1,2 low foot-y (far).
+        Simulates a video where the matcher anchored PIDs 1,2 to far.
+        Mirrors the actual kuku rally 1 foot-y ordering measured in DB.
+        """
+        positions = []
+        for frame in range(30):
+            # PID 3 near (foot_y ≈ y + h/2 ≈ 0.75)
+            positions.append(PlayerPosition(
+                frame_number=frame, track_id=3,
+                x=0.5, y=0.65, width=0.05, height=0.20, confidence=1.0,
+            ))
+            # PID 4 near
+            positions.append(PlayerPosition(
+                frame_number=frame, track_id=4,
+                x=0.55, y=0.60, width=0.05, height=0.20, confidence=1.0,
+            ))
+            # PID 1 far (foot_y ≈ 0.40)
+            positions.append(PlayerPosition(
+                frame_number=frame, track_id=1,
+                x=0.45, y=0.30, width=0.05, height=0.20, confidence=1.0,
+            ))
+            # PID 2 far
+            positions.append(PlayerPosition(
+                frame_number=frame, track_id=2,
+                x=0.50, y=0.32, width=0.05, height=0.20, confidence=1.0,
+            ))
+        return {rally_id: positions}
+
+    @staticmethod
+    def _match_analysis(rally_id: str) -> dict[str, Any]:
+        """Single-rally match_analysis with identity trackToPlayer."""
+        return {
+            "rallies": [{
+                "rallyId": rally_id,
+                "trackToPlayer": {"1": 1, "2": 2, "3": 3, "4": 4},
+            }],
+        }
+
+    def test_without_positions_falls_back_to_legacy_pid_pairing(self) -> None:
+        """When called without rally_positions the legacy fallback fires.
+        The fallback always returns {pid<=2: 0, pid>2: 1} regardless of
+        physical positions — wrong on videos where matcher anchored
+        PIDs 1,2 to far. This is the foot-gun the redetect/populate
+        callsite bug stepped on.
+        """
+        teams = build_match_team_assignments(
+            self._match_analysis("r1"), min_confidence=0.0,
+        )
+        # Legacy: pids 1,2 -> team 0 (NEAR by convention), pids 3,4 -> team 1.
+        # Physically wrong in our fixture (3,4 are actually near) but the
+        # fallback can't know that without positions.
+        assert teams["r1"] == {1: 0, 2: 0, 3: 1, 4: 1}
+
+    def test_with_positions_uses_positional_truth(self) -> None:
+        """When rally_positions is passed, _teams_from_positions ranks
+        tracks by foot-y and verify_team_assignments enforces team 0 =
+        higher Y. The result reflects physical near/far regardless of
+        which PIDs the matcher happened to anchor where.
+        """
+        teams = build_match_team_assignments(
+            self._match_analysis("r1"), min_confidence=0.0,
+            rally_positions=self._positions_pids_34_near("r1"),
+        )
+        # PIDs 3,4 are near (team 0); PIDs 1,2 are far (team 1).
+        assert teams["r1"] == {3: 0, 4: 0, 1: 1, 2: 1}
+
+    def test_positional_inverts_legacy_when_matcher_anchored_pids_to_far(self) -> None:
+        """The two paths produce inverted output on the same input when
+        the matcher anchored PIDs 1,2 to far. This is the signature of
+        the original kuku/koko bug and was visible fleet-wide on ~18%
+        of videos.
+        """
+        ma = self._match_analysis("r1")
+        legacy = build_match_team_assignments(ma, min_confidence=0.0)
+        positional = build_match_team_assignments(
+            ma, min_confidence=0.0,
+            rally_positions=self._positions_pids_34_near("r1"),
+        )
+        # For every pid the two paths disagree.
+        for pid in (1, 2, 3, 4):
+            assert legacy["r1"][pid] != positional["r1"][pid], (
+                f"PID {pid}: legacy={legacy['r1'][pid]} "
+                f"positional={positional['r1'][pid]} — expected divergence"
+            )
