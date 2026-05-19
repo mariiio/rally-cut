@@ -1,0 +1,40 @@
+Loaded 46 rallies
+
+video    rally       gt  native_match  down_match  native_n  down_n
+lulu     8da4f0dc     3             3           3         3       3
+lulu     35ca5d33     2             2           1         2       1
+lulu     2adb9d80     1             0           1         0       2
+lulu     69117837     1             1           1         2       1
+wawa     82d549a6     3             3           3         4       4
+wawa     21d4cdf6     5             5           5         5       5
+wawa     7094136a     4             3           3         5       5
+wawa     8c49e480     8             8           8         9       8
+wawa     7f0f540a    10             8           9         9      10
+wawa     11adfc2f     5             5           4         5       5
+wawa     06c13117     4             3           2         3       3
+wawa     fb6e37bf     5             4           3         4       3
+wawa     1099f2d3     1             1           1         2       2
+kuku     73501ab3     7             6           6         6       6
+kuku     92a739e0     8             8           8         8       8
+kuku     861054de    13            12          13        12      13
+kuku     9e515aaf     4             4           4         4       4
+kuku     672858b4    16            15          16        15      17
+kuku     14c7e370     3             2           2         3       3
+kuku     e8dbd314     7             7           7         7       7
+kuku     9b0015f4     2             1           2         2       2
+kuku     93e80b60     4             3           4         4       4
+kuku     9688005f     4             3           4         3       4
+lulu     71c642dc    12             8           7         8       8
+lulu     14d9a87b     5             5           5         5       5
+lulu     060e5898     4             3           4         3       4
+lulu     69df24f0     4             4           3         4       3
+lulu     55565c2b     5             5           5         6       5
+kuku     da0c1dda     7             6           7         6       7
+kuku     1f141057    16            15          16        16      16
+kuku     f9979041     2             1           2         1       2
+kuku     a8d47c4b     4             3           4         3       4
+
+AGGREGATE:
+  Native (60fps):       157/179 = 87.7%
+  Downsampled (30fps):  163/179 = 91.1%
+  Delta (down - native): +3.4pp
