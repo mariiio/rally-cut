@@ -12,6 +12,7 @@ import {
   getMatchStatsApi,
   getMatchAnalysisStatus,
   MatchAnalysisInProgressError,
+  type MatchAnalysisStatus,
   type QualityAssessmentResult,
 } from '@/services/api';
 
@@ -332,6 +333,14 @@ async function finishMatchAnalysis(
       });
       return;
     }
+    if (status.status === 'processing') {
+      // SSE closed before the server's finally block wrote matchAnalysisRanAt
+      // (proxy/idle timeout, or a race between res.end() and the DB update).
+      // Defer the terminal "done" write to the poller so we don't surface
+      // stale stats.
+      await pollMatchAnalysisUntilDone(videoId, updatePipeline, isStale);
+      return;
+    }
   } catch (err) {
     console.warn('[ANALYSIS] Failed to read match-analysis status post-run:', err);
     // Non-fatal — fall through to "done" with whatever stats we have.
@@ -393,11 +402,13 @@ async function pollMatchAnalysisUntilDone(
 ): Promise<void> {
   updatePipeline({ stepMessage: 'Waiting for match analysis to finish...' });
   const start = Date.now();
+  let lastStatus: MatchAnalysisStatus | null = null;
   while (Date.now() - start < STATUS_POLL_TIMEOUT_MS) {
     await new Promise((r) => setTimeout(r, STATUS_POLL_INTERVAL_MS));
     if (isStale()) return;
     try {
       const status = await getMatchAnalysisStatus(videoId);
+      lastStatus = status;
       if (isStale()) return;
       if (status.status === 'completed') {
         await finishMatchAnalysis(videoId, updatePipeline, isStale);
@@ -416,6 +427,10 @@ async function pollMatchAnalysisUntilDone(
       // Retry on next tick
     }
   }
+  console.warn(
+    `[ANALYSIS] match-analysis poll exceeded ${STATUS_POLL_TIMEOUT_MS / 1000}s; last status:`,
+    lastStatus,
+  );
   updatePipeline({
     phase: 'error',
     error: 'Match analysis timed out',
@@ -650,14 +665,46 @@ export const useAnalysisStore = create<AnalysisState>()(
             if (!isStale()) baseUpdate(patch);
           };
 
+          // `match_analyzing` resume: server is the source of truth. The
+          // persisted `startedAt` is the client-side click time and can be
+          // much older than the actual server-side run (user closed the tab
+          // before `finishMatchAnalysis` cleared the persisted state).
+          // Apply the absolute timeout only as a last-resort escape after
+          // the server says it isn't going to settle.
+          if (phase === 'match_analyzing') {
+            try {
+              const status = await getMatchAnalysisStatus(videoId);
+              if (isStale()) return;
+              if (status.status === 'completed') {
+                await finishMatchAnalysis(videoId, updatePipeline, isStale);
+                return;
+              }
+              if (status.status === 'failed') {
+                updatePipeline({
+                  phase: 'error',
+                  error: status.error ?? 'Match analysis failed',
+                  stepMessage: 'Match analysis failed',
+                });
+                return;
+              }
+              // 'processing' | 'idle' — drop through to the poller.
+            } catch (err) {
+              console.warn(
+                '[ANALYSIS] resume: failed to read match-analysis status; falling back to poll:',
+                err,
+              );
+            }
+            if (checkAbsoluteTimeout(videoId, pipeline, updatePipeline, 'Analysis')) return;
+            if (!isStale()) await resumeMatchAnalyzing(videoId, set, get);
+            return;
+          }
+
           if (checkAbsoluteTimeout(videoId, pipeline, updatePipeline, 'Analysis')) return;
 
           if (phase === 'detecting') {
             await resumeDetecting(videoId, set, get, updatePipeline, isStale);
           } else if (phase === 'ready_tracking') {
             await resumeTracking(videoId, set, get, updatePipeline, isStale);
-          } else if (phase === 'match_analyzing') {
-            if (!isStale()) await resumeMatchAnalyzing(videoId, set, get);
           }
           return;
         }
