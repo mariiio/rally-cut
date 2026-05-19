@@ -972,7 +972,6 @@ def _run_tracking(
                     court_calibrator=calibrator,
                     sequence_probs=sequence_probs,
                     primary_track_ids=list(result.primary_track_ids) if result.primary_track_ids else None,
-                    fps=result.video_fps,
                 )
                 contact_frames = [c.frame for c in pre_seq.contacts]
                 if contact_frames:
@@ -1013,7 +1012,6 @@ def _run_tracking(
             court_calibrator=calibrator,
             sequence_probs=sequence_probs,
             primary_track_ids=list(result.primary_track_ids) if result.primary_track_ids else None,
-            fps=result.video_fps,
         )
 
         # Task 5 (2026-04-20): candidate decoder overlay runs alongside

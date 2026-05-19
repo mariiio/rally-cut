@@ -146,7 +146,6 @@ def classify_actions(
         team_assignments=team_assignments,
         sequence_probs=sequence_probs,
         primary_track_ids=primary_track_ids,
-        fps=data.get("videoFps"),
     )
 
     if not quiet:
@@ -344,7 +343,6 @@ def rank_highlights(
             team_assignments=ta,
             primary_track_ids=primary_tids_2,
             sequence_probs=sequence_probs,
-            fps=data.get("videoFps"),
         )
         # Task 5 (2026-04-20): candidate decoder overlay. Graceful fallback to
         # [] when no trained classifier is on disk. +2.64pp Action Acc on
