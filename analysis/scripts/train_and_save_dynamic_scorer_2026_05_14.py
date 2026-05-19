@@ -176,6 +176,40 @@ def build_dataset() -> list[CandidateRow]:
         # Build per-rally team_assignments once for the v3 team-awareness
         # feature, mirroring what redetect_all_actions does at inference time
         # (so training distribution matches inference distribution).
+        #
+        # Pre-load positions so build_match_team_assignments uses
+        # _teams_from_positions (positional). Without positions it falls back
+        # to the legacy pid-pairing fallback (`pid<=2 -> team 0`) which
+        # silently inverts wholesale on the ~18% of fleet videos where the
+        # matcher anchored PIDs 1,2 to far. Closes
+        # side_switch_kuku_koko_diagnostic_2026_05_19.
+        from rallycut.tracking.player_tracker import PlayerPosition as _PP  # noqa: PLC0415
+        rally_positions_for_teams: dict[str, list[_PP]] = {}
+        pcur = conn.execute(
+            "SELECT pt.rally_id, pt.positions_json "
+            "FROM player_tracks pt "
+            "JOIN rallies r ON r.id = pt.rally_id "
+            "JOIN videos v ON v.id = r.video_id "
+            "WHERE v.name = ANY(%s) AND pt.positions_json IS NOT NULL",
+            [list(TRUSTED_CODENAMES)],
+        )
+        for rid_raw, pos_raw in pcur.fetchall():
+            rid_str = str(rid_raw)
+            pos_list = pos_raw if isinstance(pos_raw, list) else []
+            rally_positions_for_teams[rid_str] = [
+                _PP(
+                    frame_number=p.get("frameNumber", 0),
+                    track_id=p.get("trackId", 0),
+                    x=p.get("x", 0),
+                    y=p.get("y", 0),
+                    width=p.get("width", 0),
+                    height=p.get("height", 0),
+                    confidence=p.get("confidence", 0),
+                )
+                for p in pos_list
+                if isinstance(p, dict)
+            ]
+
         match_teams_by_rally: dict[str, dict[int, int]] = {}
         vcur = conn.execute(
             "SELECT v.match_analysis_json FROM videos v "
@@ -186,7 +220,10 @@ def build_dataset() -> list[CandidateRow]:
             if not mj_raw:
                 continue
             match_teams_by_rally.update(
-                build_match_team_assignments(mj_raw, min_confidence=0.0)
+                build_match_team_assignments(
+                    mj_raw, min_confidence=0.0,
+                    rally_positions=rally_positions_for_teams,
+                )
             )
         cur = conn.execute(
             """

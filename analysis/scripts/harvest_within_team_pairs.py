@@ -56,6 +56,7 @@ from numpy.typing import NDArray
 
 from rallycut.evaluation.db import get_connection
 from rallycut.evaluation.tracking.db import get_video_path
+from rallycut.tracking.match_tracker import build_match_team_assignments
 from rallycut.tracking.player_features import extract_bbox_crop
 from rallycut.tracking.player_tracker import PlayerPosition
 from rallycut.tracking.reid_embeddings import extract_backbone_features
@@ -368,38 +369,34 @@ class HarvestRally:
     canonical_by_track: dict[int, int]    # track_id → canonical_id (1-4)
 
 
-def _team_from_canonical(canonical_id: int, side_switch_count: int) -> int:
-    """Match-level canonical_id (1-4) → team, with cumulative side switches."""
-    base_team = 0 if canonical_id <= 2 else 1
-    return base_team if side_switch_count % 2 == 0 else 1 - base_team
-
-
 def _teams_from_match_analysis(
     match_analysis: dict[str, Any], rally_id: str,
+    positions: list[PlayerPosition],
 ) -> tuple[dict[int, int], dict[int, int]]:
     """Derive (track_id→team, track_id→canonical) for one rally.
 
-    Accounts for cumulative side switches by walking all prior rallies in
-    match_analysis.rallies order. Side-switch-aware, matches
-    build_match_team_assignments.
+    Uses build_match_team_assignments with positions so the positional
+    path fires. Without positions the canonical helper falls back to
+    legacy pid-pairing (`pid<=2 → team 0`) which inverts wholesale on
+    the ~18% of fleet videos where the matcher anchored PIDs 1,2 to
+    far. See side_switch_kuku_koko_diagnostic_2026_05_19.
     """
-    rallies = match_analysis.get("rallies", []) or []
-    side_switch_count = 0
-    teams: dict[int, int] = {}
     canonical: dict[int, int] = {}
-    for entry in rallies:
-        if entry.get("sideSwitchDetected") or entry.get("side_switch_detected"):
-            side_switch_count += 1
+    for entry in match_analysis.get("rallies", []) or []:
         rid = entry.get("rallyId") or entry.get("rally_id", "")
         if rid != rally_id:
             continue
         t2p_raw = entry.get("trackToPlayer") or entry.get("track_to_player", {}) or {}
-        for tid_str, pid in t2p_raw.items():
-            tid = int(tid_str)
-            cid = int(pid)
-            canonical[tid] = cid
-            teams[tid] = _team_from_canonical(cid, side_switch_count)
-        return teams, canonical
+        canonical = {int(tid_str): int(pid) for tid_str, pid in t2p_raw.items()}
+        break
+    if not canonical:
+        return {}, {}
+
+    teams_by_rally = build_match_team_assignments(
+        match_analysis, min_confidence=0.0,
+        rally_positions={rally_id: positions},
+    )
+    teams = teams_by_rally.get(rally_id, {})
     return teams, canonical
 
 
@@ -453,7 +450,7 @@ def iter_harvest_rallies() -> Iterator[HarvestRally]:
                 ]
 
                 teams, canonical = _teams_from_match_analysis(
-                    match_analysis, rally_id,
+                    match_analysis, rally_id, positions,
                 )
                 if not teams or not canonical:
                     continue
