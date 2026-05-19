@@ -1,0 +1,33 @@
+video      fps    gt  matched    fn    fn%    C    D    A    B
+kuku      59.9    97       86    11  11.3%    1    4    6    0
+lulu      59.9    37       31     6  16.2%    4    1    1    0
+wawa      59.9    51       40    11  21.6%    4    4    3    0
+titi      30.0    86       79     7   8.1%    3    3    1    0
+toto      29.9    58       51     7  12.1%    4    3    0    0
+jaja      30.0    88       87     1   1.1%    0    0    1    0
+
+cohort        gt  matched    fn    fn%    C%    D%    A%    B%
+60fps        185      157    28  15.1%  4.9%  4.9%  5.4%  0.0%
+30fps        232      217    15   6.5%  3.0%  2.6%  0.9%  0.0%
+
+Generator-fire breakdown on class A (which generator produced the candidate that the GBM/dedup then rejected):
+  [60fps]
+    A_decel: 2
+    A_dirchange: 5
+    A_inflection: 7
+    A_netcross: 5
+    A_parabolic: 1
+    A_velocity: 3
+  [30fps]
+    A_decel: 1
+    A_dirchange: 2
+    A_inflection: 2
+    A_netcross: 2
+    A_velocity: 1
+
+
+Legend:
+  C = no confident ball detection within ±2f of GT (upstream FN)
+  D = ball present but no player within 0.15 (attribution FN)
+  A = candidate WAS generated within ±5f, GBM/dedup rejected it (FIX = GBM retrain)
+  B = NO candidate generated within ±5f, gates filtered everything (FIX = scale culprit gate)

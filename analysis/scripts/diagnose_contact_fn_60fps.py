@@ -1,0 +1,362 @@
+"""Phase 1 diagnosis: classify contact FN by failure mode on 60fps vs 30fps.
+
+For each GT action frame across kuku/lulu/wawa (60fps with GT) and
+titi/toto/jaja (30fps comparison), check whether the v4 pipeline produced
+a contact within ±10 frames of the GT frame. For each FN, classify the
+failure mode:
+
+  C  — ball had no confident detection at GT frame ± 2 (upstream FN)
+  D  — no player within 0.15 of ball at GT frame ± 2 (attribution FN)
+  A  — ball present, player near, _prepare_candidates DID generate a
+       candidate within ±5f, but it was filtered out (GBM rejected it
+       or dedup/refinement dropped it). FIX = GBM retrain.
+  B  — ball present, player near, but _prepare_candidates did NOT
+       generate any candidate within ±5f. The gates filtered too
+       aggressively. FIX = scale the culprit gate.
+
+Output: per-video and per-cohort tables of FN rate + classification.
+
+Usage:
+    cd analysis
+    uv run python scripts/diagnose_contact_fn_60fps.py
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import sys
+from collections import defaultdict
+from typing import Any, cast
+
+from rallycut.evaluation.db import get_connection
+from rallycut.tracking.ball_tracker import BallPosition
+from rallycut.tracking.contact_detector import (
+    ContactDetectionConfig,
+    _prepare_candidates,
+)
+from rallycut.tracking.player_tracker import PlayerPosition
+
+MATCH_WINDOW = 10  # GT contact considered "detected" if v4 contact within ±N frames
+CANDIDATE_WINDOW = 5  # AB split: candidate considered "at GT" if within ±N
+SUPPORT_WINDOW = 2  # FN diagnosis searches ±N frames for ball/player presence
+PLAYER_CONTACT_RADIUS = 0.15  # normalized image units; same as ContactDetectionConfig default
+BALL_CONFIDENCE_THRESHOLD = 0.3  # mirrors _CONFIDENCE_THRESHOLD in contact_detector
+
+COHORTS = {
+    "60fps": ["kuku", "lulu", "wawa"],
+    "30fps": ["titi", "toto", "jaja"],
+}
+
+
+def _load_rally_data(cur: Any, video_names: list[str]) -> dict[str, dict[str, Any]]:
+    """Load contacts, ball, players, fps per rally for the named videos."""
+    placeholders = ",".join(["%s"] * len(video_names))
+    cur.execute(
+        f"""
+        SELECT r.id, v.name,
+               pt.contacts_json, pt.ball_positions_json, pt.positions_json,
+               COALESCE(pt.fps, v.fps) AS resolved_fps
+        FROM rallies r
+        JOIN player_tracks pt ON pt.rally_id = r.id
+        JOIN videos v ON r.video_id = v.id
+        WHERE v.name IN ({placeholders})
+        """,
+        video_names,
+    )
+    out: dict[str, dict[str, Any]] = {}
+    for row in cur:
+        rid = str(row[0])
+        out[rid] = {
+            "video": row[1],
+            "contacts_json": row[2],
+            "ball_json": row[3],
+            "positions_json": row[4],
+            "fps": float(row[5]) if row[5] else 30.0,
+        }
+    return out
+
+
+def _load_gt(cur: Any, video_names: list[str]) -> dict[str, list[dict[str, Any]]]:
+    """Load GT actions per rally."""
+    placeholders = ",".join(["%s"] * len(video_names))
+    cur.execute(
+        f"""
+        SELECT r.id, gt.frame, gt.action, gt.snapshot_ball_x, gt.snapshot_ball_y,
+               gt.resolved_track_id
+        FROM rally_action_ground_truth gt
+        JOIN rallies r ON gt.rally_id = r.id
+        JOIN videos v ON r.video_id = v.id
+        WHERE v.name IN ({placeholders})
+        ORDER BY r.id, gt.frame
+        """,
+        video_names,
+    )
+    out: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in cur:
+        rid = str(row[0])
+        out[rid].append({
+            "frame": row[1],
+            "action": row[2],
+            "ball_x": row[3],
+            "ball_y": row[4],
+            "track_id": row[5],
+        })
+    return out
+
+
+def _parse_contacts(contacts_json: Any) -> list[dict[str, Any]]:
+    if contacts_json is None:
+        return []
+    if isinstance(contacts_json, str):
+        return cast(list[dict[str, Any]], json.loads(contacts_json).get("contacts", []))
+    return cast(list[dict[str, Any]], cast(dict[str, Any], contacts_json).get("contacts", []))
+
+
+def _ball_present(
+    ball_positions: list[dict[str, Any]] | None, gt_frame: int,
+) -> tuple[bool, float | None, float | None]:
+    """Check if a confident ball detection exists within ±SUPPORT_WINDOW of gt_frame.
+
+    Returns (present, x_at_nearest, y_at_nearest).
+    """
+    if not ball_positions:
+        return False, None, None
+    best_dist = math.inf
+    best_x: float | None = None
+    best_y: float | None = None
+    for bp in ball_positions:
+        f = bp.get("frameNumber")
+        if f is None:
+            continue
+        d = abs(f - gt_frame)
+        if d > SUPPORT_WINDOW:
+            continue
+        if bp.get("confidence", 0.0) < BALL_CONFIDENCE_THRESHOLD:
+            continue
+        if d < best_dist:
+            best_dist = d
+            best_x = bp.get("x")
+            best_y = bp.get("y")
+    return best_x is not None, best_x, best_y
+
+
+def _nearest_player_dist(
+    positions: list[dict[str, Any]] | None,
+    gt_frame: int,
+    ball_x: float,
+    ball_y: float,
+) -> float:
+    """Min Euclidean distance from ball to any player bbox center within ±SUPPORT_WINDOW."""
+    if not positions:
+        return math.inf
+    best = math.inf
+    for p in positions:
+        f = p.get("frameNumber")
+        if f is None or abs(f - gt_frame) > SUPPORT_WINDOW:
+            continue
+        px = p.get("x")
+        py = p.get("y")
+        if px is None or py is None:
+            continue
+        d = math.hypot(px - ball_x, py - ball_y)
+        if d < best:
+            best = d
+    return best
+
+
+def _contact_matched(contacts: list[dict[str, Any]], gt_frame: int) -> bool:
+    for c in contacts:
+        if abs(c.get("frame", -10000) - gt_frame) <= MATCH_WINDOW:
+            return True
+    return False
+
+
+def _build_ball_positions(ball_json: list[dict[str, Any]] | None) -> list[BallPosition]:
+    if not ball_json:
+        return []
+    return [
+        BallPosition(
+            frame_number=bp["frameNumber"], x=bp["x"], y=bp["y"],
+            confidence=bp.get("confidence", 1.0),
+        )
+        for bp in ball_json
+        if bp.get("x", 0) > 0 or bp.get("y", 0) > 0
+    ]
+
+
+def _build_player_positions(
+    positions_json: list[dict[str, Any]] | None,
+) -> list[PlayerPosition]:
+    if not positions_json:
+        return []
+    return [
+        PlayerPosition(
+            frame_number=p["frameNumber"], track_id=p["trackId"],
+            x=p["x"], y=p["y"], width=p["width"], height=p["height"],
+            confidence=p.get("confidence", 1.0),
+        )
+        for p in positions_json
+    ]
+
+
+def _candidate_at_gt(
+    ball_positions: list[BallPosition],
+    player_positions: list[PlayerPosition],
+    gt_frame: int,
+) -> tuple[bool, list[str]]:
+    """Run _prepare_candidates and check whether any candidate fires near gt_frame.
+
+    Returns (any_candidate_in_window, list_of_generators_that_fired).
+    """
+    cfg = ContactDetectionConfig()
+    try:
+        prep = _prepare_candidates(ball_positions, player_positions, cfg)
+    except Exception:
+        return False, []
+
+    any_near = any(abs(f - gt_frame) <= CANDIDATE_WINDOW for f in prep.candidate_frames)
+    if not any_near:
+        return False, []
+
+    fired: list[str] = []
+    for label, frames in (
+        ("velocity", prep.velocity_peak_frames),
+        ("inflection", prep.inflection_frames),
+        ("decel", prep.deceleration_frames),
+        ("parabolic", prep.parabolic_frames),
+        ("dirchange", prep.direction_change_frames),
+        ("netcross", prep.net_crossing_frames),
+    ):
+        if any(abs(f - gt_frame) <= CANDIDATE_WINDOW for f in frames):
+            fired.append(label)
+    return True, fired
+
+
+def main() -> int:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            all_videos = COHORTS["60fps"] + COHORTS["30fps"]
+            rally_data = _load_rally_data(cur, all_videos)
+            gt_by_rally = _load_gt(cur, all_videos)
+
+    per_video: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    generator_fires: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+
+    for rid, gt_list in gt_by_rally.items():
+        if rid not in rally_data:
+            continue
+        data = rally_data[rid]
+        video = data["video"]
+        contacts = _parse_contacts(data["contacts_json"])
+        ball_json = cast(list[dict[str, Any]] | None, data["ball_json"])
+        positions_json = cast(list[dict[str, Any]] | None, data["positions_json"])
+        # Build typed objects once per rally (reused for each GT row)
+        ball_positions = _build_ball_positions(ball_json)
+        player_positions = _build_player_positions(positions_json)
+
+        for gt in gt_list:
+            gt_frame = gt["frame"]
+            per_video[video]["gt_total"] += 1
+
+            if _contact_matched(contacts, gt_frame):
+                per_video[video]["matched"] += 1
+                continue
+
+            # FN — classify
+            per_video[video]["fn_total"] += 1
+            ball_ok, bx, by = _ball_present(ball_json, gt_frame)
+            if not ball_ok:
+                per_video[video]["fn_class_C"] += 1
+                continue
+            search_x = bx if bx is not None else gt.get("ball_x")
+            search_y = by if by is not None else gt.get("ball_y")
+            if search_x is None or search_y is None:
+                per_video[video]["fn_class_C"] += 1
+                continue
+            d = _nearest_player_dist(positions_json, gt_frame, search_x, search_y)
+            if d > PLAYER_CONTACT_RADIUS:
+                per_video[video]["fn_class_D"] += 1
+                continue
+
+            # AB split: did _prepare_candidates fire at the GT frame?
+            had_candidate, gens = _candidate_at_gt(
+                ball_positions, player_positions, gt_frame,
+            )
+            cohort = "60fps" if data["fps"] > 40.0 else "30fps"
+            if had_candidate:
+                per_video[video]["fn_class_A"] += 1  # GBM/dedup rejected
+                for g in gens:
+                    generator_fires[cohort][f"A_{g}"] += 1
+            else:
+                per_video[video]["fn_class_B"] += 1  # gates filtered all generators
+                generator_fires[cohort]["B_no_generator_fired"] += 1
+
+    # Per-video table
+    print(f"{'video':<8} {'fps':>5} {'gt':>5} {'matched':>8} {'fn':>5} "
+          f"{'fn%':>6} {'C':>4} {'D':>4} {'A':>4} {'B':>4}")
+    cohort_totals: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
+    track_keys = (
+        "gt_total", "matched", "fn_total",
+        "fn_class_C", "fn_class_D", "fn_class_A", "fn_class_B",
+    )
+    for cohort_name, videos in COHORTS.items():
+        for v in videos:
+            row = per_video[v]
+            n_gt = row["gt_total"]
+            n_matched = row["matched"]
+            n_fn = row["fn_total"]
+            n_fn_c = row["fn_class_C"]
+            n_fn_d = row["fn_class_D"]
+            n_fn_a = row["fn_class_A"]
+            n_fn_b = row["fn_class_B"]
+            fn_pct = (n_fn / n_gt * 100) if n_gt > 0 else 0
+            fps_avg = next(
+                (d["fps"] for r, d in rally_data.items() if d["video"] == v), 0.0,
+            )
+            print(
+                f"{v:<8} {fps_avg:>5.1f} {n_gt:>5d} {n_matched:>8d} {n_fn:>5d} "
+                f"{fn_pct:>5.1f}% {n_fn_c:>4d} {n_fn_d:>4d} {n_fn_a:>4d} {n_fn_b:>4d}"
+            )
+            for k in track_keys:
+                cohort_totals[cohort_name][k] += row[k]
+
+    print()
+    print(f"{'cohort':<10} {'gt':>5} {'matched':>8} {'fn':>5} "
+          f"{'fn%':>6} {'C%':>5} {'D%':>5} {'A%':>5} {'B%':>5}")
+    for cohort_name in ("60fps", "30fps"):
+        c = cohort_totals[cohort_name]
+        n_gt = c["gt_total"]
+        n_fn = c["fn_total"]
+        if n_gt == 0:
+            continue
+        fn_pct = n_fn / n_gt * 100
+        c_pct = c["fn_class_C"] / n_gt * 100
+        d_pct = c["fn_class_D"] / n_gt * 100
+        a_pct = c["fn_class_A"] / n_gt * 100
+        b_pct = c["fn_class_B"] / n_gt * 100
+        print(
+            f"{cohort_name:<10} {n_gt:>5d} {c['matched']:>8d} {n_fn:>5d} "
+            f"{fn_pct:>5.1f}% {c_pct:>4.1f}% {d_pct:>4.1f}% {a_pct:>4.1f}% {b_pct:>4.1f}%"
+        )
+
+    print()
+    print("Generator-fire breakdown on class A (which generator produced the "
+          "candidate that the GBM/dedup then rejected):")
+    for cohort_name in ("60fps", "30fps"):
+        print(f"  [{cohort_name}]")
+        for k in sorted(generator_fires[cohort_name].keys()):
+            print(f"    {k}: {generator_fires[cohort_name][k]}")
+
+    print()
+    print()
+    print("Legend:")
+    print(f"  C = no confident ball detection within ±{SUPPORT_WINDOW}f of GT (upstream FN)")
+    print(f"  D = ball present but no player within {PLAYER_CONTACT_RADIUS} (attribution FN)")
+    print(f"  A = candidate WAS generated within ±{CANDIDATE_WINDOW}f, GBM/dedup rejected it (FIX = GBM retrain)")
+    print(f"  B = NO candidate generated within ±{CANDIDATE_WINDOW}f, gates filtered everything (FIX = scale culprit gate)")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
