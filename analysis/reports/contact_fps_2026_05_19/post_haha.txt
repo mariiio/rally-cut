@@ -1,0 +1,42 @@
+rally=f39d790f  video=haha  fps=59.9  frames=583  dur=9.7s  contacts=1  density=0.103/s  ver=v5
+    frames=[202]
+    ts_s =[3.37]
+rally=18175bae  video=haha  fps=59.9  frames=1302  dur=21.7s  contacts=9  density=0.414/s  ver=v5
+    frames=[211, 274, 375, 471, 511, 619, 712, 809, 843]
+    ts_s =[3.52, 4.571, 6.256, 7.858, 8.525, 10.327, 11.879, 13.497, 14.064]
+rally=1e159b7e  video=haha  fps=59.9  frames=661  dur=11.0s  contacts=4  density=0.363/s  ver=v5
+    frames=[226, 324, 417, 449]
+    ts_s =[3.77, 5.405, 6.957, 7.491]
+rally=23d42e02  video=haha  fps=59.9  frames=1182  dur=19.7s  contacts=8  density=0.406/s  ver=v5
+    frames=[208, 280, 364, 483, 571, 634, 727, 827]
+    ts_s =[3.47, 4.671, 6.073, 8.058, 9.526, 10.577, 12.129, 13.797]
+rally=d98f9f86  video=haha  fps=59.9  frames=1158  dur=19.3s  contacts=7  density=0.362/s  ver=v5
+    frames=[210, 278, 377, 511, 599, 698, 738]
+    ts_s =[3.504, 4.638, 6.29, 8.525, 9.993, 11.645, 12.312]
+rally=bd138e5e  video=haha  fps=59.9  frames=870  dur=14.5s  contacts=2  density=0.138/s  ver=v5
+    frames=[339, 432]
+    ts_s =[5.656, 7.207]
+rally=4e96fa50  video=haha  fps=59.9  frames=1086  dur=18.1s  contacts=7  density=0.386/s  ver=v5
+    frames=[233, 295, 406, 508, 559, 640, 735]
+    ts_s =[3.887, 4.922, 6.773, 8.475, 9.326, 10.677, 12.262]
+rally=c7898faa  video=haha  fps=59.9  frames=1086  dur=18.1s  contacts=4  density=0.221/s  ver=v5
+    frames=[328, 433, 515, 554]
+    ts_s =[5.472, 7.224, 8.592, 9.243]
+rally=6090fd68  video=haha  fps=59.9  frames=655  dur=10.9s  contacts=1  density=0.092/s  ver=v5
+    frames=[304]
+    ts_s =[5.072]
+rally=7d858b9f  video=haha  fps=59.9  frames=1015  dur=16.9s  contacts=5  density=0.295/s  ver=v5
+    frames=[270, 358, 456, 543, 651]
+    ts_s =[4.505, 5.973, 7.608, 9.059, 10.861]
+rally=1a84b131  video=haha  fps=59.9  frames=775  dur=12.9s  contacts=0  density=0.000/s  ver=v5
+    frames=[]
+    ts_s =[]
+rally=2e667b9c  video=haha  fps=59.9  frames=655  dur=10.9s  contacts=0  density=0.000/s  ver=v5
+    frames=[]
+    ts_s =[]
+rally=aacd5eb6  video=haha  fps=59.9  frames=822  dur=13.7s  contacts=3  density=0.219/s  ver=v5
+    frames=[265, 356, 447]
+    ts_s =[4.421, 5.939, 7.457]
+rally=c3a4ab1b  video=haha  fps=59.9  frames=871  dur=14.5s  contacts=4  density=0.275/s  ver=v5
+    frames=[247, 316, 403, 498]
+    ts_s =[4.121, 5.272, 6.723, 8.308]

@@ -1,0 +1,42 @@
+rally=44351174  video=koko  fps=30.0  frames=747  dur=24.9s  contacts=12  density=0.481/s  ver=v5
+    frames=[95, 128, 189, 233, 256, 309, 356, 378, 423, 463, 495, 540]
+    ts_s =[3.17, 4.271, 6.306, 7.774, 8.542, 10.31, 11.879, 12.613, 14.114, 15.449, 16.517, 18.018]
+rally=2cb28662  video=koko  fps=30.0  frames=1274  dur=42.5s  contacts=25  density=0.588/s  ver=v5
+    frames=[110, 156, 198, 244, 280, 322, 367, 395, 438, 490, 515, 567, 604, 649, 697, 714, 770, 823, 846, 875, 918, 945, 985, 1032, 1063]
+    ts_s =[3.67, 5.205, 6.607, 8.141, 9.343, 10.744, 12.246, 13.18, 14.615, 16.35, 17.184, 18.919, 20.153, 21.655, 23.257, 23.824, 25.692, 27.461, 28.228, 29.196, 30.631, 31.532, 32.866, 34.434, 35.469]
+rally=89590b77  video=koko  fps=30.0  frames=351  dur=11.7s  contacts=1  density=0.085/s  ver=v5
+    frames=[154]
+    ts_s =[5.138]
+rally=483970c6  video=koko  fps=30.0  frames=507  dur=16.9s  contacts=5  density=0.296/s  ver=v5
+    frames=[150, 199, 246, 269, 285]
+    ts_s =[5.005, 6.64, 8.208, 8.976, 9.51]
+rally=0c58108f  video=koko  fps=30.0  frames=447  dur=14.9s  contacts=4  density=0.268/s  ver=v5
+    frames=[122, 157, 198, 250]
+    ts_s =[4.071, 5.239, 6.607, 8.342]
+rally=3e086020  video=koko  fps=30.0  frames=434  dur=14.5s  contacts=2  density=0.138/s  ver=v5
+    frames=[132, 179]
+    ts_s =[4.404, 5.973]
+rally=f154e34f  video=koko  fps=30.0  frames=459  dur=15.3s  contacts=3  density=0.196/s  ver=v5
+    frames=[99, 187, 238]
+    ts_s =[3.303, 6.24, 7.941]
+rally=86c77c1a  video=koko  fps=30.0  frames=494  dur=16.5s  contacts=5  density=0.303/s  ver=v5
+    frames=[149, 189, 234, 283, 310]
+    ts_s =[4.972, 6.306, 7.808, 9.443, 10.344]
+rally=19cfec44  video=koko  fps=30.0  frames=770  dur=25.7s  contacts=12  density=0.467/s  ver=v5
+    frames=[104, 143, 189, 236, 265, 295, 349, 384, 421, 470, 498, 516]
+    ts_s =[3.47, 4.771, 6.306, 7.875, 8.842, 9.843, 11.645, 12.813, 14.047, 15.682, 16.617, 17.217]
+rally=32c65f04  video=koko  fps=30.0  frames=447  dur=14.9s  contacts=5  density=0.335/s  ver=v5
+    frames=[134, 173, 219, 267, 277]
+    ts_s =[4.471, 5.772, 7.307, 8.909, 9.243]
+rally=71a3a742  video=koko  fps=30.0  frames=339  dur=11.3s  contacts=3  density=0.265/s  ver=v5
+    frames=[84, 118, 166]
+    ts_s =[2.803, 3.937, 5.539]
+rally=648bf6f2  video=koko  fps=30.0  frames=482  dur=16.1s  contacts=3  density=0.187/s  ver=v5
+    frames=[93, 192, 242]
+    ts_s =[3.103, 6.406, 8.075]
+rally=9f0221f5  video=koko  fps=30.0  frames=386  dur=12.9s  contacts=3  density=0.233/s  ver=v5
+    frames=[119, 147, 185]
+    ts_s =[3.971, 4.905, 6.173]
+rally=abfbcb64  video=koko  fps=30.0  frames=410  dur=13.7s  contacts=5  density=0.365/s  ver=v5
+    frames=[78, 115, 172, 223, 244]
+    ts_s =[2.603, 3.837, 5.739, 7.441, 8.141]

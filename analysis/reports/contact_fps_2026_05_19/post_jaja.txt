@@ -1,0 +1,45 @@
+rally=0102cbba  video=jaja  fps=30.0  frames=436  dur=14.5s  contacts=4  density=0.275/s  ver=v5
+    frames=[108, 144, 195, 244]
+    ts_s =[3.6, 4.8, 6.5, 8.133]
+rally=ac84c527  video=jaja  fps=30.0  frames=688  dur=22.9s  contacts=9  density=0.392/s  ver=v5
+    frames=[118, 155, 193, 250, 292, 351, 400, 448, 495]
+    ts_s =[3.933, 5.167, 6.433, 8.333, 9.733, 11.7, 13.333, 14.933, 16.5]
+rally=04f2a97f  video=jaja  fps=30.0  frames=436  dur=14.5s  contacts=5  density=0.344/s  ver=v5
+    frames=[102, 134, 183, 238, 247]
+    ts_s =[3.4, 4.467, 6.1, 7.933, 8.233]
+rally=028f8384  video=jaja  fps=30.0  frames=616  dur=20.5s  contacts=9  density=0.438/s  ver=v5
+    frames=[116, 152, 199, 260, 298, 312, 363, 409, 420]
+    ts_s =[3.867, 5.067, 6.633, 8.667, 9.933, 10.4, 12.1, 13.633, 14.0]
+rally=2ae99d01  video=jaja  fps=30.0  frames=436  dur=14.5s  contacts=4  density=0.275/s  ver=v5
+    frames=[110, 148, 188, 230]
+    ts_s =[3.667, 4.933, 6.267, 7.667]
+rally=30707f69  video=jaja  fps=30.0  frames=616  dur=20.5s  contacts=9  density=0.438/s  ver=v5
+    frames=[131, 166, 218, 228, 274, 295, 334, 382, 424]
+    ts_s =[4.367, 5.533, 7.267, 7.6, 9.133, 9.833, 11.133, 12.733, 14.133]
+rally=c30c9fc9  video=jaja  fps=30.0  frames=448  dur=14.9s  contacts=4  density=0.268/s  ver=v5
+    frames=[122, 157, 202, 247]
+    ts_s =[4.067, 5.233, 6.733, 8.233]
+rally=58460f5f  video=jaja  fps=30.0  frames=460  dur=15.3s  contacts=4  density=0.261/s  ver=v5
+    frames=[128, 155, 208, 261]
+    ts_s =[4.267, 5.167, 6.933, 8.7]
+rally=3cd2782c  video=jaja  fps=30.0  frames=676  dur=22.5s  contacts=10  density=0.444/s  ver=v5
+    frames=[101, 128, 178, 224, 247, 298, 340, 363, 425, 476]
+    ts_s =[3.367, 4.267, 5.933, 7.467, 8.233, 9.933, 11.333, 12.1, 14.167, 15.867]
+rally=d1faa2b4  video=jaja  fps=30.0  frames=448  dur=14.9s  contacts=4  density=0.268/s  ver=v5
+    frames=[115, 141, 196, 247]
+    ts_s =[3.833, 4.7, 6.533, 8.233]
+rally=49c2cce5  video=jaja  fps=30.0  frames=460  dur=15.3s  contacts=4  density=0.261/s  ver=v5
+    frames=[120, 151, 211, 254]
+    ts_s =[4.0, 5.033, 7.033, 8.467]
+rally=6737d3fc  video=jaja  fps=30.0  frames=436  dur=14.5s  contacts=4  density=0.275/s  ver=v5
+    frames=[120, 154, 201, 255]
+    ts_s =[4.0, 5.133, 6.7, 8.5]
+rally=c09147c3  video=jaja  fps=30.0  frames=460  dur=15.3s  contacts=4  density=0.261/s  ver=v5
+    frames=[116, 155, 209, 254]
+    ts_s =[3.867, 5.167, 6.967, 8.467]
+rally=6618acda  video=jaja  fps=30.0  frames=448  dur=14.9s  contacts=4  density=0.268/s  ver=v5
+    frames=[129, 166, 212, 257]
+    ts_s =[4.3, 5.533, 7.067, 8.567]
+rally=06bafb49  video=jaja  fps=30.0  frames=508  dur=16.9s  contacts=6  density=0.354/s  ver=v5
+    frames=[129, 155, 210, 269, 318, 361]
+    ts_s =[4.3, 5.167, 7.0, 8.967, 10.6, 12.033]

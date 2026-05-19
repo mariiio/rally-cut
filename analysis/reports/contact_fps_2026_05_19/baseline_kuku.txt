@@ -1,0 +1,42 @@
+rally=da0c1dda  video=kuku  fps=59.9  frames=949  dur=15.8s  contacts=6  density=0.379/s  ver=v4
+    frames=[276, 379, 470, 501, 566, 682]
+    ts_s =[4.605, 6.323, 7.841, 8.358, 9.443, 11.378]
+rally=73501ab3  video=kuku  fps=59.9  frames=949  dur=15.8s  contacts=6  density=0.379/s  ver=v4
+    frames=[254, 345, 433, 498, 599, 690]
+    ts_s =[4.238, 5.756, 7.224, 8.308, 9.993, 11.511]
+rally=1f141057  video=kuku  fps=59.9  frames=1711  dur=28.5s  contacts=16  density=0.561/s  ver=v4
+    frames=[251, 314, 405, 498, 565, 673, 763, 829, 909, 1015, 1064, 1153, 1246, 1401, 1491, 1495]
+    ts_s =[4.188, 5.239, 6.757, 8.308, 9.426, 11.228, 12.729, 13.83, 15.165, 16.934, 17.751, 19.236, 20.787, 23.373, 24.875, 24.942]
+rally=f9979041  video=kuku  fps=59.9  frames=559  dur=9.3s  contacts=1  density=0.107/s  ver=v4
+    frames=[285]
+    ts_s =[4.755]
+rally=a8d47c4b  video=kuku  fps=59.9  frames=727  dur=12.1s  contacts=3  density=0.247/s  ver=v4
+    frames=[281, 391, 484]
+    ts_s =[4.688, 6.523, 8.075]
+rally=92a739e0  video=kuku  fps=59.9  frames=1021  dur=17.0s  contacts=8  density=0.470/s  ver=v4
+    frames=[211, 274, 382, 473, 565, 654, 735, 801]
+    ts_s =[3.52, 4.571, 6.373, 7.891, 9.426, 10.911, 12.262, 13.363]
+rally=14c7e370  video=kuku  fps=59.9  frames=679  dur=11.3s  contacts=3  density=0.265/s  ver=v4
+    frames=[250, 324, 427]
+    ts_s =[4.171, 5.405, 7.124]
+rally=e8dbd314  video=kuku  fps=59.9  frames=967  dur=16.1s  contacts=7  density=0.434/s  ver=v4
+    frames=[197, 263, 355, 455, 523, 625, 721]
+    ts_s =[3.287, 4.388, 5.923, 7.591, 8.725, 10.427, 12.029]
+rally=9b0015f4  video=kuku  fps=59.9  frames=511  dur=8.5s  contacts=2  density=0.235/s  ver=v4
+    frames=[163, 221]
+    ts_s =[2.719, 3.687]
+rally=93e80b60  video=kuku  fps=59.9  frames=679  dur=11.3s  contacts=4  density=0.353/s  ver=v4
+    frames=[270, 337, 438, 466]
+    ts_s =[4.505, 5.622, 7.307, 7.774]
+rally=9688005f  video=kuku  fps=59.9  frames=751  dur=12.5s  contacts=3  density=0.239/s  ver=v4
+    frames=[288, 381, 480]
+    ts_s =[4.805, 6.356, 8.008]
+rally=861054de  video=kuku  fps=59.9  frames=1471  dur=24.5s  contacts=12  density=0.489/s  ver=v4
+    frames=[280, 388, 487, 544, 652, 743, 782, 873, 987, 1061, 1141, 1233]
+    ts_s =[4.671, 6.473, 8.125, 9.076, 10.878, 12.396, 13.046, 14.565, 16.466, 17.701, 19.036, 20.571]
+rally=9e515aaf  video=kuku  fps=59.9  frames=709  dur=11.8s  contacts=4  density=0.338/s  ver=v4
+    frames=[174, 242, 353, 467]
+    ts_s =[2.903, 4.037, 5.889, 7.791]
+rally=672858b4  video=kuku  fps=59.9  frames=1537  dur=25.6s  contacts=15  density=0.585/s  ver=v4
+    frames=[301, 383, 481, 541, 602, 712, 752, 863, 955, 1020, 1092, 1192, 1245, 1341, 1429]
+    ts_s =[5.022, 6.39, 8.025, 9.026, 10.043, 11.879, 12.546, 14.398, 15.933, 17.017, 18.218, 19.887, 20.771, 22.372, 23.84]

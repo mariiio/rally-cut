@@ -1,0 +1,30 @@
+rally=7094136a  video=wawa  fps=59.9  frames=499  dur=8.3s  contacts=5  density=0.601/s  ver=v4
+    frames=[121, 215, 310, 331, 418]
+    ts_s =[2.019, 3.587, 5.172, 5.522, 6.974]
+rally=8c49e480  video=wawa  fps=59.9  frames=979  dur=16.3s  contacts=9  density=0.551/s  ver=v4
+    frames=[103, 185, 252, 338, 433, 539, 631, 683, 748]
+    ts_s =[1.718, 3.086, 4.204, 5.639, 7.224, 8.992, 10.527, 11.395, 12.479]
+rally=fb6e37bf  video=wawa  fps=59.9  frames=709  dur=11.8s  contacts=4  density=0.338/s  ver=v4
+    frames=[278, 356, 446, 479]
+    ts_s =[4.638, 5.939, 7.441, 7.991]
+rally=7f0f540a  video=wawa  fps=59.9  frames=1219  dur=20.3s  contacts=9  density=0.443/s  ver=v4
+    frames=[151, 281, 390, 480, 523, 697, 768, 875, 976]
+    ts_s =[2.519, 4.688, 6.506, 8.008, 8.725, 11.628, 12.813, 14.598, 16.283]
+rally=11adfc2f  video=wawa  fps=59.9  frames=901  dur=15.0s  contacts=5  density=0.333/s  ver=v4
+    frames=[308, 447, 512, 608, 719]
+    ts_s =[5.138, 7.457, 8.542, 10.143, 11.995]
+rally=06c13117  video=wawa  fps=59.9  frames=913  dur=15.2s  contacts=3  density=0.197/s  ver=v4
+    frames=[256, 359, 625]
+    ts_s =[4.271, 5.989, 10.427]
+rally=82d549a6  video=wawa  fps=59.9  frames=894  dur=14.9s  contacts=4  density=0.268/s  ver=v4
+    frames=[363, 465, 552, 749]
+    ts_s =[6.056, 7.758, 9.209, 12.496]
+rally=50ece37b  video=wawa  fps=59.9  frames=382  dur=6.4s  contacts=0  density=0.000/s  ver=v4
+    frames=[]
+    ts_s =[]
+rally=1099f2d3  video=wawa  fps=59.9  frames=330  dur=5.5s  contacts=2  density=0.363/s  ver=v4
+    frames=[132, 198]
+    ts_s =[2.202, 3.303]
+rally=21d4cdf6  video=wawa  fps=59.9  frames=835  dur=13.9s  contacts=5  density=0.359/s  ver=v4
+    frames=[295, 396, 487, 533, 624]
+    ts_s =[4.922, 6.607, 8.125, 8.892, 10.41]

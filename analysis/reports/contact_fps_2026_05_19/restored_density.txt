@@ -1,0 +1,12 @@
+video          fps  rallies  contacts   seconds  density/s
+haha          59.9       13        57     202.5      0.281
+kuku          59.9       12        87     202.7      0.429
+koko          30.0       14        88     251.8      0.349
+lulu          59.9       19        99     274.4      0.361
+wawa          59.9        7        39     107.6      0.362
+titi          30.0       18       137     270.8      0.506
+toto          29.9       17       131     282.1      0.464
+jaja          30.0       15        84     252.4      0.333
+
+COHORT 60fps: avg density 0.358/s (n=4)
+COHORT 30fps: avg density 0.413/s (n=4)
