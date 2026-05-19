@@ -27,10 +27,10 @@ Output: parquet/CSV with one row per (gt_row, candidate) pair.
 """
 from __future__ import annotations
 
+import argparse
 import csv
 import json
 import math
-import os
 from collections import defaultdict
 from pathlib import Path
 
@@ -48,6 +48,55 @@ ACTIONS = ("SERVE", "RECEIVE", "SET", "ATTACK", "DIG", "BLOCK")
 
 OUT_DIR = Path("reports/contact_frame_regressor_2026_05_17")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _in_memory_contacts(
+    rally_id: str, video_id: str, balls_dict: dict, pos_by_frame: dict,
+    court_split_y, frame_count, calibrator, match_teams,
+) -> list[dict]:
+    """Run detect_contacts in-memory with current default classifier.
+
+    Returns contacts list in the same shape `rd["contacts"]` would have
+    (each entry has at least a `frame` key).
+    """
+    # Lazy imports to keep --no-in-memory path free of pipeline deps
+    from rallycut.tracking.ball_tracker import BallPosition
+    from rallycut.tracking.contact_detector import detect_contacts
+    from rallycut.tracking.player_tracker import PlayerPosition
+    from rallycut.tracking.sequence_action_runtime import get_sequence_probs
+
+    ball_positions = [
+        BallPosition(frame_number=fn, x=b["x"], y=b["y"], confidence=1.0)
+        for fn, b in sorted(balls_dict.items())
+    ]
+    player_positions = []
+    for fn, pos_list in sorted(pos_by_frame.items()):
+        for p in pos_list:
+            player_positions.append(PlayerPosition(
+                frame_number=fn,
+                track_id=p.get("trackId", 0),
+                x=p.get("x", 0), y=p.get("y", 0),
+                width=p.get("width", 0), height=p.get("height", 0),
+                confidence=p.get("confidence", 0.9),
+            ))
+    try:
+        sequence_probs = get_sequence_probs(
+            ball_positions, player_positions, court_split_y,
+            frame_count or 0, match_teams, calibrator=calibrator,
+        )
+        cs = detect_contacts(
+            ball_positions=ball_positions,
+            player_positions=player_positions,
+            net_y=court_split_y,
+            frame_count=frame_count or None,
+            court_calibrator=calibrator,
+            team_assignments=match_teams,
+            sequence_probs=sequence_probs,
+        )
+        return [{"frame": c.frame} for c in cs.contacts]
+    except Exception as e:
+        print(f"  WARN rally {rally_id[:8]} in-memory detect failed: {e}", flush=True)
+        return []
 
 
 def dir_change(b, f):
@@ -226,15 +275,31 @@ def extract_features(balls, pos_by_frame, candidate_frame):
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--in-memory", action="store_true",
+        help="Run detect_contacts in-memory with current default classifier "
+        "for the candidate frames, instead of reading pt.contacts_json from "
+        "DB. Used to regenerate regressor training data after retraining "
+        "the contact_classifier without writing to the DB.",
+    )
+    ap.add_argument(
+        "--output-suffix", type=str, default="",
+        help="Append this suffix to training_data.csv to avoid clobbering "
+        "the v4 training set. E.g. --output-suffix _post_60fps_retrain",
+    )
+    args = ap.parse_args()
+
     print("Fetching full-corpus action GT rows + rally data...", flush=True)
-    # Use ALL action GT rows (74 videos), not just trusted-29's 1252.
-    # The regressor predicts contact frame offset — no player-attribution
-    # needed in the target. ~2775 rows total.
+    select_cols = (
+        "v.name, v.id AS video_id, r.id, rg.action::text, rg.frame, "
+        "rg.resolved_track_id, pt.ball_positions_json, pt.positions_json, "
+        "pt.contacts_json, pt.court_split_y, pt.frame_count"
+    )
     with psycopg.connect(DB_DSN) as conn:
         cur = conn.execute(
-            """
-            SELECT v.name, r.id, rg.action::text, rg.frame, rg.resolved_track_id,
-                   pt.ball_positions_json, pt.positions_json, pt.contacts_json
+            f"""
+            SELECT {select_cols}
             FROM rally_action_ground_truth rg
             JOIN rallies r ON rg.rally_id = r.id
             JOIN videos v ON r.video_id = v.id
@@ -243,6 +308,63 @@ def main() -> int:
         )
         rows = cur.fetchall()
     print(f"Got {len(rows)} GT rows across full corpus", flush=True)
+
+    # If --in-memory, pre-load court calibrators + match teams per rally
+    calibrators: dict = {}
+    match_teams_by_rally: dict = {}
+    if args.in_memory:
+        from rallycut.court.calibration import CourtCalibrator
+        from rallycut.evaluation.tracking.db import load_court_calibration
+        from rallycut.tracking.match_tracker import build_match_team_assignments
+        from rallycut.tracking.player_tracker import PlayerPosition
+
+        print("Pre-loading calibrators + match team assignments...", flush=True)
+        seen_videos = {r[1] for r in rows}
+        for vid in seen_videos:
+            corners = load_court_calibration(vid)
+            if corners and len(corners) == 4:
+                cal = CourtCalibrator()
+                cal.calibrate([(c["x"], c["y"]) for c in corners])
+                calibrators[vid] = cal
+            else:
+                calibrators[vid] = None
+
+        with psycopg.connect(DB_DSN) as conn2:
+            cur2 = conn2.execute(
+                "SELECT rally_id, positions_json FROM player_tracks "
+                "WHERE positions_json IS NOT NULL",
+            )
+            rally_positions: dict = {}
+            for rid_raw, pos_raw in cur2.fetchall():
+                rid_s = str(rid_raw)
+                pos_list = pos_raw if isinstance(pos_raw, list) else []
+                rally_positions[rid_s] = [
+                    PlayerPosition(
+                        frame_number=p.get("frameNumber", 0),
+                        track_id=p.get("trackId", 0),
+                        x=p.get("x", 0), y=p.get("y", 0),
+                        width=p.get("width", 0), height=p.get("height", 0),
+                        confidence=p.get("confidence", 0),
+                    )
+                    for p in pos_list if isinstance(p, dict)
+                ]
+            cur3 = conn2.execute(
+                "SELECT id, match_analysis_json FROM videos "
+                "WHERE match_analysis_json IS NOT NULL",
+            )
+            for _vid, mj_raw in cur3.fetchall():
+                if not mj_raw:
+                    continue
+                match_teams_by_rally.update(
+                    build_match_team_assignments(
+                        mj_raw, min_confidence=0.0,
+                        rally_positions=rally_positions,
+                    )
+                )
+        print(
+            f"  Calibrators: {sum(1 for c in calibrators.values() if c)}/{len(calibrators)}, "
+            f"match teams: {len(match_teams_by_rally)} rallies", flush=True,
+        )
 
     # Group by rally for efficient processing
     rally_cache: dict = {}
@@ -253,7 +375,8 @@ def main() -> int:
     feature_names = None
     out_rows = []
 
-    for video, rid, ga, gf, gtid, bj, pj, cj in rows:
+    rally_count = 0
+    for video, video_id, rid, ga, gf, gtid, bj, pj, cj, court_split_y, frame_count in rows:
         ga = ga.upper()
         if rid not in rally_cache:
             bj = bj if isinstance(bj, list) else json.loads(bj)
@@ -272,10 +395,22 @@ def main() -> int:
                 if fn < 0:
                     continue
                 pos_by_frame[fn].append(p)
+            if args.in_memory:
+                contacts = _in_memory_contacts(
+                    str(rid), str(video_id), balls, dict(pos_by_frame),
+                    court_split_y, frame_count,
+                    calibrators.get(str(video_id)),
+                    match_teams_by_rally.get(str(rid)),
+                )
+                rally_count += 1
+                if rally_count % 50 == 0:
+                    print(f"  [{rally_count} rallies processed]", flush=True)
+            else:
+                contacts = cj.get("contacts") or []
             rally_cache[rid] = {
                 "balls": balls,
                 "pos_by_frame": dict(pos_by_frame),
-                "contacts": cj.get("contacts") or [],
+                "contacts": contacts,
             }
         rd = rally_cache[rid]
 
@@ -326,7 +461,7 @@ def main() -> int:
     print(f"  Feature count: {len(feature_names) if feature_names else 0}")
 
     # Save CSV
-    out_path = OUT_DIR / "training_data.csv"
+    out_path = OUT_DIR / f"training_data{args.output_suffix}.csv"
     with open(out_path, "w") as f:
         if not out_rows:
             print("No examples — exiting")
@@ -338,7 +473,7 @@ def main() -> int:
 
     # Summary stats on target_offset
     targets = [r["target_offset"] for r in out_rows]
-    print(f"\nTarget offset distribution:")
+    print("\nTarget offset distribution:")
     print(f"  Range: [{min(targets)}, {max(targets)}]")
     print(f"  Mean: {sum(targets)/len(targets):.2f}, MeanAbs: {sum(abs(t) for t in targets)/len(targets):.2f}")
     print(f"  Within ±2: {sum(1 for t in targets if abs(t) <= 2)} ({sum(1 for t in targets if abs(t) <= 2)/len(targets)*100:.1f}%)")
