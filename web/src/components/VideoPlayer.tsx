@@ -992,7 +992,7 @@ export function VideoPlayer() {
               rallyStartTime={currentRally.start_time}
               videoRef={videoRef}
               containerRef={videoContainerRef}
-              fps={activeMatch?.video?.fps ?? 30}
+              fps={playerTracks[currentRally._backendId]!.tracksJson!.fps ?? activeMatch?.video?.fps ?? 30}
               teamAssignments={showCourtDebugOverlay ? effectiveTeamAssignments(playerTracks[currentRally._backendId]!.tracksJson!.actions) : undefined}
               labelingPlayerNumbers={labelingPlayerNumbers}
             />
