@@ -1,0 +1,246 @@
+Loading classifiers...
+  v4 loaded from contact_classifier.pkl.backup_pre_2026_05_19_60fps_retrain
+  candidate loaded from contact_classifier.pkl.candidate_2026_05_19_60fps_retrain
+
+Loaded 170 rallies with GT serves
+Rally : >3 contacts on near side (contact #4 at frame 216). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 250). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 298). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 216). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 250). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 298). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 236). Possible missed net crossing or wrong court_side.
+  [10/170] processed
+Rally : >3 contacts on near side (contact #4 at frame 363). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 363). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 484). Possible missed net crossing or wrong court_side.
+  [20/170] processed
+Rally : >3 contacts on near side (contact #4 at frame 292). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 348). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 292). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 348). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 282). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 282). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 229). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 229). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 266 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 266 (attack). Missing same-side contact between them.
+Rally : >3 contacts on near side (contact #4 at frame 435). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 475). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 521). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 550). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #8 at frame 577). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #9 at frame 636). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #10 at frame 698). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 435). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 475). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 523). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 550). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #8 at frame 577). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #9 at frame 636). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #10 at frame 698). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 292 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 292 (attack). Missing same-side contact between them.
+  [30/170] processed
+Rally : >3 contacts on near side (contact #4 at frame 228). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 228). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 260). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 228). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 254). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 299). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 346). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 389). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 254). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 299). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 346). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 389). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 213). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 245). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 283). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 333). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #8 at frame 361). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #9 at frame 406). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #10 at frame 455). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #11 at frame 472). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #12 at frame 511). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #13 at frame 551). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 213). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 245). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 283). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 333). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #8 at frame 361). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #9 at frame 406). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #10 at frame 455). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #11 at frame 472). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #12 at frame 511). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #13 at frame 551). Possible missed net crossing or wrong court_side.
+  [40/170] processed
+Rally : >3 contacts on near side (contact #4 at frame 217). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 253). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 313). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 170). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 217). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 231). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 253). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #8 at frame 313). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 212). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 230). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 278). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 328). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 212). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 230). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 278). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 328). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 219). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 219). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 239). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 254). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 280). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 376). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 237). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 280). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 376). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 193). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 209). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 262). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 307). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 193). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 209). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 262). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 307). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 232). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 232). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 209). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 209). Possible missed net crossing or wrong court_side.
+  [50/170] processed
+Rally : >3 contacts on near side (contact #4 at frame 222). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 252). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 304). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 224). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 252). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 304). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 288). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 310). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 349). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 397). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 420 (attack). Missing same-side contact between them.
+Rally : >3 contacts on near side (contact #4 at frame 288). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 310). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 349). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 397). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 420 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 492 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 492 (attack). Missing same-side contact between them.
+Rally : >3 contacts on near side (contact #4 at frame 233). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 256). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 233). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 256). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 540 (attack). Missing same-side contact between them.
+  [60/170] processed
+Rally : >3 contacts on near side (contact #4 at frame 697). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 875). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 918). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 945). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 985). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #8 at frame 1032). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #9 at frame 1063). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 697). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 918). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 945). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #6 at frame 985). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #7 at frame 1032). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #8 at frame 1063). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 238). Possible missed net crossing or wrong court_side.
+  [70/170] processed
+Rally : >3 contacts on far side (contact #4 at frame 316). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 316 (attack). Missing same-side contact between them.
+  [80/170] processed
+  [90/170] processed
+Rally : consecutive net-crossing actions at frame 204 (attack). Missing same-side contact between them.
+Rally : >3 contacts on near side (contact #4 at frame 198). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 198). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 197). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 197). Possible missed net crossing or wrong court_side.
+  [100/170] processed
+Rally : >3 contacts on near side (contact #4 at frame 299). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 299). Possible missed net crossing or wrong court_side.
+  [110/170] processed
+Rally : >3 contacts on near side (contact #4 at frame 224). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 224). Possible missed net crossing or wrong court_side.
+  [120/170] processed
+Rally : >3 contacts on far side (contact #4 at frame 147). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 162 (attack). Missing same-side contact between them.
+  [130/170] processed
+Rally : >3 contacts on far side (contact #4 at frame 153). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 153). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 413). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 585 (attack). Missing same-side contact between them.
+Rally : >3 contacts on far side (contact #4 at frame 413). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 585 (attack). Missing same-side contact between them.
+  [140/170] processed
+Rally : consecutive net-crossing actions at frame 194 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 194 (attack). Missing same-side contact between them.
+  [150/170] processed
+Rally : >3 contacts on far side (contact #4 at frame 717). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #5 at frame 764). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 312). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 312). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 178 (attack). Missing same-side contact between them.
+Rally : consecutive net-crossing actions at frame 178 (attack). Missing same-side contact between them.
+  [160/170] processed
+Rally : >3 contacts on far side (contact #4 at frame 314). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 314). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 511). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 511). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 526). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #5 at frame 559). Possible missed net crossing or wrong court_side.
+Rally : consecutive net-crossing actions at frame 526 (attack). Missing same-side contact between them.
+Rally : >3 contacts on near side (contact #4 at frame 300). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on near side (contact #4 at frame 300). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 225). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 225). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #4 at frame 522). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #5 at frame 555). Possible missed net crossing or wrong court_side.
+Rally : >3 contacts on far side (contact #6 at frame 601). Possible missed net crossing or wrong court_side.
+  [170/170] processed
+
+Per-video breakdown:
+video       both_ok  both_wrong  v4_only(REG)  cand_only(WIN)  total
+caco              2           1             0               0      3
+cece              2           3             0               0      5
+cici              4           1             0               0      5
+cuco              5           2             0               0      7
+gaga              3           2             0               0      5
+gigi              3           4             0               0      7
+gugu              3           1             0               1      5
+juju             12           1             1               0     14
+keke              7           1             0               0      8
+koko              6           8             0               0     14
+mame              4           0             0               0      4
+meme              8           0             0               0      8
+mimi              2           3             0               0      5
+moma              4           1             0               0      5
+mumu              3           3             0               0      6
+papa              4           2             1               0      7
+pepe              4           4             0               0      8
+pipi              4           0             0               0      4
+popo              3           2             1               0      6
+pupu              3           1             0               1      5
+titi              7           2             0               2     11
+toto              7           3             0               1     11
+veve              5           1             0               0      6
+yeye              7           4             0               0     11
+TOTAL           112          50             3               5    170
+
+NET (cand wins - regressions): 2 (+1.2pp)
+
+V4_ONLY (regression) cases — 3 total:
+  juju     6022138d GT_frame=  96 GT_pid=2
+    v4 :  frame=96 pid=2 ball=(0.355,0.376)
+    cand: NO_MATCH
+  papa     8e1e5e61 GT_frame=  62 GT_pid=4
+    v4 :  frame=60 pid=4 ball=(0.407,0.156)
+    cand: NO_MATCH
+  popo     7501a7b7 GT_frame=  85 GT_pid=1
+    v4 :  frame=84 pid=1 ball=(0.606,0.411)
+    cand: NO_MATCH
