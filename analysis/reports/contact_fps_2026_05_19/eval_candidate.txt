@@ -1,0 +1,402 @@
+Using trained classifier: 
+weights/contact_classifier/contact_classifier.pkl.candidate_2026_05_19_60fps_ret
+rain
+  Filtered to 83 rallies from 7 video(s) (was 506)
+
+Evaluating 83 rallies with action ground truth
+  Court calibration: 7/7 videos
+  Match teams (conf>=0.70): 30/83 rallies
+
+[1/83] 0102cbba... F1=100.0% acc=100.0% (cum F1=100.0% TP=4 FP=0 FN=0) (0.1s)
+[2/83] ac84c527... F1=88.9% acc=100.0% (cum F1=92.3% TP=12 FP=1 FN=1) (0.1s)
+[3/83] 04f2a97f... F1=100.0% acc=100.0% (cum F1=94.4% TP=17 FP=1 FN=1) (0.1s)
+[4/83] 028f8384... Rally 028f8384-7ea8-46d5-8bef-6d99018cf6bc: consecutive net-crossing actions at frame 409 (attack). Missing same-side contact between them.
+F1=100.0% acc=88.9% (cum F1=96.3% TP=26 FP=1 FN=1) (0.1s)
+[5/83] 2ae99d01... F1=100.0% acc=100.0% (cum F1=96.8% TP=30 FP=1 FN=1) (0.1s)
+[6/83] 30707f69... F1=100.0% acc=100.0% (cum F1=97.5% TP=39 FP=1 FN=1) (0.1s)
+[7/83] c30c9fc9... F1=100.0% acc=100.0% (cum F1=97.7% TP=43 FP=1 FN=1) (0.1s)
+[8/83] 58460f5f... F1=100.0% acc=100.0% (cum F1=97.9% TP=47 FP=1 FN=1) (0.1s)
+[9/83] 3cd2782c... F1=94.7% acc=100.0% (cum F1=97.4% TP=56 FP=2 FN=1) (0.1s)
+[10/83] d1faa2b4... F1=88.9% acc=25.0% (cum F1=96.8% TP=60 FP=2 FN=2) (0.1s)
+[11/83] 49c2cce5... F1=85.7% acc=100.0% (cum F1=96.2% TP=63 FP=3 FN=2) (0.1s)
+[12/83] 6737d3fc... F1=100.0% acc=100.0% (cum F1=96.4% TP=67 FP=3 FN=2) (0.1s)
+[13/83] c09147c3... F1=100.0% acc=100.0% (cum F1=96.6% TP=71 FP=3 FN=2) (0.1s)
+[14/83] 6618acda... F1=100.0% acc=100.0% (cum F1=96.8% TP=75 FP=3 FN=2) (0.0s)
+[15/83] 06bafb49... Rally 06bafb49-9e48-47c0-b3b4-82703225c798: >3 contacts on near side (contact #4 at frame 210). Possible missed net crossing or wrong court_side.
+Rally 06bafb49-9e48-47c0-b3b4-82703225c798: >3 contacts on near side (contact #5 at frame 269). Possible missed net crossing or wrong court_side.
+Rally 06bafb49-9e48-47c0-b3b4-82703225c798: >3 contacts on near side (contact #6 at frame 318). Possible missed net crossing or wrong court_side.
+Rally 06bafb49-9e48-47c0-b3b4-82703225c798: >3 contacts on near side (contact #7 at frame 361). Possible missed net crossing or wrong court_side.
+F1=80.0% acc=33.3% (cum F1=95.3% TP=81 FP=4 FN=4) (0.1s)
+[16/83] 21029e9f... Rally 21029e9f-cbbc-4def-9343-f55c172bb2e6: >3 contacts on near side (contact #4 at frame 140). Possible missed net crossing or wrong court_side.
+F1=80.0% acc=25.0% (cum F1=94.4% TP=85 FP=5 FN=5) (0.1s)
+[17/83] 42757e1a... F1=100.0% acc=100.0% (cum F1=94.8% TP=92 FP=5 FN=5) (0.1s)
+[18/83] 12b8ff15... Rally 12b8ff15-4079-4dfd-ba52-419313b6d5d4: >3 contacts on far side (contact #4 at frame 153). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=100.0% (cum F1=95.1% TP=97 FP=5 FN=5) (0.1s)
+[19/83] 375405ff... F1=100.0% acc=75.0% (cum F1=95.3% TP=101 FP=5 FN=5) (0.0s)
+[20/83] caa96651... F1=100.0% acc=100.0% (cum F1=95.5% TP=106 FP=5 FN=5) (0.1s)
+[21/83] ce7b8505... F1=92.3% acc=66.7% (cum F1=95.3% TP=112 FP=6 FN=5) (0.1s)
+[22/83] 43b849ec... F1=100.0% acc=100.0% (cum F1=95.8% TP=124 FP=6 FN=5) (0.2s)
+[23/83] 1e38daab... Rally 1e38daab-c435-4298-8788-cafb19c18171: >3 contacts on far side (contact #4 at frame 413). Possible missed net crossing or wrong court_side.
+Rally 1e38daab-c435-4298-8788-cafb19c18171: consecutive net-crossing actions at frame 585 (attack). Missing same-side contact between them.
+F1=96.8% acc=100.0% (cum F1=95.9% TP=139 FP=6 FN=6) (0.2s)
+[24/83] 414cff1b... Rally 414cff1b-3222-413c-a4c7-c17fd619caa5: >3 contacts on near side (contact #4 at frame 172). Possible missed net crossing or wrong court_side.
+Rally 414cff1b-3222-413c-a4c7-c17fd619caa5: >3 contacts on near side (contact #5 at frame 206). Possible missed net crossing or wrong court_side.
+Rally 414cff1b-3222-413c-a4c7-c17fd619caa5: >3 contacts on near side (contact #6 at frame 257). Possible missed net crossing or wrong court_side.
+Rally 414cff1b-3222-413c-a4c7-c17fd619caa5: >3 contacts on near side (contact #7 at frame 307). Possible missed net crossing or wrong court_side.
+Rally 414cff1b-3222-413c-a4c7-c17fd619caa5: >3 contacts on near side (contact #8 at frame 324). Possible missed net crossing or wrong court_side.
+Rally 414cff1b-3222-413c-a4c7-c17fd619caa5: >3 contacts on near side (contact #9 at frame 374). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=100.0% (cum F1=96.1% TP=148 FP=6 FN=6) (0.1s)
+[25/83] a0881d82... Rally a0881d82-bd3e-4664-bd11-4e672ca29aa6: >3 contacts on near side (contact #4 at frame 179). Possible missed net crossing or wrong court_side.
+Rally a0881d82-bd3e-4664-bd11-4e672ca29aa6: >3 contacts on near side (contact #5 at frame 194). Possible missed net crossing or wrong court_side.
+Rally a0881d82-bd3e-4664-bd11-4e672ca29aa6: >3 contacts on near side (contact #6 at frame 229). Possible missed net crossing or wrong court_side.
+Rally a0881d82-bd3e-4664-bd11-4e672ca29aa6: >3 contacts on near side (contact #7 at frame 277). Possible missed net crossing or wrong court_side.
+Rally a0881d82-bd3e-4664-bd11-4e672ca29aa6: >3 contacts on near side (contact #8 at frame 328). Possible missed net crossing or wrong court_side.
+Rally a0881d82-bd3e-4664-bd11-4e672ca29aa6: >3 contacts on near side (contact #9 at frame 341). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=77.8% (cum F1=96.3% TP=157 FP=6 FN=6) (0.1s)
+[26/83] 4ad457f6... F1=100.0% acc=100.0% (cum F1=96.5% TP=165 FP=6 FN=6) (0.1s)
+[27/83] 14d9a87b... Rally 14d9a87b-cddc-4ce9-be03-1f7b120cad7f: >3 contacts on near side (contact #4 at frame 487). Possible missed net crossing or wrong court_side.
+Rally 14d9a87b-cddc-4ce9-be03-1f7b120cad7f: >3 contacts on near side (contact #5 at frame 524). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=100.0% (cum F1=96.6% TP=170 FP=6 FN=6) (0.1s)
+[28/83] 060e5898... F1=100.0% acc=100.0% (cum F1=96.7% TP=174 FP=6 FN=6) (0.1s)
+[29/83] 69df24f0... Rally 69df24f0-15e1-47e6-9d70-eed6d22accc0: >3 contacts on near side (contact #4 at frame 471). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=100.0% (cum F1=96.7% TP=178 FP=6 FN=6) (0.1s)
+[30/83] 8da4f0dc... F1=100.0% acc=100.0% (cum F1=96.8% TP=181 FP=6 FN=6) (0.1s)
+[31/83] 35ca5d33... F1=100.0% acc=100.0% (cum F1=96.8% TP=183 FP=6 FN=6) (0.1s)
+[32/83] 2adb9d80... F1=0.0% acc=0.0% (cum F1=96.6% TP=183 FP=6 FN=7) (0.0s)
+[33/83] 69117837... F1=66.7% acc=100.0% (cum F1=96.3% TP=184 FP=7 FN=7) (0.0s)
+[34/83] 55565c2b... F1=90.9% acc=100.0% (cum F1=96.2% TP=189 FP=8 FN=7) (0.1s)
+[35/83] 71c642dc... Rally 71c642dc-44be-4d64-955d-8ce6d4aa4fdd: >3 contacts on far side (contact #4 at frame 485). Possible missed net crossing or wrong court_side.
+F1=85.7% acc=88.9% (cum F1=95.7% TP=198 FP=8 FN=10) (0.2s)
+[36/83] 7094136a... Rally 7094136a-6b71-438e-aaee-e6ddd5cf1589: >3 contacts on near side (contact #4 at frame 310). Possible missed net crossing or wrong court_side.
+Rally 7094136a-6b71-438e-aaee-e6ddd5cf1589: >3 contacts on near side (contact #5 at frame 331). Possible missed net crossing or wrong court_side.
+Rally 7094136a-6b71-438e-aaee-e6ddd5cf1589: >3 contacts on near side (contact #6 at frame 368). Possible missed net crossing or wrong court_side.
+F1=72.7% acc=100.0% (cum F1=95.1% TP=202 FP=11 FN=10) (0.1s)
+[37/83] 8c49e480... F1=94.1% acc=87.5% (cum F1=95.0% TP=210 FP=12 FN=10) (0.2s)
+[38/83] fb6e37bf... F1=100.0% acc=100.0% (cum F1=95.1% TP=215 FP=12 FN=10) (0.1s)
+[39/83] 7f0f540a... Rally 7f0f540a-aa6b-4c37-b2e6-eec3b7e74da7: >3 contacts on near side (contact #4 at frame 480). Possible missed net crossing or wrong court_side.
+Rally 7f0f540a-aa6b-4c37-b2e6-eec3b7e74da7: >3 contacts on near side (contact #5 at frame 523). Possible missed net crossing or wrong court_side.
+Rally 7f0f540a-aa6b-4c37-b2e6-eec3b7e74da7: >3 contacts on near side (contact #6 at frame 620). Possible missed net crossing or wrong court_side.
+Rally 7f0f540a-aa6b-4c37-b2e6-eec3b7e74da7: >3 contacts on near side (contact #7 at frame 697). Possible missed net crossing or wrong court_side.
+Rally 7f0f540a-aa6b-4c37-b2e6-eec3b7e74da7: >3 contacts on near side (contact #8 at frame 768). Possible missed net crossing or wrong court_side.
+Rally 7f0f540a-aa6b-4c37-b2e6-eec3b7e74da7: >3 contacts on near side (contact #9 at frame 875). Possible missed net crossing or wrong court_side.
+Rally 7f0f540a-aa6b-4c37-b2e6-eec3b7e74da7: >3 contacts on near side (contact #10 at frame 976). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=100.0% (cum F1=95.3% TP=225 FP=12 FN=10) (0.2s)
+[40/83] 11adfc2f... Rally 11adfc2f-69da-458a-9c9b-0743466752b0: >3 contacts on near side (contact #4 at frame 512). Possible missed net crossing or wrong court_side.
+Rally 11adfc2f-69da-458a-9c9b-0743466752b0: >3 contacts on near side (contact #5 at frame 607). Possible missed net crossing or wrong court_side.
+Rally 11adfc2f-69da-458a-9c9b-0743466752b0: >3 contacts on near side (contact #6 at frame 719). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=80.0% (cum F1=95.4% TP=230 FP=12 FN=10) (0.1s)
+[41/83] 06c13117... F1=85.7% acc=66.7% (cum F1=95.3% TP=233 FP=12 FN=11) (0.1s)
+[42/83] 82d549a6... F1=85.7% acc=100.0% (cum F1=95.2% TP=236 FP=13 FN=11) (0.1s)
+[43/83] 1099f2d3... F1=66.7% acc=100.0% (cum F1=95.0% TP=237 FP=14 FN=11) (0.0s)
+[44/83] 21d4cdf6... Rally 21d4cdf6-ca17-4a4a-a1a8-d567f4fa1d76: >3 contacts on near side (contact #4 at frame 487). Possible missed net crossing or wrong court_side.
+Rally 21d4cdf6-ca17-4a4a-a1a8-d567f4fa1d76: >3 contacts on near side (contact #5 at frame 533). Possible missed net crossing or wrong court_side.
+Rally 21d4cdf6-ca17-4a4a-a1a8-d567f4fa1d76: >3 contacts on near side (contact #6 at frame 624). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=100.0% (cum F1=95.1% TP=242 FP=14 FN=11) (0.1s)
+[45/83] fcc5dcba... F1=100.0% acc=100.0% (cum F1=95.1% TP=245 FP=14 FN=11) (0.1s)
+[46/83] d24901dd... F1=100.0% acc=100.0% (cum F1=95.2% TP=246 FP=14 FN=11) (0.0s)
+[47/83] e5a1da4f... F1=100.0% acc=100.0% (cum F1=95.2% TP=248 FP=14 FN=11) (0.0s)
+[48/83] 66921886... F1=100.0% acc=100.0% (cum F1=95.3% TP=251 FP=14 FN=11) (0.0s)
+[49/83] 51aa8083... F1=0.0% acc=0.0% (cum F1=94.9% TP=251 FP=15 FN=12) (0.0s)
+[50/83] b52bc536... Rally b52bc536-43e0-4569-a035-0e9c49f04679: >3 contacts on near side (contact #4 at frame 197). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=100.0% (cum F1=95.0% TP=255 FP=15 FN=12) (0.0s)
+[51/83] 83dea3ce... F1=100.0% acc=100.0% (cum F1=95.0% TP=259 FP=15 FN=12) (0.1s)
+[52/83] 70bd06c8... Rally 70bd06c8-3a66-4e8c-b1ef-6d4a804891ef: >3 contacts on near side (contact #4 at frame 206). Possible missed net crossing or wrong court_side.
+F1=88.9% acc=75.0% (cum F1=94.9% TP=263 FP=15 FN=13) (0.0s)
+[53/83] 67b3e1ad... Rally 67b3e1ad-b994-4db9-8e2e-b41f53247f36: >3 contacts on near side (contact #4 at frame 172). Possible missed net crossing or wrong court_side.
+Rally 67b3e1ad-b994-4db9-8e2e-b41f53247f36: >3 contacts on near side (contact #5 at frame 202). Possible missed net crossing or wrong court_side.
+Rally 67b3e1ad-b994-4db9-8e2e-b41f53247f36: >3 contacts on near side (contact #6 at frame 254). Possible missed net crossing or wrong court_side.
+F1=92.3% acc=66.7% (cum F1=94.9% TP=269 FP=15 FN=14) (0.1s)
+[54/83] 1d316b85... Rally 1d316b85-b7d9-44fe-a570-10cf8a40bf4f: >3 contacts on near side (contact #4 at frame 337). Possible missed net crossing or wrong court_side.
+Rally 1d316b85-b7d9-44fe-a570-10cf8a40bf4f: >3 contacts on near side (contact #5 at frame 375). Possible missed net crossing or wrong court_side.
+Rally 1d316b85-b7d9-44fe-a570-10cf8a40bf4f: >3 contacts on near side (contact #6 at frame 410). Possible missed net crossing or wrong court_side.
+Rally 1d316b85-b7d9-44fe-a570-10cf8a40bf4f: >3 contacts on near side (contact #7 at frame 451). Possible missed net crossing or wrong court_side.
+Rally 1d316b85-b7d9-44fe-a570-10cf8a40bf4f: >3 contacts on near side (contact #8 at frame 493). Possible missed net crossing or wrong court_side.
+F1=77.8% acc=42.9% (cum F1=94.4% TP=276 FP=16 FN=17) (0.1s)
+[55/83] 248aaf83... Rally 248aaf83-2c48-4570-887a-8144a7cfe3d7: >3 contacts on near side (contact #4 at frame 303). Possible missed net crossing or wrong court_side.
+Rally 248aaf83-2c48-4570-887a-8144a7cfe3d7: >3 contacts on near side (contact #5 at frame 323). Possible missed net crossing or wrong court_side.
+Rally 248aaf83-2c48-4570-887a-8144a7cfe3d7: >3 contacts on near side (contact #6 at frame 371). Possible missed net crossing or wrong court_side.
+Rally 248aaf83-2c48-4570-887a-8144a7cfe3d7: >3 contacts on near side (contact #7 at frame 413). Possible missed net crossing or wrong court_side.
+Rally 248aaf83-2c48-4570-887a-8144a7cfe3d7: >3 contacts on near side (contact #8 at frame 468). Possible missed net crossing or wrong court_side.
+Rally 248aaf83-2c48-4570-887a-8144a7cfe3d7: >3 contacts on near side (contact #9 at frame 496). Possible missed net crossing or wrong court_side.
+Rally 248aaf83-2c48-4570-887a-8144a7cfe3d7: >3 contacts on near side (contact #10 at frame 554). Possible missed net crossing or wrong court_side.
+Rally 248aaf83-2c48-4570-887a-8144a7cfe3d7: >3 contacts on near side (contact #11 at frame 591). Possible missed net crossing or wrong court_side.
+Rally 248aaf83-2c48-4570-887a-8144a7cfe3d7: >3 contacts on near side (contact #12 at frame 639). Possible missed net crossing or wrong court_side.
+Rally 248aaf83-2c48-4570-887a-8144a7cfe3d7: >3 contacts on near side (contact #13 at frame 684). Possible missed net crossing or wrong court_side.
+Rally 248aaf83-2c48-4570-887a-8144a7cfe3d7: >3 contacts on near side (contact #14 at frame 717). Possible missed net crossing or wrong court_side.
+Rally 248aaf83-2c48-4570-887a-8144a7cfe3d7: >3 contacts on near side (contact #15 at frame 764). Possible missed net crossing or wrong court_side.
+F1=90.9% acc=66.7% (cum F1=94.2% TP=291 FP=16 FN=20) (0.3s)
+[56/83] da0c1dda... Rally da0c1dda-961d-4d1f-a2e0-c769b8970ace: >3 contacts on near side (contact #4 at frame 470). Possible missed net crossing or wrong court_side.
+Rally da0c1dda-961d-4d1f-a2e0-c769b8970ace: >3 contacts on near side (contact #5 at frame 501). Possible missed net crossing or wrong court_side.
+Rally da0c1dda-961d-4d1f-a2e0-c769b8970ace: >3 contacts on near side (contact #6 at frame 566). Possible missed net crossing or wrong court_side.
+Rally da0c1dda-961d-4d1f-a2e0-c769b8970ace: >3 contacts on near side (contact #7 at frame 682). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=85.7% (cum F1=94.3% TP=298 FP=16 FN=20) (0.1s)
+[57/83] 73501ab3... F1=100.0% acc=100.0% (cum F1=94.4% TP=305 FP=16 FN=20) (0.1s)
+[58/83] 1f141057... Rally 1f141057-706c-438e-a69a-2aecf735389f: >3 contacts on near side (contact #4 at frame 498). Possible missed net crossing or wrong court_side.
+Rally 1f141057-706c-438e-a69a-2aecf735389f: >3 contacts on near side (contact #5 at frame 565). Possible missed net crossing or wrong court_side.
+Rally 1f141057-706c-438e-a69a-2aecf735389f: >3 contacts on near side (contact #6 at frame 673). Possible missed net crossing or wrong court_side.
+Rally 1f141057-706c-438e-a69a-2aecf735389f: >3 contacts on near side (contact #7 at frame 763). Possible missed net crossing or wrong court_side.
+Rally 1f141057-706c-438e-a69a-2aecf735389f: >3 contacts on near side (contact #8 at frame 829). Possible missed net crossing or wrong court_side.
+Rally 1f141057-706c-438e-a69a-2aecf735389f: >3 contacts on near side (contact #9 at frame 909). Possible missed net crossing or wrong court_side.
+Rally 1f141057-706c-438e-a69a-2aecf735389f: >3 contacts on near side (contact #10 at frame 1015). Possible missed net crossing or wrong court_side.
+Rally 1f141057-706c-438e-a69a-2aecf735389f: >3 contacts on near side (contact #11 at frame 1064). Possible missed net crossing or wrong court_side.
+Rally 1f141057-706c-438e-a69a-2aecf735389f: >3 contacts on near side (contact #12 at frame 1153). Possible missed net crossing or wrong court_side.
+Rally 1f141057-706c-438e-a69a-2aecf735389f: >3 contacts on near side (contact #13 at frame 1246). Possible missed net crossing or wrong court_side.
+Rally 1f141057-706c-438e-a69a-2aecf735389f: >3 contacts on near side (contact #14 at frame 1291). Possible missed net crossing or wrong court_side.
+Rally 1f141057-706c-438e-a69a-2aecf735389f: >3 contacts on near side (contact #15 at frame 1401). Possible missed net crossing or wrong court_side.
+Rally 1f141057-706c-438e-a69a-2aecf735389f: >3 contacts on near side (contact #16 at frame 1493). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=100.0% (cum F1=94.7% TP=321 FP=16 FN=20) (0.3s)
+[59/83] f9979041... F1=100.0% acc=100.0% (cum F1=94.7% TP=323 FP=16 FN=20) (0.0s)
+[60/83] a8d47c4b... F1=100.0% acc=100.0% (cum F1=94.8% TP=327 FP=16 FN=20) (0.1s)
+[61/83] 92a739e0... Rally 92a739e0-1f77-45ec-923b-f3149ed8f4b1: >3 contacts on near side (contact #4 at frame 473). Possible missed net crossing or wrong court_side.
+Rally 92a739e0-1f77-45ec-923b-f3149ed8f4b1: >3 contacts on near side (contact #5 at frame 565). Possible missed net crossing or wrong court_side.
+Rally 92a739e0-1f77-45ec-923b-f3149ed8f4b1: >3 contacts on near side (contact #6 at frame 654). Possible missed net crossing or wrong court_side.
+Rally 92a739e0-1f77-45ec-923b-f3149ed8f4b1: >3 contacts on near side (contact #7 at frame 735). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=87.5% (cum F1=94.9% TP=335 FP=16 FN=20) (0.1s)
+[62/83] 14c7e370... F1=100.0% acc=100.0% (cum F1=94.9% TP=338 FP=16 FN=20) (0.1s)
+[63/83] e8dbd314... Rally e8dbd314-6ac1-423d-8c25-bd42cfcd2256: >3 contacts on near side (contact #4 at frame 455). Possible missed net crossing or wrong court_side.
+Rally e8dbd314-6ac1-423d-8c25-bd42cfcd2256: >3 contacts on near side (contact #5 at frame 523). Possible missed net crossing or wrong court_side.
+Rally e8dbd314-6ac1-423d-8c25-bd42cfcd2256: >3 contacts on near side (contact #6 at frame 625). Possible missed net crossing or wrong court_side.
+Rally e8dbd314-6ac1-423d-8c25-bd42cfcd2256: >3 contacts on near side (contact #7 at frame 721). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=100.0% (cum F1=95.0% TP=345 FP=16 FN=20) (0.1s)
+[64/83] 9b0015f4... F1=50.0% acc=100.0% (cum F1=94.8% TP=346 FP=17 FN=21) (0.0s)
+[65/83] 93e80b60... F1=88.9% acc=100.0% (cum F1=94.7% TP=350 FP=18 FN=21) (0.1s)
+[66/83] 9688005f... F1=100.0% acc=100.0% (cum F1=94.8% TP=354 FP=18 FN=21) (0.1s)
+[67/83] 861054de... Rally 861054de-846e-4977-9084-5400863b8e9c: >3 contacts on near side (contact #4 at frame 487). Possible missed net crossing or wrong court_side.
+Rally 861054de-846e-4977-9084-5400863b8e9c: >3 contacts on near side (contact #5 at frame 544). Possible missed net crossing or wrong court_side.
+Rally 861054de-846e-4977-9084-5400863b8e9c: >3 contacts on near side (contact #6 at frame 652). Possible missed net crossing or wrong court_side.
+Rally 861054de-846e-4977-9084-5400863b8e9c: >3 contacts on near side (contact #7 at frame 743). Possible missed net crossing or wrong court_side.
+Rally 861054de-846e-4977-9084-5400863b8e9c: >3 contacts on near side (contact #8 at frame 782). Possible missed net crossing or wrong court_side.
+Rally 861054de-846e-4977-9084-5400863b8e9c: >3 contacts on near side (contact #9 at frame 873). Possible missed net crossing or wrong court_side.
+Rally 861054de-846e-4977-9084-5400863b8e9c: >3 contacts on near side (contact #10 at frame 987). Possible missed net crossing or wrong court_side.
+Rally 861054de-846e-4977-9084-5400863b8e9c: >3 contacts on near side (contact #11 at frame 1061). Possible missed net crossing or wrong court_side.
+Rally 861054de-846e-4977-9084-5400863b8e9c: >3 contacts on near side (contact #12 at frame 1141). Possible missed net crossing or wrong court_side.
+Rally 861054de-846e-4977-9084-5400863b8e9c: >3 contacts on near side (contact #13 at frame 1233). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=100.0% (cum F1=95.0% TP=367 FP=18 FN=21) (0.2s)
+[68/83] 9e515aaf... F1=100.0% acc=100.0% (cum F1=95.0% TP=371 FP=18 FN=21) (0.1s)
+[69/83] 672858b4... Rally 672858b4-4684-4b1c-ae48-f98a03a403a2: >3 contacts on near side (contact #4 at frame 481). Possible missed net crossing or wrong court_side.
+Rally 672858b4-4684-4b1c-ae48-f98a03a403a2: >3 contacts on near side (contact #5 at frame 499). Possible missed net crossing or wrong court_side.
+Rally 672858b4-4684-4b1c-ae48-f98a03a403a2: >3 contacts on near side (contact #4 at frame 863). Possible missed net crossing or wrong court_side.
+Rally 672858b4-4684-4b1c-ae48-f98a03a403a2: >3 contacts on near side (contact #5 at frame 955). Possible missed net crossing or wrong court_side.
+Rally 672858b4-4684-4b1c-ae48-f98a03a403a2: >3 contacts on near side (contact #6 at frame 1020). Possible missed net crossing or wrong court_side.
+Rally 672858b4-4684-4b1c-ae48-f98a03a403a2: >3 contacts on near side (contact #7 at frame 1092). Possible missed net crossing or wrong court_side.
+Rally 672858b4-4684-4b1c-ae48-f98a03a403a2: >3 contacts on near side (contact #8 at frame 1192). Possible missed net crossing or wrong court_side.
+Rally 672858b4-4684-4b1c-ae48-f98a03a403a2: >3 contacts on near side (contact #9 at frame 1245). Possible missed net crossing or wrong court_side.
+Rally 672858b4-4684-4b1c-ae48-f98a03a403a2: >3 contacts on near side (contact #10 at frame 1341). Possible missed net crossing or wrong court_side.
+Rally 672858b4-4684-4b1c-ae48-f98a03a403a2: >3 contacts on near side (contact #11 at frame 1429). Possible missed net crossing or wrong court_side.
+F1=93.8% acc=93.3% (cum F1=95.0% TP=386 FP=19 FN=22) (0.3s)
+[70/83] 44351174... Rally 44351174-40f0-4cde-aa88-b4a7ded8193b: >3 contacts on near side (contact #4 at frame 233). Possible missed net crossing or wrong court_side.
+Rally 44351174-40f0-4cde-aa88-b4a7ded8193b: >3 contacts on near side (contact #5 at frame 256). Possible missed net crossing or wrong court_side.
+Rally 44351174-40f0-4cde-aa88-b4a7ded8193b: >3 contacts on near side (contact #6 at frame 309). Possible missed net crossing or wrong court_side.
+Rally 44351174-40f0-4cde-aa88-b4a7ded8193b: >3 contacts on near side (contact #7 at frame 356). Possible missed net crossing or wrong court_side.
+Rally 44351174-40f0-4cde-aa88-b4a7ded8193b: >3 contacts on near side (contact #8 at frame 378). Possible missed net crossing or wrong court_side.
+Rally 44351174-40f0-4cde-aa88-b4a7ded8193b: >3 contacts on near side (contact #9 at frame 423). Possible missed net crossing or wrong court_side.
+Rally 44351174-40f0-4cde-aa88-b4a7ded8193b: >3 contacts on near side (contact #10 at frame 463). Possible missed net crossing or wrong court_side.
+Rally 44351174-40f0-4cde-aa88-b4a7ded8193b: >3 contacts on near side (contact #11 at frame 495). Possible missed net crossing or wrong court_side.
+Rally 44351174-40f0-4cde-aa88-b4a7ded8193b: >3 contacts on near side (contact #12 at frame 540). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=100.0% (cum F1=95.1% TP=398 FP=19 FN=22) (0.1s)
+[71/83] 2cb28662... Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #4 at frame 244). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #5 at frame 280). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #6 at frame 322). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #7 at frame 367). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #8 at frame 395). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #9 at frame 438). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #10 at frame 490). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #11 at frame 515). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #12 at frame 567). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #13 at frame 604). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #14 at frame 649). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #15 at frame 697). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #16 at frame 714). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #17 at frame 770). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #18 at frame 823). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #19 at frame 846). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #20 at frame 875). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #21 at frame 918). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #22 at frame 945). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #23 at frame 985). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #24 at frame 1032). Possible missed net crossing or wrong court_side.
+Rally 2cb28662-ea49-4c0c-b34d-11d165b3ac0f: >3 contacts on near side (contact #25 at frame 1063). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=100.0% (cum F1=95.4% TP=423 FP=19 FN=22) (0.2s)
+[72/83] 89590b77... F1=100.0% acc=100.0% (cum F1=95.4% TP=425 FP=19 FN=22) (0.0s)
+[73/83] 483970c6... Rally 483970c6-5152-4bab-9a39-b2f490f3102c: >3 contacts on near side (contact #4 at frame 246). Possible missed net crossing or wrong court_side.
+Rally 483970c6-5152-4bab-9a39-b2f490f3102c: >3 contacts on near side (contact #5 at frame 269). Possible missed net crossing or wrong court_side.
+Rally 483970c6-5152-4bab-9a39-b2f490f3102c: >3 contacts on near side (contact #6 at frame 285). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=100.0% (cum F1=95.5% TP=431 FP=19 FN=22) (0.0s)
+[74/83] 0c58108f... F1=100.0% acc=100.0% (cum F1=95.5% TP=435 FP=19 FN=22) (0.0s)
+[75/83] 3e086020... Rally 3e086020-8fbc-41cb-b2fd-0b0f1b7e7c47: >3 contacts on near side (contact #4 at frame 228). Possible missed net crossing or wrong court_side.
+F1=85.7% acc=100.0% (cum F1=95.4% TP=438 FP=20 FN=22) (0.0s)
+[76/83] f154e34f... F1=100.0% acc=100.0% (cum F1=95.5% TP=442 FP=20 FN=22) (0.0s)
+[77/83] 86c77c1a... Rally 86c77c1a-271d-41c1-bf3d-9d5db1ea2caf: >3 contacts on near side (contact #4 at frame 283). Possible missed net crossing or wrong court_side.
+Rally 86c77c1a-271d-41c1-bf3d-9d5db1ea2caf: >3 contacts on near side (contact #5 at frame 310). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=100.0% (cum F1=95.5% TP=447 FP=20 FN=22) (0.0s)
+[78/83] 19cfec44... Rally 19cfec44-6e2a-4f24-b999-1490d472d791: >3 contacts on near side (contact #4 at frame 236). Possible missed net crossing or wrong court_side.
+Rally 19cfec44-6e2a-4f24-b999-1490d472d791: >3 contacts on near side (contact #5 at frame 265). Possible missed net crossing or wrong court_side.
+Rally 19cfec44-6e2a-4f24-b999-1490d472d791: >3 contacts on near side (contact #6 at frame 295). Possible missed net crossing or wrong court_side.
+Rally 19cfec44-6e2a-4f24-b999-1490d472d791: >3 contacts on near side (contact #7 at frame 349). Possible missed net crossing or wrong court_side.
+Rally 19cfec44-6e2a-4f24-b999-1490d472d791: >3 contacts on near side (contact #8 at frame 384). Possible missed net crossing or wrong court_side.
+Rally 19cfec44-6e2a-4f24-b999-1490d472d791: >3 contacts on near side (contact #9 at frame 421). Possible missed net crossing or wrong court_side.
+Rally 19cfec44-6e2a-4f24-b999-1490d472d791: >3 contacts on near side (contact #10 at frame 470). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=100.0% (cum F1=95.6% TP=459 FP=20 FN=22) (0.1s)
+[79/83] 32c65f04... F1=100.0% acc=100.0% (cum F1=95.7% TP=464 FP=20 FN=22) (0.0s)
+[80/83] 71a3a742... F1=100.0% acc=100.0% (cum F1=95.7% TP=467 FP=20 FN=22) (0.0s)
+[81/83] 648bf6f2... F1=85.7% acc=66.7% (cum F1=95.6% TP=470 FP=20 FN=23) (0.0s)
+[82/83] 9f0221f5... F1=100.0% acc=100.0% (cum F1=95.7% TP=473 FP=20 FN=23) (0.0s)
+[83/83] abfbcb64... Rally abfbcb64-d8da-4aa1-b2ac-a66210cfbae8: >3 contacts on near side (contact #4 at frame 223). Possible missed net crossing or wrong court_side.
+Rally abfbcb64-d8da-4aa1-b2ac-a66210cfbae8: >3 contacts on near side (contact #5 at frame 244). Possible missed net crossing or wrong court_side.
+F1=100.0% acc=100.0% (cum F1=95.7% TP=478 FP=20 FN=23) (0.0s)
+                      Per-Rally Contact Detection                       
+┏━━━━━━━━━━┳━━━━┳━━━━━━┳━━━━┳━━━━━━━━┳━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━━━━┓
+┃ Rally ID ┃ GT ┃ Pred ┃ TP ┃ Recall ┃ Precision ┃     F1 ┃ Action Acc ┃
+┡━━━━━━━━━━╇━━━━╇━━━━━━╇━━━━╇━━━━━━━━╇━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━━━━┩
+│ 0102cbba │  4 │    4 │  4 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ ac84c527 │  9 │    9 │  8 │  88.9% │     88.9% │  88.9% │     100.0% │
+│ 04f2a97f │  5 │    5 │  5 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 028f8384 │  9 │    9 │  9 │ 100.0% │    100.0% │ 100.0% │      88.9% │
+│ 2ae99d01 │  4 │    4 │  4 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 30707f69 │  9 │    9 │  9 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ c30c9fc9 │  4 │    4 │  4 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 58460f5f │  4 │    4 │  4 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 3cd2782c │  9 │   10 │  9 │ 100.0% │     90.0% │  94.7% │     100.0% │
+│ d1faa2b4 │  5 │    4 │  4 │  80.0% │    100.0% │  88.9% │      25.0% │
+│ 49c2cce5 │  3 │    4 │  3 │ 100.0% │     75.0% │  85.7% │     100.0% │
+│ 6737d3fc │  4 │    4 │  4 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ c09147c3 │  4 │    4 │  4 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 6618acda │  4 │    4 │  4 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 06bafb49 │  8 │    7 │  6 │  75.0% │     85.7% │  80.0% │      33.3% │
+│ 21029e9f │  5 │    5 │  4 │  80.0% │     80.0% │  80.0% │      25.0% │
+│ 42757e1a │  7 │    7 │  7 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 12b8ff15 │  5 │    5 │  5 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 375405ff │  4 │    4 │  4 │ 100.0% │    100.0% │ 100.0% │      75.0% │
+│ caa96651 │  5 │    5 │  5 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ ce7b8505 │  6 │    7 │  6 │ 100.0% │     85.7% │  92.3% │      66.7% │
+│ 43b849ec │ 12 │   12 │ 12 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 1e38daab │ 16 │   15 │ 15 │  93.8% │    100.0% │  96.8% │     100.0% │
+│ 414cff1b │  9 │    9 │  9 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ a0881d82 │  9 │    9 │  9 │ 100.0% │    100.0% │ 100.0% │      77.8% │
+│ 4ad457f6 │  8 │    8 │  8 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 14d9a87b │  5 │    5 │  5 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 060e5898 │  4 │    4 │  4 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 69df24f0 │  4 │    4 │  4 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 8da4f0dc │  3 │    3 │  3 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 35ca5d33 │  2 │    2 │  2 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 2adb9d80 │  1 │    0 │  0 │   0.0% │      0.0% │   0.0% │       0.0% │
+│ 69117837 │  1 │    2 │  1 │ 100.0% │     50.0% │  66.7% │     100.0% │
+│ 55565c2b │  5 │    6 │  5 │ 100.0% │     83.3% │  90.9% │     100.0% │
+│ 71c642dc │ 12 │    9 │  9 │  75.0% │    100.0% │  85.7% │      88.9% │
+│ 7094136a │  4 │    7 │  4 │ 100.0% │     57.1% │  72.7% │     100.0% │
+│ 8c49e480 │  8 │    9 │  8 │ 100.0% │     88.9% │  94.1% │      87.5% │
+│ fb6e37bf │  5 │    5 │  5 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 7f0f540a │ 10 │   10 │ 10 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 11adfc2f │  5 │    5 │  5 │ 100.0% │    100.0% │ 100.0% │      80.0% │
+│ 06c13117 │  4 │    3 │  3 │  75.0% │    100.0% │  85.7% │      66.7% │
+│ 82d549a6 │  3 │    4 │  3 │ 100.0% │     75.0% │  85.7% │     100.0% │
+│ 1099f2d3 │  1 │    2 │  1 │ 100.0% │     50.0% │  66.7% │     100.0% │
+│ 21d4cdf6 │  5 │    5 │  5 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ fcc5dcba │  3 │    3 │  3 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ d24901dd │  1 │    1 │  1 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ e5a1da4f │  2 │    2 │  2 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 66921886 │  3 │    3 │  3 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 51aa8083 │  1 │    1 │  0 │   0.0% │      0.0% │   0.0% │       0.0% │
+│ b52bc536 │  4 │    4 │  4 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 83dea3ce │  4 │    4 │  4 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 70bd06c8 │  5 │    4 │  4 │  80.0% │    100.0% │  88.9% │      75.0% │
+│ 67b3e1ad │  7 │    6 │  6 │  85.7% │    100.0% │  92.3% │      66.7% │
+│ 1d316b85 │ 10 │    8 │  7 │  70.0% │     87.5% │  77.8% │      42.9% │
+│ 248aaf83 │ 18 │   15 │ 15 │  83.3% │    100.0% │  90.9% │      66.7% │
+│ da0c1dda │  7 │    7 │  7 │ 100.0% │    100.0% │ 100.0% │      85.7% │
+│ 73501ab3 │  7 │    7 │  7 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 1f141057 │ 16 │   16 │ 16 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ f9979041 │  2 │    2 │  2 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ a8d47c4b │  4 │    4 │  4 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 92a739e0 │  8 │    8 │  8 │ 100.0% │    100.0% │ 100.0% │      87.5% │
+│ 14c7e370 │  3 │    3 │  3 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ e8dbd314 │  7 │    7 │  7 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 9b0015f4 │  2 │    2 │  1 │  50.0% │     50.0% │  50.0% │     100.0% │
+│ 93e80b60 │  4 │    5 │  4 │ 100.0% │     80.0% │  88.9% │     100.0% │
+│ 9688005f │  4 │    4 │  4 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 861054de │ 13 │   13 │ 13 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 9e515aaf │  4 │    4 │  4 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 672858b4 │ 16 │   16 │ 15 │  93.8% │     93.8% │  93.8% │      93.3% │
+│ 44351174 │ 12 │   12 │ 12 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 2cb28662 │ 25 │   25 │ 25 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 89590b77 │  2 │    2 │  2 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 483970c6 │  6 │    6 │  6 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 0c58108f │  4 │    4 │  4 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 3e086020 │  3 │    4 │  3 │ 100.0% │     75.0% │  85.7% │     100.0% │
+│ f154e34f │  4 │    4 │  4 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 86c77c1a │  5 │    5 │  5 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 19cfec44 │ 12 │   12 │ 12 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 32c65f04 │  5 │    5 │  5 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 71a3a742 │  3 │    3 │  3 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ 648bf6f2 │  4 │    3 │  3 │  75.0% │    100.0% │  85.7% │      66.7% │
+│ 9f0221f5 │  3 │    3 │  3 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+│ abfbcb64 │  5 │    5 │  5 │ 100.0% │    100.0% │ 100.0% │     100.0% │
+└──────────┴────┴──────┴────┴────────┴───────────┴────────┴────────────┘
+
+Aggregate Results (83 rallies)
+  GT contacts:        501
+  Predicted contacts: 498
+  True positives:     478
+  False positives:    20
+  False negatives:    23
+  Contact Recall:    95.4%
+  Contact Precision: 96.0%
+  Contact F1:        95.7%
+  Action Accuracy:   92.5%
+  Player Attribution: 77.2%
+  Court-Side Accuracy: 81.5% (141/173)
+  Serve Presence:    78/79 (98.7%)  (includes synthetic)
+                                                        
+                   Per-Action Metrics                   
+┏━━━━━━━━━┳━━━━━┳━━━━┳━━━━┳━━━━━━━━━━━┳━━━━━━━━┳━━━━━━━┓
+┃ Action  ┃  TP ┃ FP ┃ FN ┃ Precision ┃ Recall ┃    F1 ┃
+┡━━━━━━━━━╇━━━━━╇━━━━╇━━━━╇━━━━━━━━━━━╇━━━━━━━━╇━━━━━━━┩
+│ Serve   │  70 │  6 │  9 │     92.1% │  88.6% │ 90.3% │
+│ Receive │  72 │  8 │  6 │     90.0% │  92.3% │ 91.1% │
+│ Set     │ 107 │ 18 │  6 │     85.6% │  94.7% │ 89.9% │
+│ Attack  │ 121 │ 12 │ 22 │     91.0% │  84.6% │ 87.7% │
+│ Block   │   0 │  0 │  6 │      0.0% │   0.0% │  0.0% │
+│ Dig     │  72 │ 12 │ 10 │     85.7% │  87.8% │ 86.7% │
+└─────────┴─────┴────┴────┴───────────┴────────┴───────┘
+                                                                
+           Confusion Matrix (rows=GT, cols=Predicted)           
+┏━━━━━━━━━━━┳━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━┓
+┃ GT \ Pred ┃ MISS ┃ attac ┃ block ┃ dig ┃ recei ┃ serve ┃ set ┃
+┡━━━━━━━━━━━╇━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━┩
+│ attack    │    8 │   121 │     0 │   4 │     1 │     0 │   9 │
+│ block     │    2 │     4 │     0 │   0 │     0 │     0 │   0 │
+│ dig       │    3 │     4 │     0 │  72 │     0 │     0 │   3 │
+│ receive   │    2 │     0 │     0 │   2 │    72 │     0 │   2 │
+│ serve     │    6 │     0 │     0 │   0 │     3 │    70 │   0 │
+│ set       │    2 │     1 │     0 │   1 │     2 │     0 │ 107 │
+└───────────┴──────┴───────┴───────┴─────┴───────┴───────┴─────┘
+                                                
+         Per-Action Player Attribution          
+┏━━━━━━━━━┳━━━━━━━━━┳━━━━━━━┳━━━━━━━┳━━━━━━━━━━┓
+┃ Action  ┃ Correct ┃ Wrong ┃ Total ┃ Accuracy ┃
+┡━━━━━━━━━╇━━━━━━━━━╇━━━━━━━╇━━━━━━━╇━━━━━━━━━━┩
+│ Serve   │      52 │    21 │    73 │    71.2% │
+│ Receive │      58 │    18 │    76 │    76.3% │
+│ Set     │      88 │    23 │   111 │    79.3% │
+│ Attack  │     105 │    30 │   135 │    77.8% │
+│ Block   │       1 │     3 │     4 │    25.0% │
+│ Dig     │      65 │    14 │    79 │    82.3% │
+└─────────┴─────────┴───────┴───────┴──────────┘
+
+Sanity Violations
+  Time gaps (>3s):      5
+  Illegal sequences:    7
+  Total violations:     12
+  Rallies with issues:  8/83
+     same_action_repeat: contacts 2→3: set→set on same side
+    [43b849ec] same_action_repeat: contacts 4→5: dig→dig on same side
+     same_action_repeat: contacts 2→3: set→set on same side
+    [69117837] time_gap: contacts 0→1: 6.0s gap (358 frames)
+    [71c642dc] time_gap: contacts 5→6: 3.2s gap (189 frames)
+    [71c642dc] time_gap: contacts 6→7: 4.0s gap (240 frames)
+    [71c642dc] same_action_repeat: contacts 5→6: set→set on same side
+    [06c13117] time_gap: contacts 1→2: 6.2s gap (369 frames)
+    [248aaf83] time_gap: contacts 2→3: 3.7s gap (112 frames)
+    [248aaf83] same_action_repeat: contacts 2→3: set→set on same side
+    [248aaf83] same_action_repeat: contacts 3→4: set→set on same side
+    [672858b4] same_action_repeat: contacts 4→5: dig→dig on same side

@@ -18,24 +18,33 @@ Output: per-video and per-cohort tables of FN rate + classification.
 
 Usage:
     cd analysis
-    uv run python scripts/diagnose_contact_fn_60fps.py
+    uv run python scripts/diagnose_contact_fn_60fps.py                  # DB v4 contacts
+    uv run python scripts/diagnose_contact_fn_60fps.py --in-memory      # Run detect_contacts
+                                                                        # inline with current
+                                                                        # default classifier
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import math
 import sys
 from collections import defaultdict
 from typing import Any, cast
 
+from rallycut.court.calibration import CourtCalibrator
 from rallycut.evaluation.db import get_connection
+from rallycut.evaluation.tracking.db import load_court_calibration
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.contact_detector import (
     ContactDetectionConfig,
     _prepare_candidates,
+    detect_contacts,
 )
+from rallycut.tracking.match_tracker import build_match_team_assignments
 from rallycut.tracking.player_tracker import PlayerPosition
+from rallycut.tracking.sequence_action_runtime import get_sequence_probs
 
 MATCH_WINDOW = 10  # GT contact considered "detected" if v4 contact within ±N frames
 CANDIDATE_WINDOW = 5  # AB split: candidate considered "at GT" if within ±N
@@ -50,13 +59,14 @@ COHORTS = {
 
 
 def _load_rally_data(cur: Any, video_names: list[str]) -> dict[str, dict[str, Any]]:
-    """Load contacts, ball, players, fps per rally for the named videos."""
+    """Load contacts, ball, players, fps + court_split_y + frame_count per rally."""
     placeholders = ",".join(["%s"] * len(video_names))
     cur.execute(
         f"""
-        SELECT r.id, v.name,
+        SELECT r.id, r.video_id, v.name,
                pt.contacts_json, pt.ball_positions_json, pt.positions_json,
-               COALESCE(pt.fps, v.fps) AS resolved_fps
+               COALESCE(pt.fps, v.fps) AS resolved_fps,
+               pt.court_split_y, pt.frame_count
         FROM rallies r
         JOIN player_tracks pt ON pt.rally_id = r.id
         JOIN videos v ON r.video_id = v.id
@@ -68,12 +78,65 @@ def _load_rally_data(cur: Any, video_names: list[str]) -> dict[str, dict[str, An
     for row in cur:
         rid = str(row[0])
         out[rid] = {
-            "video": row[1],
-            "contacts_json": row[2],
-            "ball_json": row[3],
-            "positions_json": row[4],
-            "fps": float(row[5]) if row[5] else 30.0,
+            "video_id": str(row[1]),
+            "video": row[2],
+            "contacts_json": row[3],
+            "ball_json": row[4],
+            "positions_json": row[5],
+            "fps": float(row[6]) if row[6] else 30.0,
+            "court_split_y": row[7],
+            "frame_count": row[8],
         }
+    return out
+
+
+def _load_match_teams(
+    cur: Any, video_names: list[str], rally_data: dict[str, dict[str, Any]],
+) -> dict[str, dict[int, int]]:
+    """Load per-rally team assignments via build_match_team_assignments."""
+    placeholders = ",".join(["%s"] * len(video_names))
+    # Pre-load positions for team verification
+    cur.execute(
+        f"""
+        SELECT pt.rally_id, pt.positions_json
+        FROM player_tracks pt
+        JOIN rallies r ON r.id = pt.rally_id
+        JOIN videos v ON r.video_id = v.id
+        WHERE v.name IN ({placeholders}) AND pt.positions_json IS NOT NULL
+        """,
+        video_names,
+    )
+    rally_positions: dict[str, list[PlayerPosition]] = {}
+    for rid_raw, pos_raw in cur.fetchall():
+        rid_str = str(rid_raw)
+        pos_list = pos_raw if isinstance(pos_raw, list) else []
+        rally_positions[rid_str] = [
+            PlayerPosition(
+                frame_number=p.get("frameNumber", 0),
+                track_id=p.get("trackId", 0),
+                x=p.get("x", 0), y=p.get("y", 0),
+                width=p.get("width", 0), height=p.get("height", 0),
+                confidence=p.get("confidence", 0),
+            )
+            for p in pos_list
+            if isinstance(p, dict)
+        ]
+
+    cur.execute(
+        f"SELECT v.id, v.match_analysis_json FROM videos v "
+        f"WHERE v.name IN ({placeholders}) AND v.match_analysis_json IS NOT NULL",
+        video_names,
+    )
+    out: dict[str, dict[int, int]] = {}
+    for _vid, mj_raw in cur.fetchall():
+        mj = cast(dict[str, Any], mj_raw)
+        if not mj:
+            continue
+        out.update(
+            build_match_team_assignments(
+                mj, min_confidence=0.0, rally_positions=rally_positions,
+            )
+        )
     return out
 
 
@@ -234,11 +297,37 @@ def _candidate_at_gt(
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__)
+    ap.add_argument(
+        "--in-memory", action="store_true",
+        help="Run detect_contacts inline using the current default classifier "
+        "instead of reading contacts_json from DB. Used to A/B a freshly "
+        "trained classifier without --apply DB writes.",
+    )
+    args = ap.parse_args()
+
     with get_connection() as conn:
         with conn.cursor() as cur:
             all_videos = COHORTS["60fps"] + COHORTS["30fps"]
             rally_data = _load_rally_data(cur, all_videos)
             gt_by_rally = _load_gt(cur, all_videos)
+            match_teams_by_rally: dict[str, dict[int, int]] = {}
+            calibrators: dict[str, Any] = {}
+            if args.in_memory:
+                match_teams_by_rally = _load_match_teams(cur, all_videos, rally_data)
+                seen_vids = {d["video_id"] for d in rally_data.values()}
+                for vid in seen_vids:
+                    corners = load_court_calibration(vid)
+                    if corners and len(corners) == 4:
+                        cal = CourtCalibrator()
+                        cal.calibrate([(c["x"], c["y"]) for c in corners])
+                        calibrators[vid] = cal
+                    else:
+                        calibrators[vid] = None
+
+    mode = "in-memory (current default classifier)" if args.in_memory else "DB v4 contacts"
+    print(f"# Mode: {mode}")
+    print()
 
     per_video: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     generator_fires: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -248,12 +337,38 @@ def main() -> int:
             continue
         data = rally_data[rid]
         video = data["video"]
-        contacts = _parse_contacts(data["contacts_json"])
         ball_json = cast(list[dict[str, Any]] | None, data["ball_json"])
         positions_json = cast(list[dict[str, Any]] | None, data["positions_json"])
         # Build typed objects once per rally (reused for each GT row)
         ball_positions = _build_ball_positions(ball_json)
         player_positions = _build_player_positions(positions_json)
+
+        if args.in_memory:
+            # Re-run detect_contacts with current default classifier
+            try:
+                seq_probs = get_sequence_probs(
+                    ball_positions, player_positions, data["court_split_y"],
+                    data["frame_count"] or 0,
+                    match_teams_by_rally.get(rid),
+                    calibrator=calibrators.get(data["video_id"]),
+                )
+                cs = detect_contacts(
+                    ball_positions=ball_positions,
+                    player_positions=player_positions,
+                    net_y=data["court_split_y"],
+                    frame_count=data["frame_count"] or None,
+                    court_calibrator=calibrators.get(data["video_id"]),
+                    team_assignments=match_teams_by_rally.get(rid),
+                    sequence_probs=seq_probs,
+                )
+                contacts = [
+                    {"frame": c.frame} for c in cs.contacts
+                ]
+            except Exception as e:
+                print(f"WARN rally {rid[:8]} in-memory detect failed: {e}", file=sys.stderr)
+                contacts = []
+        else:
+            contacts = _parse_contacts(data["contacts_json"])
 
         for gt in gt_list:
             gt_frame = gt["frame"]
