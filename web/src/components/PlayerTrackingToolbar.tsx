@@ -93,6 +93,7 @@ export function PlayerTrackingToolbar() {
   const isLoadingTrackData = backendRallyId ? isLoadingTrack[backendRallyId] : false;
   const trackData = backendRallyId ? playerTracks[backendRallyId]?.tracksJson : null;
   const hasTrackingData = !!trackData?.tracks?.length;
+  const trackFps = trackData?.fps ?? fps;
 
   // Load existing tracking data when rally is selected. Also force-reload
   // on `match-analysis-updated` so the predicted action attributions
@@ -133,7 +134,7 @@ export function PlayerTrackingToolbar() {
   const currentActionIndex = useMemo(() => {
     const actions = trackData?.actions as ActionsData | undefined;
     if (!actions?.actions?.length || !selectedRally) return -1;
-    const currentFrame = Math.round((currentTime - selectedRally.start_time) * fps);
+    const currentFrame = Math.round((currentTime - selectedRally.start_time) * trackFps);
     // Find the last action whose frame is <= currentFrame (or closest upcoming one)
     let bestIdx = -1;
     for (let i = 0; i < actions.actions.length; i++) {
@@ -151,7 +152,7 @@ export function PlayerTrackingToolbar() {
       if (dist > 30) return -1;
     }
     return bestIdx;
-  }, [trackData?.actions, currentTime, selectedRally, fps]);
+  }, [trackData?.actions, currentTime, selectedRally, trackFps]);
 
   // Find the GT label nearest to current playback time
   const nearestGtFrame = useMemo(() => {
@@ -222,7 +223,7 @@ export function PlayerTrackingToolbar() {
 
     const rallyStart = selectedRally?.start_time ?? 0;
     const fromFrame = swapFromCurrent
-      ? Math.max(0, Math.round((currentTime - rallyStart) * fps))
+      ? Math.max(0, Math.round((currentTime - rallyStart) * trackFps))
       : 0;
 
     setIsSwapping(true);
