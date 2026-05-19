@@ -66,26 +66,7 @@ logger = logging.getLogger(__name__)
 #          REQUIRES retrained dynamic_attribution_scorer (v3.2 scorer
 #          was calibrated for v3 contact frames; v4 shifts frames ~3f
 #          earlier on average, requires co-aligned scorer).
-#  - v5: 2026-05-19 — fps-aware candidate gates. detect_contacts now
-#          accepts an optional `fps` arg; when provided AND outside ±10%
-#          of 30fps, frame-count GATE fields in ContactDetectionConfig
-#          are scaled proportionally (min_peak_distance_frames,
-#          direction_check_frames, inflection_check_frames,
-#          player_search_frames, player_candidate_search_frames,
-#          warmup_skip_frames, parabolic_window_frames, parabolic_stride,
-#          deceleration_window, post_serve_search_window,
-#          proximity_search_window, trajectory_refinement_window,
-#          serve_window_frames). GBM feature windows (density_window=10,
-#          acceleration window=3, velocity_ratio window=5, curvature
-#          window=5, _count_consecutive_detections) and the
-#          contact_frame_regressor constants are NOT scaled — they remain
-#          frame-semantic so the v4 GBM and v4 contact-frame-regressor
-#          see the feature distribution they trained on (no retrain
-#          required). 30fps inputs hit the deadband and are byte-identical
-#          to v4. Fixes ≈4x contact-FN rate on the 60fps cohort (haha,
-#          kuku, koko, lulu, wawa) where unscaled gates covered half the
-#          temporal context.
-CONTACT_PIPELINE_VERSION = "v5"
+CONTACT_PIPELINE_VERSION = "v4"
 
 # Minimum confidence to treat a ball position as a real detection.
 # Ball detector confidence is bimodal: either 0.0 (no detection) or >=0.3 (confident).
@@ -408,56 +389,6 @@ class ContactSequence:
             "rallyStartFrame": self.rally_start_frame,
             "contacts": [c.to_dict() for c in self.contacts],
         }
-
-
-REFERENCE_FPS = 30.0
-FPS_SCALE_DEADBAND = 0.10  # treat fps within ±10% of REFERENCE_FPS as 30fps
-
-
-def _scale_config_for_fps(
-    cfg: ContactDetectionConfig,
-    fps: float | None,
-) -> ContactDetectionConfig:
-    """Return a copy of cfg with frame-count GATE fields scaled by fps/30.
-
-    No-op when fps is None, non-positive, or within ±10% of REFERENCE_FPS,
-    so 30fps inputs are byte-identical to v4 (snapshot tests pass without
-    fixture regeneration) and old DB rows with no recorded fps fall through
-    unchanged.
-
-    Only GATE fields are scaled. GBM-feature window sizes are hardcoded
-    local literals inside detect_contacts (density_window=10,
-    _compute_acceleration window=3, _compute_velocity_ratio window=5,
-    _compute_trajectory_curvature window=5, _count_consecutive_detections
-    raw count) and the contact_frame_regressor module — those stay frozen
-    so the v4 GBM and v4 contact-frame-regressor see the feature
-    distribution they trained on (no retrain required).
-    """
-    if fps is None or fps <= 0:
-        return cfg
-    ratio = fps / REFERENCE_FPS
-    if abs(ratio - 1.0) <= FPS_SCALE_DEADBAND:
-        return cfg
-
-    def s(n: int) -> int:
-        return max(1, int(round(n * ratio)))
-
-    return replace(
-        cfg,
-        min_peak_distance_frames=s(cfg.min_peak_distance_frames),
-        direction_check_frames=s(cfg.direction_check_frames),
-        inflection_check_frames=s(cfg.inflection_check_frames),
-        player_search_frames=s(cfg.player_search_frames),
-        player_candidate_search_frames=s(cfg.player_candidate_search_frames),
-        warmup_skip_frames=s(cfg.warmup_skip_frames),
-        parabolic_window_frames=s(cfg.parabolic_window_frames),
-        parabolic_stride=s(cfg.parabolic_stride),
-        deceleration_window=s(cfg.deceleration_window),
-        post_serve_search_window=s(cfg.post_serve_search_window),
-        proximity_search_window=s(cfg.proximity_search_window),
-        trajectory_refinement_window=s(cfg.trajectory_refinement_window),
-        serve_window_frames=s(cfg.serve_window_frames),
-    )
 
 
 def _compute_velocities(
@@ -2629,7 +2560,6 @@ def detect_contacts(
     sequence_probs: np.ndarray | None = None,
     enable_rescue: bool = False,
     primary_track_ids: list[int] | None = None,
-    fps: float | None = None,
 ) -> ContactSequence:
     """Detect ball contacts from trajectory inflection points and velocity peaks.
 
@@ -2689,7 +2619,6 @@ def detect_contacts(
     )
 
     cfg = config or ContactDetectionConfig()
-    cfg = _scale_config_for_fps(cfg, fps)
 
     # Auto-load attribution models
     pose_attributor = (
