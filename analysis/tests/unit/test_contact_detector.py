@@ -20,6 +20,7 @@ from rallycut.tracking.contact_detector import (
     _find_velocity_reversal_candidates,
     _merge_candidates,
     _player_to_ball_dist,
+    _scale_config_for_fps,
     _smooth_signal,
     compute_direction_change,
     detect_contacts,
@@ -1156,4 +1157,62 @@ class TestDetectContactsWithNewFeatures:
             assert hasattr(c, "confidence")
             # Without classifier, confidence should be 0.0 (hand-tuned gates)
             assert c.confidence == 0.0
+
+
+class TestScaleConfigForFps:
+    """fps-aware scaling of frame-count GATE fields in ContactDetectionConfig."""
+
+    def test_none_fps_returns_same_instance(self) -> None:
+        cfg = ContactDetectionConfig()
+        assert _scale_config_for_fps(cfg, None) is cfg
+
+    def test_zero_fps_returns_same_instance(self) -> None:
+        cfg = ContactDetectionConfig()
+        assert _scale_config_for_fps(cfg, 0.0) is cfg
+
+    def test_30fps_returns_same_instance_via_deadband(self) -> None:
+        cfg = ContactDetectionConfig()
+        assert _scale_config_for_fps(cfg, 30.0) is cfg
+
+    def test_within_deadband_returns_same_instance(self) -> None:
+        cfg = ContactDetectionConfig()
+        assert _scale_config_for_fps(cfg, 27.5) is cfg
+        assert _scale_config_for_fps(cfg, 32.5) is cfg
+
+    def test_60fps_scales_gate_fields_by_2x(self) -> None:
+        cfg = ContactDetectionConfig()
+        scaled = _scale_config_for_fps(cfg, 60.0)
+        assert scaled is not cfg
+        assert scaled.min_peak_distance_frames == 24  # 12 * 2
+        assert scaled.direction_check_frames == 16  # 8 * 2
+        assert scaled.inflection_check_frames == 10  # 5 * 2
+        assert scaled.player_search_frames == 10  # 5 * 2
+        assert scaled.player_candidate_search_frames == 30  # 15 * 2
+        assert scaled.warmup_skip_frames == 10  # 5 * 2
+        assert scaled.parabolic_window_frames == 24  # 12 * 2
+        assert scaled.parabolic_stride == 6  # 3 * 2
+        assert scaled.deceleration_window == 10  # 5 * 2
+        assert scaled.post_serve_search_window == 30  # 15 * 2
+        assert scaled.proximity_search_window == 16  # 8 * 2
+        assert scaled.trajectory_refinement_window == 10  # 5 * 2
+        assert scaled.serve_window_frames == 120  # 60 * 2
+
+    def test_60fps_preserves_non_frame_fields(self) -> None:
+        cfg = ContactDetectionConfig()
+        scaled = _scale_config_for_fps(cfg, 60.0)
+        assert scaled.min_direction_change_deg == cfg.min_direction_change_deg
+        assert scaled.player_contact_radius == cfg.player_contact_radius
+        assert scaled.min_peak_velocity == cfg.min_peak_velocity
+        assert scaled.use_pose_attribution == cfg.use_pose_attribution
+        assert scaled.enable_seq_anchored_rescue == cfg.enable_seq_anchored_rescue
+
+    def test_negative_fps_returns_same_instance(self) -> None:
+        cfg = ContactDetectionConfig()
+        assert _scale_config_for_fps(cfg, -1.0) is cfg
+
+    def test_minimum_window_floor_of_one(self) -> None:
+        # With a custom 1-frame field at 0.5x fps, scaled value should clamp to 1, not 0.
+        cfg = ContactDetectionConfig(direction_check_frames=1)
+        scaled = _scale_config_for_fps(cfg, 15.0)
+        assert scaled.direction_check_frames == 1
 
