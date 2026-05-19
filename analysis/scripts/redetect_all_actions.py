@@ -107,9 +107,11 @@ def main() -> None:
                 SELECT r.id, r.video_id, pt.id as pt_id,
                        pt.ball_positions_json, pt.positions_json,
                        pt.frame_count, pt.court_split_y,
-                       pt.actions_json
+                       pt.actions_json,
+                       COALESCE(pt.fps, v.fps) AS resolved_fps
                 FROM rallies r
                 JOIN player_tracks pt ON pt.rally_id = r.id
+                JOIN videos v ON r.video_id = v.id
                 WHERE {where_sql}
                 ORDER BY r.video_id, r.start_ms
             """, params)
@@ -136,6 +138,7 @@ def main() -> None:
         frame_count = cast(int | None, row[5])
         court_split_y = cast(float | None, row[6])
         existing_actions_json = cast(dict[str, Any] | None, row[7]) or {}
+        resolved_fps = cast(float | None, row[8])
 
         # Load court calibration (cached per video)
         if video_id not in calibrators:
@@ -202,6 +205,7 @@ def main() -> None:
                 court_calibrator=calibrators.get(video_id),
                 team_assignments=match_teams,
                 sequence_probs=sequence_probs,
+                fps=resolved_fps,
             )
 
             rally_actions = classify_rally_actions(
