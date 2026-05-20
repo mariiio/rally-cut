@@ -136,6 +136,21 @@ def classify_actions(
     if primary_raw and isinstance(primary_raw, list):
         primary_track_ids = [int(t) for t in primary_raw]
 
+    # If the producer (track-players) stamped a precomputed solvePnP
+    # NetLine into the JSON, replay it here so `detect_contacts` uses v8's
+    # NLE midpoint as `estimated_net_y` (rather than recomputing on a rally
+    # clip, which would sample only 30 frames from this segment and could
+    # miss the representative net view).
+    net_line = None
+    net_line_data = data.get("netLine")
+    if net_line_data:
+        try:
+            from rallycut.court.net_line_estimator import NetLine  # noqa: PLC0415
+
+            net_line = NetLine.from_dict(net_line_data)
+        except Exception:
+            net_line = None  # malformed sidecar — fall through to v7 M4
+
     contact_cfg = ContactDetectionConfig()
     contact_seq = detect_contacts(
         ball_positions=ball_positions,
@@ -144,6 +159,7 @@ def classify_actions(
         net_y=court_split_y,
         frame_count=data.get("frameCount"),
         team_assignments=team_assignments,
+        net_line=net_line,
         sequence_probs=sequence_probs,
         primary_track_ids=primary_track_ids,
     )
@@ -335,12 +351,24 @@ def rank_highlights(
             if primary_raw2 and isinstance(primary_raw2, list)
             else None
         )
+        # Replay precomputed NetLine when the tracking JSON has one.
+        net_line_2 = None
+        nlj2 = data.get("netLine")
+        if nlj2:
+            try:
+                from rallycut.court.net_line_estimator import NetLine  # noqa: PLC0415
+
+                net_line_2 = NetLine.from_dict(nlj2)
+            except Exception:
+                net_line_2 = None
+
         contact_cfg = ContactDetectionConfig()
         contact_seq = detect_contacts(
             ball_positions, player_positions or None, config=contact_cfg,
             net_y=court_split_y,
             frame_count=data.get("frameCount"),
             team_assignments=ta,
+            net_line=net_line_2,
             primary_track_ids=primary_tids_2,
             sequence_probs=sequence_probs,
         )

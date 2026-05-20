@@ -919,6 +919,40 @@ def _run_tracking(
         except Exception:
             pass  # Non-fatal: player estimation is best-effort
 
+    # Compute solvePnP NetLine on the FULL source video so every rally in
+    # this run uses a representative net top (v8 CONTACT_PIPELINE_VERSION).
+    # Cached per-video by `estimate_net_line` keyed on `original_video.stem`
+    # — first rally of a source incurs the keypoint-detection cost; all
+    # subsequent rallies hit the cache. Best-effort: any failure falls back
+    # to v7's M4 corner-only ridge inside `_prepare_candidates`.
+    net_line = None
+    if calibrator is not None and calibrator.is_calibrated:
+        try:
+            import cv2  # noqa: PLC0415
+
+            from rallycut.court.net_line_estimator import (  # noqa: PLC0415
+                estimate_net_line,
+            )
+
+            cap = cv2.VideoCapture(str(original_video))
+            img_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            img_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            cap.release()
+            if img_w > 0 and img_h > 0:
+                net_line = estimate_net_line(
+                    original_video,
+                    image_width=img_w,
+                    image_height=img_h,
+                    video_key=original_video.stem,
+                    use_cache=True,
+                )
+        except Exception as exc:
+            if not quiet:
+                console.print(
+                    f"[yellow]net-line estimation failed "
+                    f"(falling back to M4 corners ridge): {exc}[/yellow]"
+                )
+
     # Run action classification if requested
     actions_data = None
     if actions and ball_positions and result.positions:
@@ -970,6 +1004,7 @@ def _run_tracking(
                     frame_count=result.frame_count or None,
                     team_assignments=verified_teams,
                     court_calibrator=calibrator,
+                    net_line=net_line,
                     sequence_probs=sequence_probs,
                     primary_track_ids=list(result.primary_track_ids) if result.primary_track_ids else None,
                 )
@@ -1010,6 +1045,7 @@ def _run_tracking(
             frame_count=result.frame_count or None,
             team_assignments=verified_teams,
             court_calibrator=calibrator,
+            net_line=net_line,
             sequence_probs=sequence_probs,
             primary_track_ids=list(result.primary_track_ids) if result.primary_track_ids else None,
         )
@@ -1058,6 +1094,15 @@ def _run_tracking(
             console.print(f"[dim]Contacts: {contact_seq.num_contacts}[/dim]")
             if seq:
                 console.print(f"[dim]Actions: {' → '.join(seq)}[/dim]")
+
+    # Stamp the computed NetLine (if any) into the tracking JSON so the
+    # standalone `analyze actions <json>` CLI path can replay v8's NLE
+    # cascade without re-running keypoint detection on a rally clip.
+    # Falls back transparently when net_line is None.
+    if net_line is not None:
+        if actions_data is None:
+            actions_data = {}
+        actions_data["netLine"] = net_line.to_dict()
 
     # Raw court detection (corners + confidence) so the API can backfill
     # Video.courtCalibrationJson when the video has no calibration yet.
