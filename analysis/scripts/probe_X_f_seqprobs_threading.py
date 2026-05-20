@@ -23,11 +23,11 @@ import sys
 
 import psycopg
 
+from rallycut.tracking.action_classifier import classify_rally_actions
 from rallycut.tracking.ball_tracker import BallPosition
 from rallycut.tracking.contact_classifier import ContactClassifier
 from rallycut.tracking.contact_detector import detect_contacts
 from rallycut.tracking.player_tracker import PlayerPosition
-from rallycut.tracking.action_classifier import classify_rally_actions
 from rallycut.tracking.sequence_action_runtime import get_sequence_probs
 
 DB_DSN = "postgresql://postgres:postgres@localhost:5436/rallycut"

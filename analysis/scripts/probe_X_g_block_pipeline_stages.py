@@ -194,9 +194,9 @@ def main() -> int:
 
             # Pattern classification (single dominant cause per case)
             any_gen_at_block = any(v for v in gen_at_block.values())
-            any_gen_at_attack = any(v for v in gen_at_attack.values())
+            any(v for v in gen_at_attack.values())
             cand_present_block = bool(cand_at_block)
-            cand_present_attack = bool(cand_at_attack)
+            bool(cand_at_attack)
             detected_at_block_arr = bool(detected_at_block)
 
             if nearest <= 7:
