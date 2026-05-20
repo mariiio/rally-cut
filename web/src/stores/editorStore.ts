@@ -462,8 +462,8 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
         // Sync court calibrations for all videos
         const trackingStore = usePlayerTrackingStore.getState();
-        for (const [videoId, corners] of Object.entries(result.courtCalibrations)) {
-          trackingStore.hydrateCalibration(videoId, corners);
+        for (const [videoId, cal] of Object.entries(result.courtCalibrations)) {
+          trackingStore.hydrateCalibration(videoId, cal.corners, cal.netTopY);
         }
         // Clear stale local calibrations for videos that no longer have DB calibration
         for (const match of result.session.matches) {
@@ -765,7 +765,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
       // Sync court calibration: hydrate from API, or clear stale local cache
       if (result.courtCalibration) {
-        usePlayerTrackingStore.getState().hydrateCalibration(videoId, result.courtCalibration);
+        usePlayerTrackingStore.getState().hydrateCalibration(
+          videoId,
+          result.courtCalibration,
+          result.courtCalibrationNetTopY ?? undefined,
+        );
       } else {
         usePlayerTrackingStore.getState().clearLocalCalibration(videoId);
       }
@@ -933,7 +937,11 @@ export const useEditorStore = create<EditorState>((set, get) => ({
 
         // Sync court calibration: hydrate from API, or clear stale local cache
         if (result.courtCalibration) {
-          usePlayerTrackingStore.getState().hydrateCalibration(state.singleVideoId, result.courtCalibration);
+          usePlayerTrackingStore.getState().hydrateCalibration(
+            state.singleVideoId,
+            result.courtCalibration,
+            result.courtCalibrationNetTopY ?? undefined,
+          );
         } else {
           usePlayerTrackingStore.getState().clearLocalCalibration(state.singleVideoId);
         }

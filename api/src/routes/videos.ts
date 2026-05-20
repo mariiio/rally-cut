@@ -525,6 +525,13 @@ router.put(
     params: z.object({ id: uuidSchema }),
     body: z.object({
       corners: z.array(calibrationCornerSchema).length(4),
+      // Optional per-video net-top y (normalized image coords, 0-1).
+      // Camera is fixed across a match → one value per video. Sent from
+      // the calibration UI's draggable net handle. Backend stores it in
+      // a dedicated column (not inside `courtCalibrationJson`) so
+      // existing readers of `courtCalibrationJson as CalibrationCorner[]`
+      // remain backward-compatible.
+      netTopY: z.number().min(0).max(1).optional(),
     }),
   }),
   async (req, res, next) => {
@@ -542,6 +549,9 @@ router.put(
         data: {
           courtCalibrationJson: req.body.corners,
           courtCalibrationSource: 'manual',
+          ...(req.body.netTopY !== undefined
+            ? { courtCalibrationNetTopY: req.body.netTopY }
+            : {}),
         },
       });
 

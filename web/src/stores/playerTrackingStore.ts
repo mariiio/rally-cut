@@ -141,7 +141,7 @@ interface PlayerTrackingState {
   clearCalibration: (videoId: string) => void;
   clearLocalCalibration: (videoId: string) => void;
   getCalibration: (videoId: string) => CourtCalibration | null;
-  hydrateCalibration: (videoId: string, corners: Corner[]) => void;
+  hydrateCalibration: (videoId: string, corners: Corner[], netTopY?: number) => void;
   hydrateFromAutoSave: (videoId: string, corners: Corner[]) => void;
   trackPlayersForRally: (rallyId: string, videoId: string, fallbackFps?: number) => Promise<void>;
   loadPlayerTrack: (rallyId: string, fallbackFps?: number, forceRefresh?: boolean) => Promise<boolean>;
@@ -435,11 +435,8 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
           },
           isCalibrating: false,
         }));
-        // Fire-and-forget: persist to backend.
-        // Backend currently only stores corners; netTopY is frontend-only
-        // (localStorage-persisted via Zustand) until the API + DB schema
-        // are extended to carry it.
-        saveCourtCalibration(videoId, corners).catch((err) => {
+        // Fire-and-forget: persist corners + optional netTopY to backend.
+        saveCourtCalibration(videoId, corners, netTopY).catch((err) => {
           console.error('[PlayerTrackingStore] Failed to save calibration to API:', err);
         });
       },
@@ -469,7 +466,7 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
         return get().calibrations[videoId] || null;
       },
 
-      hydrateCalibration: (videoId: string, corners: Corner[]) => {
+      hydrateCalibration: (videoId: string, corners: Corner[], netTopY?: number) => {
         // Only hydrate if not already in local store (local is authoritative cache)
         if (get().calibrations[videoId]) return;
         set((state) => ({
@@ -478,6 +475,7 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
             [videoId]: {
               videoId,
               corners,
+              ...(netTopY !== undefined ? { netTopY } : {}),
               savedAt: Date.now(),
             },
           },

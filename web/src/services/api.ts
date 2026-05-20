@@ -115,6 +115,7 @@ interface ApiVideo {
   qualityDowngradedAt?: string | null;
   qualityReportJson?: VideoQualityReport | null;
   courtCalibrationJson?: Array<{ x: number; y: number }> | null;
+  courtCalibrationNetTopY?: number | null;
 }
 
 interface ApiCameraKeyframe {
@@ -363,7 +364,10 @@ function extractCourtCalibrations(apiSession: ApiSession): CourtCalibrationMap {
   const result: CourtCalibrationMap = {};
   for (const video of apiSession.videos) {
     if (video.courtCalibrationJson) {
-      result[video.id] = video.courtCalibrationJson;
+      result[video.id] = {
+        corners: video.courtCalibrationJson,
+        netTopY: video.courtCalibrationNetTopY ?? undefined,
+      };
     }
   }
   return result;
@@ -371,7 +375,10 @@ function extractCourtCalibrations(apiSession: ApiSession): CourtCalibrationMap {
 
 // Session fetch result including camera edits
 // Court calibrations extracted from session response, keyed by videoId
-export type CourtCalibrationMap = Record<string, Array<{ x: number; y: number }>>;
+export type CourtCalibrationMap = Record<
+  string,
+  { corners: Array<{ x: number; y: number }>; netTopY?: number }
+>;
 
 export interface FetchSessionResult {
   session: Session;
@@ -730,6 +737,7 @@ interface ApiVideoEditorResponse {
     status: 'PENDING' | 'UPLOADED' | 'DETECTING' | 'DETECTED' | 'ERROR';
     cameraSettings?: ApiVideoCameraSettings | null;
     courtCalibrationJson?: Array<{ x: number; y: number }> | null;
+    courtCalibrationNetTopY?: number | null;
     qualityReportJson?: VideoQualityReport | null;
   };
   allVideosSessionId: string;
@@ -759,6 +767,7 @@ export interface FetchVideoEditorResult {
   cameraEdits: CameraEditMap;
   globalCameraSettings: GlobalCameraSettingsMap;
   courtCalibration: Array<{ x: number; y: number }> | null;
+  courtCalibrationNetTopY: number | null;
   qualityReportJson: VideoQualityReport | null;
 }
 
@@ -921,6 +930,7 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
     cameraEdits,
     globalCameraSettings,
     courtCalibration: data.video.courtCalibrationJson ?? null,
+    courtCalibrationNetTopY: data.video.courtCalibrationNetTopY ?? null,
     qualityReportJson: data.video.qualityReportJson ?? null,
   };
 }
@@ -1791,15 +1801,25 @@ export async function submitFeedback(feedback: SubmitFeedbackRequest): Promise<F
 
 /**
  * Save court calibration corners for a video.
+ *
+ * Optional `netTopY` is the per-video net-top y in normalized image
+ * coords (0-1). Camera is fixed across a match, so this is one value
+ * per video — sent only when the user has dragged the net handle in
+ * the calibration UI. Backend stores in a dedicated `courtCalibrationNetTopY`
+ * column (separate from the `courtCalibrationJson` corners blob).
  */
 export async function saveCourtCalibration(
   videoId: string,
-  corners: Array<{ x: number; y: number }>
+  corners: Array<{ x: number; y: number }>,
+  netTopY?: number,
 ): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/court-calibration`, {
     method: 'PUT',
     headers: getHeaders('application/json'),
-    body: JSON.stringify({ corners }),
+    body: JSON.stringify({
+      corners,
+      ...(netTopY !== undefined ? { netTopY } : {}),
+    }),
   });
 
   if (!response.ok) {
