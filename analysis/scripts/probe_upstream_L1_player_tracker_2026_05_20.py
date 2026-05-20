@@ -12,7 +12,7 @@ For each wrong-attribution contact:
     R1.d: detect ID-switch (GT player tracked under different track_id)
 
 Failure-mode categorization per contact:
-  off_screen / never_tracked / short_gap_le_10 / long_gap_gt_10
+  never_tracked / short_gap_le_10 / long_gap_gt_10
 
 Output: reports/upstream_bottleneck_2026_05_20/L1.json
 """
