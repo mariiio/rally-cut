@@ -44,6 +44,16 @@ TRUSTED_32 = (
     "haha",
 )
 
+_SCORER: DynamicAttributionScorer | None = None
+
+
+def _get_scorer() -> DynamicAttributionScorer:
+    """Module-level singleton; the scorer's docstring says one instance per process."""
+    global _SCORER
+    if _SCORER is None:
+        _SCORER = DynamicAttributionScorer()
+    return _SCORER
+
 
 @dataclass(frozen=True)
 class WrongAttributionRow:
@@ -186,7 +196,7 @@ def rescore_contact(
     Used by L1/L2/L3/L4/L6 to substitute oracle inputs and observe the
     scorer's pick under different upstream-layer conditions.
     """
-    scorer = DynamicAttributionScorer()
+    scorer = _get_scorer()
     positions_like = [position_from_dict(p) for p in rally_state["positions"]]
     frame = contact_frame_override if contact_frame_override is not None else int(contact["frame"])
     ball_x = ball_position_override[0] if ball_position_override else float(contact.get("ballX", 0.5))
