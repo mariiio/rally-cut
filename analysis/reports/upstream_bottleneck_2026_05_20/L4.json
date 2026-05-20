@@ -1,0 +1,10 @@
+{
+  "n_ball_gt_rallies": 13,
+  "n_total_wrong": 166,
+  "n_overlap": 11,
+  "n_oracle_attempted": 8,
+  "oracle_recoveries": 4,
+  "avg_ball_confidence_recovered": 0.875,
+  "avg_ball_confidence_not_recovered": 1.0,
+  "partial_corpus_caveat": true
+}
