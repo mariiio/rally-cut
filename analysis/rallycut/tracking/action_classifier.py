@@ -180,13 +180,22 @@ logger = logging.getLogger(__name__)
 #          chain-derived expected_team confounded scorer's rank-1 in production.
 #          Gated by SCORER_CHAIN_FALLBACK env flag (default ON). See
 #          [[attribution_headroom_decomposition_2026_05_20]].
-ACTION_PIPELINE_VERSION = "v12"
+# v13 (2026-05-20): SCORER_CHAIN_FALLBACK default flipped OFF (NO-SHIP per
+#          A/B). v12 A/B on trusted-31+haha: attribution +0.26pp
+#          but violation reduction only -5 of needed -20 (Gate 2
+#          FAIL). Chain-aware scorer is "confidently wrong" most
+#          of the time — team_matches_expected=1.0 still gives
+#          high confidence to the wrong-team candidate when
+#          chain-derived expected_team is wrong. Infrastructure
+#          retained for future experiments (helper + wiring + env
+#          flag); just default OFF.
+ACTION_PIPELINE_VERSION = "v13"
 
 # Sub-lever 1 guardrail (Branch A): when chain-aware and no-chain scorer
-# picks disagree, prefer the higher-confidence one. Default ON. Set
-# SCORER_CHAIN_FALLBACK=0 to disable for A/B comparisons.
+# picks disagree, prefer the higher-confidence one. Default OFF. Set
+# SCORER_CHAIN_FALLBACK=1 to enable for A/B comparisons.
 _SCORER_CHAIN_FALLBACK_ENABLED = (
-    os.environ.get("SCORER_CHAIN_FALLBACK", "1").lower() in ("1", "true", "yes")
+    os.environ.get("SCORER_CHAIN_FALLBACK", "0").lower() in ("1", "true", "yes")
 )
 
 # Cached default action type classifier (loaded once from disk on first use)
