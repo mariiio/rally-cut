@@ -2,13 +2,9 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
-from pathlib import Path
 
-import pytest
-
-from rallycut.tracking._cascade_trace import CascadeTrace, cascade_trace
+from rallycut.tracking._cascade_trace import cascade_trace
 
 
 @dataclass
@@ -21,7 +17,7 @@ class _FakeAction:
 def test_disabled_when_env_unset(tmp_path, monkeypatch):
     monkeypatch.delenv("CASCADE_TRACE_OUT", raising=False)
     with cascade_trace("rally-xyz") as tr:
-        assert tr is None or not tr.is_enabled
+        assert not tr.is_enabled
 
 
 def test_records_snapshots_when_env_set(tmp_path, monkeypatch):

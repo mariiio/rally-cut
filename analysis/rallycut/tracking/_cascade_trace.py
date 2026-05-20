@@ -40,6 +40,8 @@ class CascadeTrace:
         """Record per-action (frame, action_type, player_track_id) at this stage."""
         if not self.is_enabled:
             return
+        # Duck-typed: avoid importing action_classifier types to prevent a
+        # circular dependency with the module this instruments.
         per_action = []
         for a in actions:
             per_action.append({
@@ -50,9 +52,11 @@ class CascadeTrace:
         self.snapshots.append({"stage": stage, "actions": per_action})
 
     def write(self) -> None:
-        if not self.is_enabled or self.out_dir is None:
+        if self.out_dir is None:
             return
-        # Per-contact pivot: frame -> stage -> {action_type, player_track_id}
+        # Per-contact pivot: frame -> stage -> {action_type, player_track_id}.
+        # If two actions share a frame within one stage snapshot, last writer
+        # wins — expected use case is one action per frame.
         per_contact: dict[str, dict[str, dict[str, Any]]] = {}
         for snap in self.snapshots:
             stage = snap["stage"]
