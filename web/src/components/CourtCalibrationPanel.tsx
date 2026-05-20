@@ -12,25 +12,23 @@ interface CourtCalibrationPanelProps {
   videoHeight: number;
   containerRef: React.RefObject<HTMLDivElement | null>;
   /**
-   * Per-rally ball-trajectory-estimated net Y (normalized image y, 0-1).
-   * Distinct from the gold calibration center-line: this is where
-   * contact_detector.estimate_net_position thinks the net top is based on
-   * where the ball actually crossed sides during the rally. Drawn as an
-   * orange dashed horizontal line so the calibration vs. ball-trajectory
-   * estimation is comparable while editing the corners. Optional — when
-   * absent or 0, no net_y line is drawn.
+   * Optional seed for the net-top handle when the calibration has not
+   * stored one yet. Caller passes the per-rally ball-trajectory estimate
+   * (`contacts.netY`) — used only to position the handle on first open
+   * so the user has a starting point near the ball-trajectory midpoint
+   * rather than at a generic default. Once the user drags + saves, the
+   * stored calibration value takes over.
    */
-  netY?: number;
+  netYSeed?: number;
 }
 
 // Corner labels for beach volleyball court
 const CORNER_LABELS = ['Bottom-Left', 'Bottom-Right', 'Top-Right', 'Top-Left'];
 const CORNER_COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4'];
 
-// Net Y overlay colors / at-net band geometry (mirrors contact_detector.py v6).
+// Net top handle styling
 const NET_Y_COLOR = '#FF9800';
-const AT_NET_ABOVE = 0.15;
-const AT_NET_BELOW = 0.08;
+const NET_HANDLE_RADIUS_PX = 9;
 
 // Default corner positions (normalized 0-1)
 const DEFAULT_CORNERS = [
@@ -45,7 +43,7 @@ export function CourtCalibrationPanel({
   videoWidth,
   videoHeight,
   containerRef,
-  netY,
+  netYSeed,
 }: CourtCalibrationPanelProps) {
   const { setIsCalibrating, saveCalibration, calibrations } = usePlayerTrackingStore();
 
@@ -54,16 +52,25 @@ export function CourtCalibrationPanel({
   const [corners, setCorners] = useState(
     existingCalibration?.corners || DEFAULT_CORNERS
   );
+  // Net-top y handle position. Priority: stored calibration value →
+  // caller-provided ball-trajectory seed → 0.45 (sensible default
+  // somewhere above the typical court mid-y).
+  const [netTopY, setNetTopY] = useState<number>(
+    existingCalibration?.netTopY
+      ?? (netYSeed !== undefined && netYSeed > 0 ? netYSeed : 0.45)
+  );
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const draggingIndexRef = useRef<number | null>(null);
+  // Sentinel index for the net-top handle (separate from corner indices).
+  const NET_HANDLE_INDEX = -1;
 
   const handleCancel = useCallback(() => {
     setIsCalibrating(false);
   }, [setIsCalibrating]);
 
   const handleSave = useCallback(() => {
-    saveCalibration(videoId, corners);
-  }, [videoId, corners, saveCalibration]);
+    saveCalibration(videoId, corners, netTopY);
+  }, [videoId, corners, netTopY, saveCalibration]);
 
   const handleMouseDown = useCallback((index: number) => (e: React.MouseEvent) => {
     e.preventDefault();
@@ -79,10 +86,16 @@ export function CourtCalibrationPanel({
       if (idx === null || !containerRef.current) return;
 
       const rect = containerRef.current.getBoundingClientRect();
-      // Allow corners to go outside the video (no clamping)
-      const x = (e.clientX - rect.left) / rect.width;
       const y = (e.clientY - rect.top) / rect.height;
 
+      if (idx === NET_HANDLE_INDEX) {
+        // Constrain to within the video bounds
+        setNetTopY(Math.max(0, Math.min(1, y)));
+        return;
+      }
+
+      // Allow corners to go outside the video (no clamping)
+      const x = (e.clientX - rect.left) / rect.width;
       setCorners(prev => {
         const updated = [...prev];
         updated[idx] = { x, y };
@@ -284,62 +297,32 @@ export function CourtCalibrationPanel({
           vectorEffect="non-scaling-stroke"
         />
 
-        {/* Ball-trajectory-estimated net_y line + the v6 at-net band.
-            Distinct from the gold calibration center-line above: this is
-            where contact_detector.estimate_net_position thinks the NET TOP
-            TAPE is, derived from where the ball crossed sides during the
-            rally (the ball bottoms out at net-top height as it passes
-            over). Translucent orange band = -0.15 above .. +0.08 below
-            net_y = the asymmetric is_at_net zone used by the block rule. */}
-        {netY !== undefined && netY > 0 && (
-          <>
-            <rect
-              x="0"
-              y={Math.max(0, (netY - AT_NET_ABOVE) * 100)}
-              width="100"
-              height={(AT_NET_ABOVE + AT_NET_BELOW) * 100}
-              fill={NET_Y_COLOR}
-              fillOpacity="0.15"
-            />
-            {/* Dark backing stroke for contrast against bright frames */}
-            <line
-              x1="0"
-              y1={netY * 100}
-              x2="100"
-              y2={netY * 100}
-              stroke="rgba(0, 0, 0, 0.7)"
-              strokeWidth="4"
-              vectorEffect="non-scaling-stroke"
-            />
-            <line
-              x1="0"
-              y1={netY * 100}
-              x2="100"
-              y2={netY * 100}
-              stroke={NET_Y_COLOR}
-              strokeWidth="2"
-              vectorEffect="non-scaling-stroke"
-            />
-            <rect
-              x="78"
-              y={netY * 100 - 4.5}
-              width="21"
-              height="3.5"
-              rx="0.4"
-              fill="rgba(0, 0, 0, 0.8)"
-            />
-            <text
-              x="78.7"
-              y={netY * 100 - 1.7}
-              fill={NET_Y_COLOR}
-              fontSize="2.6"
-              fontFamily="monospace"
-              fontWeight="bold"
-            >
-              net top y={netY.toFixed(3)}
-            </text>
-          </>
-        )}
+        {/* User-set net top — a draggable horizontal line. Camera is
+            fixed across a match, so the net top is a single per-video
+            value (not per-rally). Distinct from the gold center-line
+            above (calibration's perspective net midline ON THE GROUND);
+            this is the visible NET TOP TAPE in image space. */}
+        <line
+          x1="0"
+          y1={netTopY * 100}
+          x2="100"
+          y2={netTopY * 100}
+          stroke={NET_Y_COLOR}
+          strokeWidth="1"
+          opacity="0.9"
+          vectorEffect="non-scaling-stroke"
+        />
+        <text
+          x="0.6"
+          y={netTopY * 100 - 0.6}
+          fill={NET_Y_COLOR}
+          fontSize="2.1"
+          fontFamily="monospace"
+          fontWeight="bold"
+          style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.65)', strokeWidth: 0.5 }}
+        >
+          net top
+        </text>
       </svg>
 
       {/* Invisible drag handles over corners */}
@@ -358,6 +341,35 @@ export function CourtCalibrationPanel({
             cursor: 'grab',
             '&:active': {
               cursor: 'grabbing',
+            },
+          }}
+        />
+      ))}
+
+      {/* Visible net-top handles: small circles on each side of the
+          net-top line. Constrained to vertical drag (ns-resize cursor). */}
+      {[
+        { side: 'left' as const, leftPct: 8 },
+        { side: 'right' as const, leftPct: 92 },
+      ].map(({ side, leftPct }) => (
+        <Box
+          key={`net-handle-${side}`}
+          onMouseDown={handleMouseDown(NET_HANDLE_INDEX)}
+          sx={{
+            position: 'absolute',
+            left: `${leftPct}%`,
+            top: `${netTopY * 100}%`,
+            transform: 'translate(-50%, -50%)',
+            width: NET_HANDLE_RADIUS_PX * 2,
+            height: NET_HANDLE_RADIUS_PX * 2,
+            borderRadius: '50%',
+            border: `2px solid ${NET_Y_COLOR}`,
+            backgroundColor: 'rgba(0,0,0,0.55)',
+            boxShadow: '0 0 0 1px rgba(255,255,255,0.4)',
+            cursor: 'ns-resize',
+            '&:active': {
+              cursor: 'ns-resize',
+              backgroundColor: 'rgba(0,0,0,0.75)',
             },
           }}
         />
@@ -411,7 +423,8 @@ export function CourtCalibrationPanel({
         }}
       >
         <Typography variant="body2" sx={{ color: 'white', textAlign: 'center' }}>
-          Drag the 4 corners to match the court boundaries
+          Drag the 4 corners to match the court boundaries.
+          Drag the orange handles to align the net top line with the visible net.
         </Typography>
         <Stack direction="row" spacing={2} sx={{ mt: 1, justifyContent: 'center' }}>
           {CORNER_LABELS.map((label, index) => (

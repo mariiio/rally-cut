@@ -970,7 +970,7 @@ export function VideoPlayer() {
               videoWidth={videoRef.current?.videoWidth ?? 1920}
               videoHeight={videoRef.current?.videoHeight ?? 1080}
               containerRef={videoContainerRef}
-              netY={currentRally?._backendId
+              netYSeed={currentRally?._backendId
                 ? playerTracks[currentRally._backendId]?.tracksJson?.contacts?.netY
                 : undefined}
             />
@@ -980,7 +980,7 @@ export function VideoPlayer() {
             <CourtDebugOverlay
               corners={activeMatchId ? calibrations[activeMatchId]?.corners : undefined}
               courtSplitY={playerTracks[currentRally._backendId]!.tracksJson!.courtSplitY}
-              netY={playerTracks[currentRally._backendId]!.tracksJson!.contacts?.netY}
+              netTopY={activeMatchId ? calibrations[activeMatchId]?.netTopY : undefined}
               ballPositions={playerTracks[currentRally._backendId]!.tracksJson!.ballPositions}
               contacts={playerTracks[currentRally._backendId]!.tracksJson!.contacts?.contacts}
               actions={playerTracks[currentRally._backendId]!.tracksJson!.actions?.actions}

@@ -54,6 +54,15 @@ export interface Corner {
 export interface CourtCalibration {
   videoId: string;
   corners: Corner[];
+  /**
+   * Optional per-video net-top y in normalized image coords (0-1).
+   * Set by the user via a draggable handle in the calibration panel.
+   * Camera is fixed across a match, so this is one value per video —
+   * decoupled from the per-rally `contacts.netY` ball-trajectory
+   * estimate (which is noisy and per-rally). When present, overrides
+   * downstream net-top visualisations.
+   */
+  netTopY?: number;
   savedAt: number;
 }
 
@@ -128,7 +137,7 @@ interface PlayerTrackingState {
   toggleRawTracks: () => void;
   setSelectedTrack: (trackId: number | null) => void;
   setIsCalibrating: (value: boolean) => void;
-  saveCalibration: (videoId: string, corners: Corner[]) => void;
+  saveCalibration: (videoId: string, corners: Corner[], netTopY?: number) => void;
   clearCalibration: (videoId: string) => void;
   clearLocalCalibration: (videoId: string) => void;
   getCalibration: (videoId: string) => CourtCalibration | null;
@@ -413,19 +422,23 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
         set({ isCalibrating: value });
       },
 
-      saveCalibration: (videoId: string, corners: Corner[]) => {
+      saveCalibration: (videoId: string, corners: Corner[], netTopY?: number) => {
         set((state) => ({
           calibrations: {
             ...state.calibrations,
             [videoId]: {
               videoId,
               corners,
+              ...(netTopY !== undefined ? { netTopY } : {}),
               savedAt: Date.now(),
             },
           },
           isCalibrating: false,
         }));
-        // Fire-and-forget: persist to backend
+        // Fire-and-forget: persist to backend.
+        // Backend currently only stores corners; netTopY is frontend-only
+        // (localStorage-persisted via Zustand) until the API + DB schema
+        // are extended to carry it.
         saveCourtCalibration(videoId, corners).catch((err) => {
           console.error('[PlayerTrackingStore] Failed to save calibration to API:', err);
         });

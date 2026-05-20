@@ -11,11 +11,6 @@ const TEAM_A_ZONE = 'rgba(244, 67, 54, 0.12)';
 const TEAM_B_ZONE = 'rgba(33, 150, 243, 0.12)';
 const SPLIT_LINE_COLOR = '#00BCD4'; // Cyan — calibration-derived court split / perspective net line
 const NET_Y_COLOR = '#FF9800'; // Orange — ball-trajectory-estimated net_y (from contact_detector)
-// At-net band geometry matches contact_detector.py v6: ball is "at net" when
-// -0.15 <= (ball.y - net_y) <= 0.08. Image y goes down, so negative delta is
-// ABOVE the net top. Used for is_at_net classification in the block rule.
-const AT_NET_ABOVE = 0.15;
-const AT_NET_BELOW = 0.08;
 
 /** Cross product of vectors (bx-ax, by-ay) and (px-ax, py-ay). Positive = left of AB. */
 function crossProduct(
@@ -95,14 +90,13 @@ interface CourtDebugOverlayProps {
   corners?: Corner[];
   courtSplitY?: number;
   /**
-   * Ball-trajectory-estimated net Y (normalized image y, 0-1).
-   * Distinct from `courtSplitY` (calibration-derived): this is what
-   * `contact_detector.estimate_net_position` produces from where the ball
-   * crosses sides, and what the `is_at_net` check uses for block
-   * classification. Rendered as an orange line + the v6 at-net band
-   * so the calibration vs. ball-traj discrepancy is visible at a glance.
+   * User-set net-top y from court calibration (normalized image y, 0-1).
+   * Single per-video value (camera is fixed). Distinct from `courtSplitY`
+   * which is the calibration-derived perspective net midline on the
+   * GROUND. This is the visible net top tape, dragged into place by the
+   * user during calibration. Renders as a thin orange line.
    */
-  netY?: number;
+  netTopY?: number;
   ballPositions?: BallPosition[];
   contacts?: ContactInfo[];
   actions?: ActionInfo[];
@@ -114,7 +108,7 @@ interface CourtDebugOverlayProps {
 export function CourtDebugOverlay({
   corners,
   courtSplitY,
-  netY,
+  netTopY,
   ballPositions,
   contacts,
   actions,
@@ -211,9 +205,9 @@ export function CourtDebugOverlay({
 
   const hasCorners = corners && corners.length === 4;
   const hasSplitY = courtSplitY !== undefined && courtSplitY > 0;
-  const hasNetY = netY !== undefined && netY > 0;
+  const hasNetTopY = netTopY !== undefined && netTopY > 0;
 
-  if (!hasCorners && !hasSplitY && !hasNetY) {
+  if (!hasCorners && !hasSplitY && !hasNetTopY) {
     return null;
   }
 
@@ -382,66 +376,34 @@ export function CourtDebugOverlay({
           </>
         ) : null}
 
-        {/* Ball-trajectory-estimated net_y line + at-net band (orange).
-            Distinct from the cyan calibration net line above. Shows where
-            contact_detector thinks the NET TOP TAPE is, derived from where
-            the ball crosses sides during the rally (ball bottoms out at
-            net-top height as it passes over). Translucent band = v6
-            is_at_net classification zone used by the block rule. */}
-        {hasNetY && (() => {
-          const netYPct = netY! * 100;
-          const bandTopPct = Math.max(0, (netY! - AT_NET_ABOVE) * 100);
-          const bandHeightPct = (AT_NET_ABOVE + AT_NET_BELOW) * 100;
-          return (
-            <>
-              <rect
-                x="0"
-                y={bandTopPct}
-                width="100"
-                height={bandHeightPct}
-                fill={NET_Y_COLOR}
-                fillOpacity="0.15"
-              />
-              {/* Dark backing stroke for contrast against bright frames */}
-              <line
-                x1="0"
-                y1={netYPct}
-                x2="100"
-                y2={netYPct}
-                stroke="rgba(0, 0, 0, 0.7)"
-                strokeWidth="4"
-                vectorEffect="non-scaling-stroke"
-              />
-              <line
-                x1="0"
-                y1={netYPct}
-                x2="100"
-                y2={netYPct}
-                stroke={NET_Y_COLOR}
-                strokeWidth="2"
-                vectorEffect="non-scaling-stroke"
-              />
-              <rect
-                x="78"
-                y={netYPct - 4.5}
-                width="21"
-                height="3.5"
-                rx="0.4"
-                fill="rgba(0, 0, 0, 0.8)"
-              />
-              <text
-                x="78.7"
-                y={netYPct - 1.7}
-                fill={NET_Y_COLOR}
-                fontSize="2.6"
-                fontFamily="monospace"
-                fontWeight="bold"
-              >
-                net top y={netY!.toFixed(3)}
-              </text>
-            </>
-          );
-        })()}
+        {/* User-set net top line (orange). Per-video value from court
+            calibration. Distinct from the cyan court-split line above
+            (which is the perspective net midline on the ground). */}
+        {hasNetTopY && (
+          <>
+            <line
+              x1="0"
+              y1={netTopY! * 100}
+              x2="100"
+              y2={netTopY! * 100}
+              stroke={NET_Y_COLOR}
+              strokeWidth="1"
+              opacity="0.9"
+              vectorEffect="non-scaling-stroke"
+            />
+            <text
+              x="0.6"
+              y={netTopY! * 100 - 0.6}
+              fill={NET_Y_COLOR}
+              fontSize="2.1"
+              fontFamily="monospace"
+              fontWeight="bold"
+              style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.65)', strokeWidth: 0.5 }}
+            >
+              net top
+            </text>
+          </>
+        )}
       </svg>
 
       {/* Dynamic ball side badge */}
