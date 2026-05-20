@@ -970,6 +970,9 @@ export function VideoPlayer() {
               videoWidth={videoRef.current?.videoWidth ?? 1920}
               videoHeight={videoRef.current?.videoHeight ?? 1080}
               containerRef={videoContainerRef}
+              netY={currentRally?._backendId
+                ? playerTracks[currentRally._backendId]?.tracksJson?.contacts?.netY
+                : undefined}
             />
           )}
           {/* Court debug overlay */}

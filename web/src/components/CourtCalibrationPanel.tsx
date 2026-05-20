@@ -11,11 +11,26 @@ interface CourtCalibrationPanelProps {
   videoWidth: number;
   videoHeight: number;
   containerRef: React.RefObject<HTMLDivElement | null>;
+  /**
+   * Per-rally ball-trajectory-estimated net Y (normalized image y, 0-1).
+   * Distinct from the gold calibration center-line: this is where
+   * contact_detector.estimate_net_position thinks the net top is based on
+   * where the ball actually crossed sides during the rally. Drawn as an
+   * orange dashed horizontal line so the calibration vs. ball-trajectory
+   * estimation is comparable while editing the corners. Optional — when
+   * absent or 0, no net_y line is drawn.
+   */
+  netY?: number;
 }
 
 // Corner labels for beach volleyball court
 const CORNER_LABELS = ['Bottom-Left', 'Bottom-Right', 'Top-Right', 'Top-Left'];
 const CORNER_COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4'];
+
+// Net Y overlay colors / at-net band geometry (mirrors contact_detector.py v6).
+const NET_Y_COLOR = '#FF9800';
+const AT_NET_ABOVE = 0.15;
+const AT_NET_BELOW = 0.08;
 
 // Default corner positions (normalized 0-1)
 const DEFAULT_CORNERS = [
@@ -30,6 +45,7 @@ export function CourtCalibrationPanel({
   videoWidth,
   videoHeight,
   containerRef,
+  netY,
 }: CourtCalibrationPanelProps) {
   const { setIsCalibrating, saveCalibration, calibrations } = usePlayerTrackingStore();
 
@@ -267,6 +283,54 @@ export function CourtCalibrationPanel({
           opacity="0.9"
           vectorEffect="non-scaling-stroke"
         />
+
+        {/* Ball-trajectory-estimated net_y line + the v6 at-net band.
+            Distinct from the gold calibration center-line above: this is
+            where contact_detector.estimate_net_position thinks the net top
+            is, derived from where the ball actually crossed sides during
+            the rally. Translucent orange band = -0.15 above .. +0.08 below
+            net_y = the asymmetric is_at_net zone used by the block rule. */}
+        {netY !== undefined && netY > 0 && (
+          <>
+            <rect
+              x="0"
+              y={Math.max(0, (netY - AT_NET_ABOVE) * 100)}
+              width="100"
+              height={(AT_NET_ABOVE + AT_NET_BELOW) * 100}
+              fill={NET_Y_COLOR}
+              fillOpacity="0.08"
+            />
+            <line
+              x1="0"
+              y1={netY * 100}
+              x2="100"
+              y2={netY * 100}
+              stroke={NET_Y_COLOR}
+              strokeWidth="0.35"
+              strokeDasharray="0.5,0.4"
+              opacity="0.95"
+              vectorEffect="non-scaling-stroke"
+            />
+            <rect
+              x="84"
+              y={netY * 100 + 0.6}
+              width="15"
+              height="3.2"
+              rx="0.4"
+              fill="rgba(0, 0, 0, 0.65)"
+            />
+            <text
+              x="84.7"
+              y={netY * 100 + 3}
+              fill={NET_Y_COLOR}
+              fontSize="2.4"
+              fontFamily="monospace"
+              fontWeight="bold"
+            >
+              net_y={netY.toFixed(3)}
+            </text>
+          </>
+        )}
       </svg>
 
       {/* Invisible drag handles over corners */}
