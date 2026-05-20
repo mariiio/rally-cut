@@ -35,10 +35,16 @@ const NET_HANDLE_RADIUS_PX = 9;
 // its own y-state and the line they connect can express tilt.
 const NET_LEFT_HANDLE_INDEX = -1;
 const NET_RIGHT_HANDLE_INDEX = -2;
-// Normalized x positions of the two net-top handles. Match the convention
-// from the labeling spec (analysis/docs/labeling/net_top_endpoints.md).
-const NET_LEFT_X = 0.08;
-const NET_RIGHT_X = 0.92;
+// Note: the net-handle x positions are NOT fixed constants. They are
+// derived per-frame from `leftCenterPoint.x` / `rightCenterPoint.x`
+// (the perspective-correct net-post image-x positions, computed from
+// the 4 corners the user has placed). The net posts are vertical
+// in court space, so their image-x at the top of the tape equals
+// their image-x at the ground — `leftCenterPoint`/`rightCenterPoint`.
+// This is what makes the labels usable as 8-keypoint training data:
+// the model is asked to predict net-top endpoints AT the actual
+// visible posts, not at fixed image x's that aren't aligned to the
+// net in any given video.
 
 // Default corner positions (normalized 0-1)
 const DEFAULT_CORNERS = [
@@ -338,16 +344,18 @@ export function CourtCalibrationPanel({
         />
 
         {/* User-set net top — TWO independent draggable endpoints (v9).
-            Camera is fixed across a match so net top is one pair per
-            video. Left handle = x=NET_LEFT_X; right handle = x=NET_RIGHT_X.
-            The line between them expresses tilt (left.y ≠ right.y).
-            Distinct from the gold center-line above (perspective net
-            midline ON the ground); this is the visible NET TOP TAPE
-            in image space. Labeling: docs/labeling/net_top_endpoints.md. */}
+            The handles sit at the perspective-correct net-post image-x
+            positions (`leftCenterPoint.x` / `rightCenterPoint.x`),
+            which are derived from the 4 corners the user already
+            placed. The user adjusts each handle's y to land on the
+            visible net-tape center AT that post. The line between the
+            two handles is the labeled net top in image space — its
+            slope IS the tilt of the actual net.
+            Labeling spec: docs/labeling/net_top_endpoints.md. */}
         <line
-          x1={NET_LEFT_X * 100}
+          x1={leftCenterPoint.x * 100}
           y1={netTopLeftY * 100}
-          x2={NET_RIGHT_X * 100}
+          x2={rightCenterPoint.x * 100}
           y2={netTopRightY * 100}
           stroke={NET_Y_COLOR}
           strokeWidth="1"
@@ -355,7 +363,7 @@ export function CourtCalibrationPanel({
           vectorEffect="non-scaling-stroke"
         />
         <text
-          x={NET_LEFT_X * 100 + 0.6}
+          x={leftCenterPoint.x * 100 + 0.6}
           y={netTopLeftY * 100 - 0.6}
           fill={NET_Y_COLOR}
           fontSize="2.1"
@@ -366,7 +374,7 @@ export function CourtCalibrationPanel({
           net top L
         </text>
         <text
-          x={NET_RIGHT_X * 100 - 8}
+          x={rightCenterPoint.x * 100 - 8}
           y={netTopRightY * 100 - 0.6}
           fill={NET_Y_COLOR}
           fontSize="2.1"
@@ -400,13 +408,16 @@ export function CourtCalibrationPanel({
       ))}
 
       {/* Visible net-top handles: two independent circles, one per
-          post. Each drags its own y. Right-click cycles visibility
-          flag 2→1→0→2 (2=clearly visible, 1=extrapolated, 0=skip). */}
+          post. The x position is locked to the perspective-correct
+          post location derived from the 4 corners (`leftCenterPoint.x`
+          / `rightCenterPoint.x`). User drags only y. Right-click
+          cycles visibility flag 2→1→0→2 (2=clearly visible,
+          1=extrapolated, 0=skip). */}
       {[
-        { side: 'left' as const, leftPct: NET_LEFT_X * 100, y: netTopLeftY,
+        { side: 'left' as const, leftPct: leftCenterPoint.x * 100, y: netTopLeftY,
           visibility: leftVisibility, handleIdx: NET_LEFT_HANDLE_INDEX,
           setVisibility: setLeftVisibility },
-        { side: 'right' as const, leftPct: NET_RIGHT_X * 100, y: netTopRightY,
+        { side: 'right' as const, leftPct: rightCenterPoint.x * 100, y: netTopRightY,
           visibility: rightVisibility, handleIdx: NET_RIGHT_HANDLE_INDEX,
           setVisibility: setRightVisibility },
       ].map(({ side, leftPct, y, visibility, handleIdx, setVisibility }) => (

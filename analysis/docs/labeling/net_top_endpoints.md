@@ -18,6 +18,29 @@ The midpoint of these two clicks is the line consumers will use
 between them is what enables tilt-aware net_y when the camera is
 not perfectly leveled.
 
+## How the handle x is determined (important)
+
+The two orange net-top handles do **NOT** sit at fixed image x's. Their
+x is computed per-frame from the 4 court calibration corners you've
+already placed: the LEFT handle sits at `leftCenterPoint.x` (the image
+x where the perspective-correct net midline meets the left sideline),
+the RIGHT handle at `rightCenterPoint.x`. Since the real net posts are
+**vertical** in court space, the image x of the net TOP equals the
+image x of the net BASE — the same `leftCenterPoint.x` /
+`rightCenterPoint.x` that the existing gold ground-plane midline uses.
+
+Why this matters: it makes each labeled (x, y) pair a real point
+*on the actual net post* in image space. A fixed-x handle (e.g.
+x=0.08) would put labels in empty sky on most videos and give the
+8-keypoint trainer a meaningless mapping.
+
+**You only drag y.** The handle's x updates automatically as you
+adjust corners. If the corners are wrong, fix the corners first; the
+net-top handles will reposition themselves to the new perspective.
+
+At training time, the trainer pairs your saved y with the corner-
+derived x at the same point in time (corners + y both live in DB).
+
 ## Where exactly is "the net top tape"
 
 The volleyball net has three visible horizontal features near its top:
