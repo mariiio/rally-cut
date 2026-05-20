@@ -1,0 +1,9 @@
+{
+  "n_total_wrong": 166,
+  "chain_disagreements": 94,
+  "oracle_recoveries_at_chain_disagreements": 35,
+  "by_disagreement_pattern": {
+    "pipe=A, gt=B": 63,
+    "pipe=B, gt=A": 31
+  }
+}
