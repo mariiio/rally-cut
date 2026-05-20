@@ -174,7 +174,20 @@ logger = logging.getLogger(__name__)
 #          --hybrid-teams flag retained as opt-in for future A/Bs.
 #          Hybrid pkl preserved at action_classifier.pkl.hybrid_v8_2026_05_18
 #          (md5 974179b...) for revert; v11 weights md5 d2077ea...
-ACTION_PIPELINE_VERSION = "v11"
+# v12 (2026-05-20): scorer chain-context fallback (Sub-lever 1, Branch A).
+#          When chain-aware and no-chain scorer picks disagree, prefer the
+#          higher-confidence one. Targets 27/28 rank_1 flip-targets where the
+#          chain-derived expected_team confounded scorer's rank-1 in production.
+#          Gated by SCORER_CHAIN_FALLBACK env flag (default ON). See
+#          [[attribution_headroom_decomposition_2026_05_20]].
+ACTION_PIPELINE_VERSION = "v12"
+
+# Sub-lever 1 guardrail (Branch A): when chain-aware and no-chain scorer
+# picks disagree, prefer the higher-confidence one. Default ON. Set
+# SCORER_CHAIN_FALLBACK=0 to disable for A/B comparisons.
+_SCORER_CHAIN_FALLBACK_ENABLED = (
+    os.environ.get("SCORER_CHAIN_FALLBACK", "1").lower() in ("1", "true", "yes")
+)
 
 # Cached default action type classifier (loaded once from disk on first use)
 _default_action_classifier_cache: dict[str, ActionTypeClassifier | None] = {}
@@ -3723,6 +3736,33 @@ def _interpolate_ball_position_for_synthetic(
     return (0.5, 0.5)
 
 
+def _scorer_chain_aware_fallback_pick(
+    *,
+    chain_pick_tid: int,
+    chain_pick_prob: float,
+    no_chain_pick_tid: int,
+    no_chain_pick_prob: float,
+) -> tuple[int, float]:
+    """Choose between chain-aware and no-chain scorer picks.
+
+    Sub-lever 1 guardrail (Branch A): the v2 scorer's `team_matches_expected`
+    feature can flip rank-1 when the chain-derived expected_team is wrong.
+    If the chain-aware pick disagrees with the no-chain pick, prefer the
+    higher-confidence one.
+
+    Per the 2026-05-20 Sub-lever 1 audit
+    ([[attribution_headroom_decomposition_2026_05_20]]), 27/28 rank_1
+    flip-target contacts had scorer-top-1=GT under expected_team=None but
+    a different pick in production. This helper recovers those without
+    new ML work.
+    """
+    if chain_pick_tid == no_chain_pick_tid:
+        return chain_pick_tid, max(chain_pick_prob, no_chain_pick_prob)
+    if no_chain_pick_prob > chain_pick_prob:
+        return no_chain_pick_tid, no_chain_pick_prob
+    return chain_pick_tid, chain_pick_prob
+
+
 def _apply_dynamic_scorer_attribution(
     actions: list[ClassifiedAction],
     contacts: list[Contact],
@@ -3865,9 +3905,43 @@ def _apply_dynamic_scorer_attribution(
         feat_tids = {f.track_id for f in feats}
         if action.player_track_id not in feat_tids:
             continue
-        result = scorer.pick(action.action_type.value.upper(), feats)
-        if result is None:
+        # Chain-aware pass (existing behavior): score with team chain context.
+        chain_result = scorer.pick_with_probs(action.action_type.value.upper(), feats)
+        if chain_result is None:
             continue
+        chain_pick_tid, chain_probs = chain_result
+        chain_best_idx = max(range(len(feats)), key=lambda i: chain_probs[i])
+        chain_pick_prob = chain_probs[chain_best_idx]
+
+        if _SCORER_CHAIN_FALLBACK_ENABLED:
+            # No-chain pass: re-score with team_matches_expected=0.5 (uninformative).
+            # Sub-lever 1 guardrail (Branch A): when the chain-derived expected_team
+            # is wrong, the team_matches_expected feature can flip rank-1 away from
+            # GT. The no-chain pass recovers those cases by preferring whichever
+            # pass has higher confidence when the two picks disagree.
+            from dataclasses import replace as _dc_replace
+            feats_no_chain = [
+                _dc_replace(cf, team_matches_expected=0.5) for cf in feats
+            ]
+            no_chain_result = scorer.pick_with_probs(
+                action.action_type.value.upper(), feats_no_chain
+            )
+            if no_chain_result is not None:
+                no_chain_pick_tid, no_chain_probs = no_chain_result
+                no_chain_best_idx = max(range(len(feats_no_chain)), key=lambda i: no_chain_probs[i])
+                no_chain_pick_prob = no_chain_probs[no_chain_best_idx]
+                chosen_tid, _ = _scorer_chain_aware_fallback_pick(
+                    chain_pick_tid=chain_pick_tid,
+                    chain_pick_prob=chain_pick_prob,
+                    no_chain_pick_tid=no_chain_pick_tid,
+                    no_chain_pick_prob=no_chain_pick_prob,
+                )
+            else:
+                chosen_tid = chain_pick_tid
+        else:
+            chosen_tid = chain_pick_tid
+
+        result = chosen_tid
         if result != action.player_track_id:
             logger.info(
                 "dynamic_scorer_swap frame=%d action=%s old_pid=%d new_pid=%d",
