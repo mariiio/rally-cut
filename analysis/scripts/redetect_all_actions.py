@@ -23,6 +23,7 @@ from typing import Any, cast
 
 from rallycut.court.calibration import CourtCalibrator
 from rallycut.court.net_line_estimator import NetLine, estimate_net_line_from_s3
+from rallycut.court.net_top_keypoint_reader import NetTopLine, read_net_top_from_s3
 from rallycut.evaluation.db import get_connection
 from rallycut.evaluation.tracking.db import load_court_calibration
 from rallycut.tracking.action_classifier import ACTION_PIPELINE_VERSION, classify_rally_actions
@@ -33,17 +34,11 @@ from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
 from rallycut.tracking.sequence_action_runtime import get_sequence_probs
 
 
-def _resolve_net_line(
+def _resolve_video_s3(
     video_id: str,
-    cache: dict[str, NetLine | None],
-    *,
-    quiet: bool = False,
-) -> NetLine | None:
-    """Compute (or recall) `estimate_net_line` for `video_id`. Cached
-    per-process by video_id. Pulls the proxy MP4 from S3/MinIO via
-    `estimate_net_line_from_s3` so the NetLine is computed once on the
-    FULL source video, not per-rally clip (v8 contract).
-    """
+    cache: dict[str, tuple[str | None, int | None, int | None]],
+) -> tuple[str | None, int | None, int | None]:
+    """Return (s3_key, width, height) for the video. Cached per-process."""
     if video_id in cache:
         return cache[video_id]
     with get_connection() as conn:
@@ -55,13 +50,64 @@ def _resolve_net_line(
             )
             row = cur.fetchone()
     if not row:
-        cache[video_id] = None
-        return None
+        cache[video_id] = (None, None, None)
+        return cache[video_id]
     proxy_key = cast(str | None, row[0])
     original_key = cast(str | None, row[1])
     width = cast(int | None, row[2])
     height = cast(int | None, row[3])
     s3_key = proxy_key or original_key
+    cache[video_id] = (s3_key, width, height)
+    return cache[video_id]
+
+
+def _resolve_net_top_line(
+    video_id: str,
+    cache: dict[str, NetTopLine | None],
+    video_s3_cache: dict[str, tuple[str | None, int | None, int | None]],
+    *,
+    quiet: bool = False,
+) -> NetTopLine | None:
+    """v9: read net-top from the 8-keypoint court model. Cached per-process
+    by video_id. Pulls the proxy MP4 from S3/MinIO via
+    `read_net_top_from_s3` so the NetTopLine is computed once on the
+    FULL source video (per the v9 contract).
+    """
+    if video_id in cache:
+        return cache[video_id]
+    s3_key, width, height = _resolve_video_s3(video_id, video_s3_cache)
+    if not s3_key or not width or not height:
+        cache[video_id] = None
+        return None
+    try:
+        ntl = read_net_top_from_s3(
+            s3_key=s3_key,
+            video_id=video_id,
+            use_cache=True,
+        )
+    except Exception as exc:
+        if not quiet:
+            print(f"  [net-top] {video_id[:8]} failed ({type(exc).__name__}); falling back to v8 NLE")
+        ntl = None
+    cache[video_id] = ntl
+    return ntl
+
+
+def _resolve_net_line(
+    video_id: str,
+    cache: dict[str, NetLine | None],
+    video_s3_cache: dict[str, tuple[str | None, int | None, int | None]],
+    *,
+    quiet: bool = False,
+) -> NetLine | None:
+    """Compute (or recall) `estimate_net_line` for `video_id`. Cached
+    per-process by video_id. Pulls the proxy MP4 from S3/MinIO via
+    `estimate_net_line_from_s3` so the NetLine is computed once on the
+    FULL source video, not per-rally clip (v8 contract).
+    """
+    if video_id in cache:
+        return cache[video_id]
+    s3_key, width, height = _resolve_video_s3(video_id, video_s3_cache)
     if not s3_key or not width or not height:
         cache[video_id] = None
         return None
@@ -170,9 +216,14 @@ def main() -> None:
 
     # Load court calibrations
     calibrators: dict[str, CourtCalibrator | None] = {}
-    # v8: per-video NetLine cache (solvePnP midpoint replaces M4 as
-    # primary net_y source). Computed on the full source video via
-    # `estimate_net_line_from_s3` the first time we see each video_id.
+    # Shared per-video S3 metadata cache (proxy_s3_key, width, height)
+    # so the two net-top resolvers below don't double-query the DB.
+    video_s3_cache: dict[str, tuple[str | None, int | None, int | None]] = {}
+    # v9: per-video NetTopLine cache (8-keypoint direct observation —
+    # new primary in the cascade). Computed once per video via
+    # `read_net_top_from_s3`.
+    net_top_lines: dict[str, NetTopLine | None] = {}
+    # v8: per-video NetLine cache (solvePnP — fallback below v9).
     net_lines: dict[str, NetLine | None] = {}
 
     t_start = time.monotonic()
@@ -247,10 +298,15 @@ def main() -> None:
                 calibrator=calibrators.get(video_id),
             )
 
-            # v8: resolve NetLine once per video; pass through cascade.
-            # Falls back to M4 corners ridge if estimate_net_line_from_s3
-            # cannot download / detect (e.g. missing s3 keys).
-            net_line = _resolve_net_line(video_id, net_lines)
+            # v9: resolve NetTopLine + v8 NetLine once per video.
+            # Both passed through the cascade — `_prepare_candidates`
+            # picks net_top_line first, then net_line, then M4, then v6.
+            net_top_line = _resolve_net_top_line(
+                video_id, net_top_lines, video_s3_cache,
+            )
+            net_line = _resolve_net_line(
+                video_id, net_lines, video_s3_cache,
+            )
 
             contacts = detect_contacts(
                 ball_positions=ball_positions,
@@ -258,6 +314,7 @@ def main() -> None:
                 frame_count=frame_count or None,
                 court_calibrator=calibrators.get(video_id),
                 net_line=net_line,
+                net_top_line=net_top_line,
                 team_assignments=match_teams,
                 sequence_probs=sequence_probs,
             )
@@ -310,6 +367,8 @@ def main() -> None:
         except Exception as e:
             errors += 1
             print(f"  ERROR {rally_id[:8]}: {e}")
+            import traceback as _tb_debug
+            _tb_debug.print_exc()
 
     elapsed = time.monotonic() - t_start
     print(f"\nDone: {updated} updated, {skipped} skipped, {errors} errors ({elapsed:.1f}s)")

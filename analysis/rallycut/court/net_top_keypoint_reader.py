@@ -41,6 +41,18 @@ from rallycut.court.keypoint_detector import CourtKeypointDetector, FrameKeypoin
 
 logger = logging.getLogger(__name__)
 
+# v9 model is held at a DEDICATED path, separate from the 6-keypoint
+# production calibration model (`court_keypoint_best.pt`). Loading the
+# v9 model into the default `CourtKeypointDetector` would replace the
+# 6-kpt model that production court calibration depends on; the v9 net-
+# top training overfits ~0.034 normalized y of center-point regression
+# vs the original yolo11m-trained 6-kpt model. Keeping them as two
+# separate files isolates the change to this module.
+V9_MODEL_PATH = (
+    Path(__file__).parent.parent.parent
+    / "weights" / "court_keypoint" / "court_keypoint_v9_8kpt.pt"
+)
+
 # Per-endpoint minimum confidence to trust the YOLO net-top keypoint.
 # Lower than CENTER_CONF_MIN (0.30) because net-top is a thinner, smaller
 # feature than the net-base posts and the trainer has less signal per pixel.
@@ -252,9 +264,14 @@ def read_net_top(
     """
     video_path = Path(video_path)
     if detector is None:
-        detector = CourtKeypointDetector()
+        # Load the v9-specific 8-kpt model, not the default 6-kpt model
+        # that production calibration uses.
+        detector = CourtKeypointDetector(model_path=V9_MODEL_PATH)
         if not detector.model_exists:
-            logger.warning("court keypoint model not available — v9 net-top unavailable")
+            logger.warning(
+                "v9 8-kpt model not available at %s — net-top reader unavailable",
+                V9_MODEL_PATH,
+            )
             return None
 
     model_path = detector._model_path  # noqa: SLF001
@@ -337,7 +354,7 @@ def read_net_top_from_s3(
     if use_cache:
         cached = _cache_load(
             video_id,
-            (detector or CourtKeypointDetector())._model_path,  # noqa: SLF001
+            (detector or CourtKeypointDetector(model_path=V9_MODEL_PATH))._model_path,  # noqa: SLF001
             n_frames,
         )
         if cached:

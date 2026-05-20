@@ -919,12 +919,16 @@ def _run_tracking(
         except Exception:
             pass  # Non-fatal: player estimation is best-effort
 
-    # Compute solvePnP NetLine on the FULL source video so every rally in
-    # this run uses a representative net top (v8 CONTACT_PIPELINE_VERSION).
-    # Cached per-video by `estimate_net_line` keyed on `original_video.stem`
-    # — first rally of a source incurs the keypoint-detection cost; all
-    # subsequent rallies hit the cache. Best-effort: any failure falls back
-    # to v7's M4 corner-only ridge inside `_prepare_candidates`.
+    # v9 SOTA: read net-top directly from the 8-keypoint court model
+    # (`net_top_keypoint_reader.read_net_top`) AS THE NEW PRIMARY.
+    # v8 NetLine (solvePnP) + v7 M4 (corners ridge) stay as fallbacks
+    # inside `_prepare_candidates` for cases where the v9 model is
+    # missing or returns sanity_failed. Both estimators are computed
+    # once per source video and cached on disk; first rally of a source
+    # incurs the keypoint-detection cost, all subsequent rallies hit
+    # the per-video cache. Best-effort: any failure silently falls
+    # through to the next tier of the cascade.
+    net_top_line = None
     net_line = None
     if calibrator is not None and calibrator.is_calibrated:
         try:
@@ -933,12 +937,23 @@ def _run_tracking(
             from rallycut.court.net_line_estimator import (  # noqa: PLC0415
                 estimate_net_line,
             )
+            from rallycut.court.net_top_keypoint_reader import (  # noqa: PLC0415
+                read_net_top,
+            )
 
             cap = cv2.VideoCapture(str(original_video))
             img_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             img_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             cap.release()
             if img_w > 0 and img_h > 0:
+                # v9: direct keypoint observation (preferred).
+                net_top_line = read_net_top(
+                    original_video,
+                    video_key=original_video.stem,
+                    use_cache=True,
+                )
+                # v8: solvePnP fallback (when v9 model unavailable or
+                # the 8-kpt detector returns None / sanity_failed).
                 net_line = estimate_net_line(
                     original_video,
                     image_width=img_w,
@@ -949,7 +964,7 @@ def _run_tracking(
         except Exception as exc:
             if not quiet:
                 console.print(
-                    f"[yellow]net-line estimation failed "
+                    f"[yellow]net-top/net-line estimation failed "
                     f"(falling back to M4 corners ridge): {exc}[/yellow]"
                 )
 
@@ -1004,6 +1019,7 @@ def _run_tracking(
                     team_assignments=verified_teams,
                     court_calibrator=calibrator,
                     net_line=net_line,
+                    net_top_line=net_top_line,
                     sequence_probs=sequence_probs,
                     primary_track_ids=list(result.primary_track_ids) if result.primary_track_ids else None,
                 )
@@ -1044,6 +1060,7 @@ def _run_tracking(
             team_assignments=verified_teams,
             court_calibrator=calibrator,
             net_line=net_line,
+            net_top_line=net_top_line,
             sequence_probs=sequence_probs,
             primary_track_ids=list(result.primary_track_ids) if result.primary_track_ids else None,
         )
@@ -1093,10 +1110,15 @@ def _run_tracking(
             if seq:
                 console.print(f"[dim]Actions: {' → '.join(seq)}[/dim]")
 
-    # Stamp the computed NetLine (if any) into the tracking JSON so the
-    # standalone `analyze actions <json>` CLI path can replay v8's NLE
-    # cascade without re-running keypoint detection on a rally clip.
-    # Falls back transparently when net_line is None.
+    # Stamp the computed v9 NetTopLine + v8 NetLine into the tracking
+    # JSON so the standalone `analyze actions <json>` CLI path can
+    # replay the v9 cascade without re-running keypoint detection on a
+    # rally clip. Both fall back transparently when their estimator
+    # returns None.
+    if net_top_line is not None:
+        if actions_data is None:
+            actions_data = {}
+        actions_data["netTopLine"] = net_top_line.to_dict()
     if net_line is not None:
         if actions_data is None:
             actions_data = {}

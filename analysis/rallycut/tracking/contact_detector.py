@@ -138,7 +138,50 @@ logger = logging.getLogger(__name__)
 #          Production callers must compute `estimate_net_line()` once per
 #          video and pass the result; default `None` keeps v7 behavior so
 #          tests and one-off scripts are unaffected.
-CONTACT_PIPELINE_VERSION = "v8"
+#  - v9: 2026-05-20 — SOTA direct net-top observation via the 8-keypoint
+#          court model (`net_top_keypoint_reader.read_net_top`). The
+#          court keypoint detector was extended from 6 to 8 keypoints by
+#          adding net-top-left/right (kp 6, 7) trained on 78 user-labeled
+#          L/R GT samples. New primary in the cascade:
+#            net_top_line midpoint (v9) > net_line midpoint (v8) >
+#            M4 ridge (v7) > ball-trajectory (v6)
+#          Probe X-O on the same 78-video user-GT corpus, midpoint |Δ|:
+#            M4 LOO          med=0.0060  mean=0.0078  worst=0.0242
+#            NLE midpoint    med=0.0103  mean=0.0126  worst=0.0529
+#            v9 8-kpt mid    med=0.0046  mean=0.0066  worst=0.0317
+#          v9 wins on median + mean across the corpus AND on the val
+#          split alone (15 unseen videos: v9 med=0.0052). Zero outliers
+#          >0.05 (M4 also 0; v8 has 1). Tilt direction agreement on
+#          unambiguously-tilted cases (|gt_tilt|>0.015, n=10): 10/10
+#          = 100%. The 3 "fails" at the 0.010-0.015 threshold were at
+#          the labeling noise floor.
+#          The v9 model is held at a SEPARATE path
+#          (`weights/court_keypoint/court_keypoint_v9_8kpt.pt`) — NOT
+#          the production calibration model (`court_keypoint_best.pt`),
+#          which stays at the previous 6-kpt weights. The v9 8-kpt
+#          training had a regression on kp 0..5 (center keypoints
+#          shifted ~0.034 normalized y on 74/76 videos), so we kept
+#          the two models physically separate to isolate the change.
+#          Net fleet impact (clean A/B holding non-net_y changes fixed,
+#          same code today, flag off vs on):
+#            flag OFF (v8 cascade primary): 165 fleet C-4 violations
+#            flag ON  (v9 cascade primary): 167 fleet C-4 violations
+#          → v9 cascade cost: +2 (+1.2%). Earlier framing of "+9
+#          regression" conflated v9 cascade impact with +7 baseline
+#          drift from concurrent scorer/classifier commits.
+#          Trade is favorable: midpoint accuracy gain (55% better
+#          median) for +2 violation regression. The +2 is real and
+#          tracks to v9's slightly-different net_y position
+#          interacting with v6/v7-tuned is_at_net + side-classification
+#          thresholds — a downstream-calibration workstream that can
+#          tighten further once we re-tune those for the v9 convention.
+#          Underlying churn: 40 newly-resolved violations + 42 new
+#          violations (net +2), so v9 IS doing real correctness work,
+#          not just regressing.
+#          Bench scripts:
+#            analysis/scripts/probe_X_o_v9_keypoint_eval.py
+#            analysis/scripts/export_court_keypoint_dataset.py (--output-dir court_keypoints_v6)
+CONTACT_PIPELINE_VERSION = "v9"
 
 # Minimum confidence to treat a ball position as a real detection.
 # Ball detector confidence is bimodal: either 0.0 (no detection) or >=0.3 (confident).
@@ -2214,9 +2257,10 @@ def _prepare_candidates(
             ball_positions, cfg.noise_spike_max_jump
         )
 
-    # Step 2: Estimate net position. See docstring above for the v9 SOTA
-    # cascade. net_top_line (8-kpt direct observation) first, then
-    # net_line (solvePnP), then M4 (corners ridge), then v6 ball-traj.
+    # Step 2: Estimate net position. v9 SOTA cascade:
+    #     net_top_line (8-kpt direct) → net_line (solvePnP) →
+    #     M4 (corners ridge) → v6 ball-trajectory.
+    # Each step only fires if the prior returned a usable signal.
     estimated_net_y: float | None = None
     if (
         net_top_line is not None

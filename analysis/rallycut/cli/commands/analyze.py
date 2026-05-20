@@ -136,11 +136,21 @@ def classify_actions(
     if primary_raw and isinstance(primary_raw, list):
         primary_track_ids = [int(t) for t in primary_raw]
 
-    # If the producer (track-players) stamped a precomputed solvePnP
-    # NetLine into the JSON, replay it here so `detect_contacts` uses v8's
-    # NLE midpoint as `estimated_net_y` (rather than recomputing on a rally
-    # clip, which would sample only 30 frames from this segment and could
+    # If track-players stamped precomputed net-top estimates into the
+    # JSON, replay them here so `detect_contacts` uses v9's net-top
+    # cascade without re-running keypoint detection on a rally clip
+    # (which would only sample 30 frames from that segment and could
     # miss the representative net view).
+    net_top_line = None
+    net_top_line_data = data.get("netTopLine")
+    if net_top_line_data:
+        try:
+            from rallycut.court.net_top_keypoint_reader import NetTopLine  # noqa: PLC0415
+
+            net_top_line = NetTopLine.from_dict(net_top_line_data)
+        except Exception:
+            net_top_line = None  # malformed sidecar — fall through to v8 NLE
+
     net_line = None
     net_line_data = data.get("netLine")
     if net_line_data:
@@ -159,6 +169,7 @@ def classify_actions(
         frame_count=data.get("frameCount"),
         team_assignments=team_assignments,
         net_line=net_line,
+        net_top_line=net_top_line,
         sequence_probs=sequence_probs,
         primary_track_ids=primary_track_ids,
     )
@@ -350,7 +361,17 @@ def rank_highlights(
             if primary_raw2 and isinstance(primary_raw2, list)
             else None
         )
-        # Replay precomputed NetLine when the tracking JSON has one.
+        # Replay precomputed v9 NetTopLine + v8 NetLine from the JSON.
+        net_top_line_2 = None
+        ntlj2 = data.get("netTopLine")
+        if ntlj2:
+            try:
+                from rallycut.court.net_top_keypoint_reader import NetTopLine  # noqa: PLC0415
+
+                net_top_line_2 = NetTopLine.from_dict(ntlj2)
+            except Exception:
+                net_top_line_2 = None
+
         net_line_2 = None
         nlj2 = data.get("netLine")
         if nlj2:
@@ -367,6 +388,7 @@ def rank_highlights(
             frame_count=data.get("frameCount"),
             team_assignments=ta,
             net_line=net_line_2,
+            net_top_line=net_top_line_2,
             primary_track_ids=primary_tids_2,
             sequence_probs=sequence_probs,
         )
