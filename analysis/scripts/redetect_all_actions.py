@@ -22,6 +22,7 @@ import time
 from typing import Any, cast
 
 from rallycut.court.calibration import CourtCalibrator
+from rallycut.court.net_line_estimator import NetLine, estimate_net_line_from_s3
 from rallycut.evaluation.db import get_connection
 from rallycut.evaluation.tracking.db import load_court_calibration
 from rallycut.tracking.action_classifier import ACTION_PIPELINE_VERSION, classify_rally_actions
@@ -30,6 +31,54 @@ from rallycut.tracking.contact_detector import CONTACT_PIPELINE_VERSION, detect_
 from rallycut.tracking.match_tracker import build_match_team_assignments
 from rallycut.tracking.player_tracker import PlayerPosition as PlayerPos
 from rallycut.tracking.sequence_action_runtime import get_sequence_probs
+
+
+def _resolve_net_line(
+    video_id: str,
+    cache: dict[str, NetLine | None],
+    *,
+    quiet: bool = False,
+) -> NetLine | None:
+    """Compute (or recall) `estimate_net_line` for `video_id`. Cached
+    per-process by video_id. Pulls the proxy MP4 from S3/MinIO via
+    `estimate_net_line_from_s3` so the NetLine is computed once on the
+    FULL source video, not per-rally clip (v8 contract).
+    """
+    if video_id in cache:
+        return cache[video_id]
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT proxy_s3_key, original_s3_key, width, height "
+                "FROM videos WHERE id = %s",
+                (video_id,),
+            )
+            row = cur.fetchone()
+    if not row:
+        cache[video_id] = None
+        return None
+    proxy_key = cast(str | None, row[0])
+    original_key = cast(str | None, row[1])
+    width = cast(int | None, row[2])
+    height = cast(int | None, row[3])
+    s3_key = proxy_key or original_key
+    if not s3_key or not width or not height:
+        cache[video_id] = None
+        return None
+    try:
+        nl = estimate_net_line_from_s3(
+            s3_key=s3_key,
+            video_id=video_id,
+            image_width=int(width),
+            image_height=int(height),
+            use_cache=True,
+        )
+    except Exception as exc:
+        if not quiet:
+            print(f"  [net-line] {video_id[:8]} failed ({type(exc).__name__}); falling back to M4")
+        nl = None
+    cache[video_id] = nl
+    return nl
 
 
 def main() -> None:
@@ -121,6 +170,10 @@ def main() -> None:
 
     # Load court calibrations
     calibrators: dict[str, CourtCalibrator | None] = {}
+    # v8: per-video NetLine cache (solvePnP midpoint replaces M4 as
+    # primary net_y source). Computed on the full source video via
+    # `estimate_net_line_from_s3` the first time we see each video_id.
+    net_lines: dict[str, NetLine | None] = {}
 
     t_start = time.monotonic()
     updated = 0
@@ -194,11 +247,17 @@ def main() -> None:
                 calibrator=calibrators.get(video_id),
             )
 
+            # v8: resolve NetLine once per video; pass through cascade.
+            # Falls back to M4 corners ridge if estimate_net_line_from_s3
+            # cannot download / detect (e.g. missing s3 keys).
+            net_line = _resolve_net_line(video_id, net_lines)
+
             contacts = detect_contacts(
                 ball_positions=ball_positions,
                 player_positions=player_positions,
                 frame_count=frame_count or None,
                 court_calibrator=calibrators.get(video_id),
+                net_line=net_line,
                 team_assignments=match_teams,
                 sequence_probs=sequence_probs,
             )
