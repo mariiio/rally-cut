@@ -29,13 +29,15 @@ from pathlib import Path
 
 import psycopg
 
+ANALYSIS_DIR = Path(__file__).resolve().parent.parent
+
 DB_DSN = os.environ.get(
     "DATABASE_URL",
     "postgresql://postgres:postgres@localhost:5436/rallycut",
 )
 
-IN_CSV = Path("reports/scorer_rank2_ceiling_2026_05_20/per_contact.csv")
-OUT_DIR = Path("reports/cascade_override_audit_2026_05_20")
+IN_CSV = ANALYSIS_DIR / "reports" / "scorer_rank2_ceiling_2026_05_20" / "per_contact.csv"
+OUT_DIR = ANALYSIS_DIR / "reports" / "cascade_override_audit_2026_05_20"
 TRACE_DIR = OUT_DIR / "traces"
 
 
@@ -50,15 +52,13 @@ def main() -> int:
     for p in TRACE_DIR.glob("*.trace.json"):
         p.unlink()
 
-    rank1_rows = [
-        r for r in csv.DictReader(open(IN_CSV))
-        if r["gt_rank"] == "1"
-    ]
-    rallies_to_videos: dict[str, set[str]] = defaultdict(set)
+    with open(IN_CSV) as fh:
+        rank1_rows = [r for r in csv.DictReader(fh) if r["gt_rank"] == "1"]
+    video_to_rally_ids: dict[str, set[str]] = defaultdict(set)
     for r in rank1_rows:
-        rallies_to_videos[r["video"]].add(r["rally_id"])
-    videos = sorted(rallies_to_videos)
-    n_rallies = sum(len(s) for s in rallies_to_videos.values())
+        video_to_rally_ids[r["video"]].add(r["rally_id"])
+    videos = sorted(video_to_rally_ids)
+    n_rallies = sum(len(s) for s in video_to_rally_ids.values())
     print(f"flip-targets: {len(rank1_rows)}; rallies: {n_rallies}; "
           f"videos: {len(videos)}", flush=True)
 
@@ -85,24 +85,25 @@ def main() -> int:
     for i, vname in enumerate(videos, start=1):
         vuid = name_to_uuid[vname]
         print(f"[{i}/{len(videos)}] redetect video={vname} ({vuid}) "
-              f"({len(rallies_to_videos[vname])} affected rallies)",
+              f"({len(video_to_rally_ids[vname])} affected rallies)",
               flush=True)
         rc = subprocess.call(
             ["uv", "run", "python", "-u", "scripts/redetect_all_actions.py",
              "--video", vuid, "--apply"],
             env=env,
+            cwd=ANALYSIS_DIR,
         )
         if rc != 0:
             print(f"  WARNING: redetect failed for {vname} (rc={rc})",
-                  flush=True)
+                  file=sys.stderr, flush=True)
 
     n_traces = len(list(TRACE_DIR.glob("*.trace.json")))
     print(f"\nWrote {n_traces} trace files -> {TRACE_DIR}", flush=True)
     # Sanity: ensure every flip-target rally has a trace
     target_ids: set[str] = set()
-    for s in rallies_to_videos.values():
+    for s in video_to_rally_ids.values():
         target_ids |= s
-    have_ids = {p.stem.replace(".trace", "") for p in TRACE_DIR.glob("*.trace.json")}
+    have_ids = {p.name.removesuffix(".trace.json") for p in TRACE_DIR.glob("*.trace.json")}
     missing = target_ids - have_ids
     if missing:
         print(f"WARNING: {len(missing)} target rallies missing traces:",
