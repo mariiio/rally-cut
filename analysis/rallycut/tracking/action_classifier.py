@@ -2848,15 +2848,12 @@ def _possession_flips_after(
     B.1: when action is BLOCK, use next_contact.court_side as primary signal.
     B.2: physical court_side change overrides the rule.
     """
-    a_type = getattr(action.action_type, "value", action.action_type)
-    a_type = str(a_type).lower()
-
-    rule_says_flip = a_type in ("serve", "attack")
+    rule_says_flip = action.action_type in _NET_CROSSING_ACTIONS
 
     # B.1: BLOCK conditional — next-contact court_side signal.
     # Degrades to rule when next_action is synthetic (interpolated
     # position may not reflect reality).
-    if config.block_conditional and a_type == "block":
+    if config.block_conditional and action.action_type == ActionType.BLOCK:
         next_synthetic = getattr(next_action, "is_synthetic", False) if next_action else False
         if not next_synthetic:
             curr_side = _contact_side_at(contacts, action.frame)

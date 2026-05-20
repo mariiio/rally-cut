@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from rallycut.tracking.action_classifier import (
+    ActionType,
     ChainWalkerConfig,
     _contact_side_at,
     _possession_flips_after,
@@ -43,61 +44,61 @@ def _make_contact_obj(frame: int, side: str, is_synthetic: bool = False) -> _Con
 
 @dataclass
 class _FakeAction:
-    action_type: str
+    action_type: ActionType
     frame: int
     is_synthetic: bool = False
 
 
 def test_v13_default_serve_flips() -> None:
     cfg = ChainWalkerConfig(False, False)
-    assert _possession_flips_after(_FakeAction("serve", 100), _FakeAction("receive", 140), [], cfg) is True
+    assert _possession_flips_after(_FakeAction(ActionType.SERVE, 100), _FakeAction(ActionType.RECEIVE, 140), [], cfg) is True
 
 
 def test_v13_default_attack_flips() -> None:
     cfg = ChainWalkerConfig(False, False)
-    assert _possession_flips_after(_FakeAction("attack", 200), _FakeAction("dig", 220), [], cfg) is True
+    assert _possession_flips_after(_FakeAction(ActionType.ATTACK, 200), _FakeAction(ActionType.DIG, 220), [], cfg) is True
 
 
 def test_v13_default_block_stays() -> None:
     cfg = ChainWalkerConfig(False, False)
-    assert _possession_flips_after(_FakeAction("block", 300), _FakeAction("attack", 320), [], cfg) is False
+    assert _possession_flips_after(_FakeAction(ActionType.BLOCK, 300), _FakeAction(ActionType.ATTACK, 320), [], cfg) is False
 
 
 def test_v13_default_set_stays() -> None:
     cfg = ChainWalkerConfig(False, False)
-    assert _possession_flips_after(_FakeAction("set", 400), _FakeAction("attack", 420), [], cfg) is False
+    assert _possession_flips_after(_FakeAction(ActionType.SET, 400), _FakeAction(ActionType.ATTACK, 420), [], cfg) is False
 
 
 def test_b1_block_flips_when_next_side_differs() -> None:
     cfg = ChainWalkerConfig(block_conditional=True, ball_trajectory_verifier=False)
     contacts = [_make_contact_obj(100, "near"), _make_contact_obj(130, "far")]
-    assert _possession_flips_after(_FakeAction("block", 100), _FakeAction("dig", 130), contacts, cfg) is True
+    assert _possession_flips_after(_FakeAction(ActionType.BLOCK, 100), _FakeAction(ActionType.DIG, 130), contacts, cfg) is True
 
 
 def test_b1_block_stays_when_next_side_same() -> None:
     cfg = ChainWalkerConfig(block_conditional=True, ball_trajectory_verifier=False)
     contacts = [_make_contact_obj(100, "near"), _make_contact_obj(130, "near")]
-    assert _possession_flips_after(_FakeAction("block", 100), _FakeAction("attack", 130), contacts, cfg) is False
+    assert _possession_flips_after(_FakeAction(ActionType.BLOCK, 100), _FakeAction(ActionType.ATTACK, 130), contacts, cfg) is False
 
 
 def test_b1_block_falls_back_to_v13_when_contacts_missing() -> None:
     cfg = ChainWalkerConfig(block_conditional=True, ball_trajectory_verifier=False)
     # No contacts → v13 rule (block stays)
-    assert _possession_flips_after(_FakeAction("block", 100), _FakeAction("dig", 130), [], cfg) is False
+    assert _possession_flips_after(_FakeAction(ActionType.BLOCK, 100), _FakeAction(ActionType.DIG, 130), [], cfg) is False
 
 
 def test_b2_overrides_rule_when_ball_crossed() -> None:
     """SET rule says stay, but contact court_sides differ → verifier flips."""
     cfg = ChainWalkerConfig(block_conditional=False, ball_trajectory_verifier=True)
     contacts = [_make_contact_obj(100, "near"), _make_contact_obj(130, "far")]
-    assert _possession_flips_after(_FakeAction("set", 100), _FakeAction("attack", 130), contacts, cfg) is True
+    assert _possession_flips_after(_FakeAction(ActionType.SET, 100), _FakeAction(ActionType.ATTACK, 130), contacts, cfg) is True
 
 
 def test_b2_overrides_rule_when_ball_stayed() -> None:
     """SERVE rule says flip, but court_sides match → verifier stays."""
     cfg = ChainWalkerConfig(block_conditional=False, ball_trajectory_verifier=True)
     contacts = [_make_contact_obj(100, "near"), _make_contact_obj(130, "near")]
-    assert _possession_flips_after(_FakeAction("serve", 100), _FakeAction("dig", 130), contacts, cfg) is False
+    assert _possession_flips_after(_FakeAction(ActionType.SERVE, 100), _FakeAction(ActionType.DIG, 130), contacts, cfg) is False
 
 
 def test_b2_degrades_to_rule_when_synthetic_contact() -> None:
@@ -105,14 +106,14 @@ def test_b2_degrades_to_rule_when_synthetic_contact() -> None:
     cfg = ChainWalkerConfig(block_conditional=False, ball_trajectory_verifier=True)
     contacts = [_make_contact_obj(100, "near", is_synthetic=True), _make_contact_obj(130, "far")]
     # Verifier declines on synthetic; v13 rule applies (attack flips)
-    assert _possession_flips_after(_FakeAction("attack", 100), _FakeAction("dig", 130), contacts, cfg) is True
+    assert _possession_flips_after(_FakeAction(ActionType.ATTACK, 100), _FakeAction(ActionType.DIG, 130), contacts, cfg) is True
 
 
 def test_b2_degrades_to_rule_when_contact_side_unknown() -> None:
     cfg = ChainWalkerConfig(block_conditional=False, ball_trajectory_verifier=True)
     contacts = [_make_contact_obj(100, "unknown"), _make_contact_obj(130, "far")]
     # Verifier declines on unknown; v13 rule applies (attack flips)
-    assert _possession_flips_after(_FakeAction("attack", 100), _FakeAction("dig", 130), contacts, cfg) is True
+    assert _possession_flips_after(_FakeAction(ActionType.ATTACK, 100), _FakeAction(ActionType.DIG, 130), contacts, cfg) is True
 
 
 def test_contact_side_at_returns_side_within_tolerance() -> None:
@@ -145,8 +146,8 @@ def test_b2_degrades_when_action_is_synthetic() -> None:
     cfg = ChainWalkerConfig(block_conditional=False, ball_trajectory_verifier=True)
     # Real-shaped contacts (no synthetic flag), but action is_synthetic=True
     contacts = [_make_contact_obj(100, "near"), _make_contact_obj(130, "far")]
-    a = _FakeAction("set", 100, is_synthetic=True)
-    nxt = _FakeAction("attack", 130)
+    a = _FakeAction(ActionType.SET, 100, is_synthetic=True)
+    nxt = _FakeAction(ActionType.ATTACK, 130)
     # B.2 would normally override (sides differ → flip), but action is
     # synthetic → fall back to v13 rule (set stays).
     assert _possession_flips_after(a, nxt, contacts, cfg) is False
@@ -156,8 +157,8 @@ def test_b2_degrades_when_next_action_is_synthetic() -> None:
     """When next_action.is_synthetic is True, B.2 falls back to the rule."""
     cfg = ChainWalkerConfig(block_conditional=False, ball_trajectory_verifier=True)
     contacts = [_make_contact_obj(100, "near"), _make_contact_obj(130, "far")]
-    a = _FakeAction("set", 100)
-    nxt = _FakeAction("attack", 130, is_synthetic=True)
+    a = _FakeAction(ActionType.SET, 100)
+    nxt = _FakeAction(ActionType.ATTACK, 130, is_synthetic=True)
     assert _possession_flips_after(a, nxt, contacts, cfg) is False
 
 
@@ -165,7 +166,7 @@ def test_b1_degrades_when_next_action_is_synthetic() -> None:
     """When next_action is synthetic, B.1 falls back to v13 rule (block stays)."""
     cfg = ChainWalkerConfig(block_conditional=True, ball_trajectory_verifier=False)
     contacts = [_make_contact_obj(100, "near"), _make_contact_obj(130, "far")]
-    a = _FakeAction("block", 100)
-    nxt = _FakeAction("attack", 130, is_synthetic=True)
+    a = _FakeAction(ActionType.BLOCK, 100)
+    nxt = _FakeAction(ActionType.ATTACK, 130, is_synthetic=True)
     # Sides differ, but next is synthetic → fall back to v13 (block stays)
     assert _possession_flips_after(a, nxt, contacts, cfg) is False
