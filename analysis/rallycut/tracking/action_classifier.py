@@ -25,7 +25,7 @@ import logging
 import math
 import os
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from typing import TYPE_CHECKING, Any, overload
 
@@ -3910,8 +3910,7 @@ def _apply_dynamic_scorer_attribution(
         if chain_result is None:
             continue
         chain_pick_tid, chain_probs = chain_result
-        chain_best_idx = max(range(len(feats)), key=lambda i: chain_probs[i])
-        chain_pick_prob = chain_probs[chain_best_idx]
+        chain_pick_prob = max(chain_probs)
 
         if _SCORER_CHAIN_FALLBACK_ENABLED:
             # No-chain pass: re-score with team_matches_expected=0.5 (uninformative).
@@ -3919,23 +3918,30 @@ def _apply_dynamic_scorer_attribution(
             # is wrong, the team_matches_expected feature can flip rank-1 away from
             # GT. The no-chain pass recovers those cases by preferring whichever
             # pass has higher confidence when the two picks disagree.
-            from dataclasses import replace as _dc_replace
             feats_no_chain = [
-                _dc_replace(cf, team_matches_expected=0.5) for cf in feats
+                replace(cf, team_matches_expected=0.5) for cf in feats
             ]
             no_chain_result = scorer.pick_with_probs(
                 action.action_type.value.upper(), feats_no_chain
             )
             if no_chain_result is not None:
                 no_chain_pick_tid, no_chain_probs = no_chain_result
-                no_chain_best_idx = max(range(len(feats_no_chain)), key=lambda i: no_chain_probs[i])
-                no_chain_pick_prob = no_chain_probs[no_chain_best_idx]
+                no_chain_pick_prob = max(no_chain_probs)
                 chosen_tid, _ = _scorer_chain_aware_fallback_pick(
                     chain_pick_tid=chain_pick_tid,
                     chain_pick_prob=chain_pick_prob,
                     no_chain_pick_tid=no_chain_pick_tid,
                     no_chain_pick_prob=no_chain_pick_prob,
                 )
+                if chain_pick_tid != no_chain_pick_tid:
+                    winner = "no_chain" if no_chain_pick_prob > chain_pick_prob else "chain"
+                    logger.debug(
+                        "scorer fallback disagreement: chain pick=%s p=%.3f, "
+                        "no_chain pick=%s p=%.3f, winner=%s",
+                        chain_pick_tid, chain_pick_prob,
+                        no_chain_pick_tid, no_chain_pick_prob,
+                        winner,
+                    )
             else:
                 chosen_tid = chain_pick_tid
         else:
