@@ -85,7 +85,21 @@ logger = logging.getLogger(__name__)
 #          they handle the new candidate distribution without rule
 #          redesign (contrary to earlier Phase 2.5 hypothesis). Full
 #          analysis: analysis/reports/contact_fps_2026_05_19/PROBE_RESULTS.md
-CONTACT_PIPELINE_VERSION = "v5"
+#  - v6: 2026-05-20 — asymmetric is_at_net definition. Replaces the symmetric
+#          `abs(ball.y - net_y) < 0.08` with `-0.15 <= (ball.y - net_y) <=
+#          0.08`. Image-y is down, so the negative bound widens the
+#          "ball above net" side from 0.08 to 0.15 while keeping the old
+#          0.08 below-net behavior — a strict SUPERSET of v5's at-net set.
+#          Block contacts have player hands carrying the ball 0.03-0.125
+#          normalized units above the ball-trajectory net_y estimate (which
+#          measures the net top), and the symmetric 0.08 band excluded them.
+#          Recovers 4 of the 6 NOT_AT_NET GT-block cases on trusted-31
+#          (gigi b8d333ae, moma e1929103, titi 21029e9f, pupu e11fa028);
+#          kiki 0bc00f94 and popo c1052008 still fail because their net_y
+#          estimate is wrong (separate net_y workstream, deferred).
+#          Plan + visual-inspection write-up:
+#          /Users/mario/.claude/plans/ultrathink-rallycut-users-mario-personal-iterative-koala.md
+CONTACT_PIPELINE_VERSION = "v6"
 
 # Minimum confidence to treat a ball position as a real detection.
 # Ball detector confidence is bimodal: either 0.0 (no detection) or >=0.3 (confident).
@@ -2714,7 +2728,18 @@ def detect_contacts(
     def _get_seq_max_nonbg(frame: int, window: int = 5) -> float:
         return compute_seq_max_nonbg(sequence_probs, frame, window)
 
-    net_zone = 0.08  # ±8% of screen around net
+    # Asymmetric net-zone for is_at_net. Image y increases downward, so
+    # `ball.y < estimated_net_y` means the ball is physically ABOVE net top.
+    # Asymmetric ONE-WAY widening: keep the old 0.08 below-net band (block
+    # tips that brush the cord on their way down still need to count), but
+    # widen above to 0.15. Block contacts sit 0.03-0.125 normalized frame
+    # units above the ball-trajectory net_y estimate in trusted-31; the
+    # old symmetric 0.08 band excluded 4 of 27 GT blocks.
+    # This is a strict superset of the prior rule — every previously
+    # at-net contact remains at-net; we only ADD above-net contacts that
+    # were previously excluded.
+    net_zone_above = 0.15
+    net_zone_below = 0.08
     contacts: list[Contact] = []
     prev_accepted_frame = 0  # Track ACCEPTED contacts for frames_since_last
     # Pending-rescue buffer for the seq-anchored post-loop pass (v1.2). Each
@@ -2794,8 +2819,9 @@ def detect_contacts(
             player_y=nearest_player_y,
         )
 
-        # Check if at net
-        is_at_net = abs(ball.y - estimated_net_y) < net_zone
+        # Check if at net (asymmetric — see net_zone_above/below above).
+        delta_net_y = ball.y - estimated_net_y
+        is_at_net = -net_zone_above <= delta_net_y <= net_zone_below
 
         has_player = player_dist <= cfg.player_contact_radius
         has_direction_change = direction_change >= cfg.min_direction_change_deg
