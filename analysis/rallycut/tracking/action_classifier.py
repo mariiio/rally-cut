@@ -30,6 +30,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any, overload
 
 from rallycut.actions.trajectory_features import ACTION_TYPES
+from rallycut.tracking._cascade_trace import cascade_trace
 from rallycut.tracking.candidate_decoder import DecodedContact
 from rallycut.tracking.contact_detector import Contact, ContactSequence, ball_crossed_net
 
@@ -3982,216 +3983,231 @@ def classify_rally_actions(
         if learned is not None and not learned.is_trained:
             learned = None
 
-    result = action_classifier.classify_rally(
-        contact_sequence, rally_id,
-        team_assignments=team_assignments,
-        classifier=learned,
-        match_team_assignments=match_team_assignments,
-        calibrator=calibrator,
-        camera_height=camera_height,
-        sequence_probs=sequence_probs,
-    )
-
-    # v1.3 serve-peak prepend: when the first classified action is "serve"
-    # but MS-TCN++ has a strong serve-class peak earlier in the rally, the
-    # first detected contact is actually a downstream action (typically
-    # receive). Inject a synthetic Contact at the peak frame into the
-    # ContactSequence and re-run classify_rally so the existing rule engine
-    # re-classifies every contact in the new serve's context — no manual
-    # re-labeling required.
-    if result.actions and sequence_probs is not None:
-        from rallycut.tracking.serve_prepend import should_prepend_serve
-
-        first_action = min(result.actions, key=lambda a: a.frame)
-        if first_action.action_type == ActionType.SERVE:
-            serve_idx = ACTION_TYPES.index("serve") + 1
-            faf = first_action.frame
-            if 0 <= faf < sequence_probs.shape[1]:
-                first_action_serve_prob = float(sequence_probs[serve_idx, faf])
-            else:
-                first_action_serve_prob = 0.0
-            peak_frame = should_prepend_serve(
-                sequence_probs=sequence_probs,
-                first_action_frame=faf,
-                first_action_serve_prob=first_action_serve_prob,
-                first_action_classifier_confidence=first_action.confidence,
-                rally_start_frame=contact_sequence.rally_start_frame or 0,
-            )
-            if peak_frame is not None:
-                # Build a synthetic Contact at peak_frame. Interpolate ball
-                # position from the ball-tracker output; if the ball isn't
-                # visible at peak_frame (off-screen server case), fall back
-                # to the closest visible ball position within ±10 frames.
-                from rallycut.tracking.contact_detector import (
-                    Contact as _Contact,
-                )
-                from rallycut.tracking.contact_detector import (
-                    ContactSequence as _ContactSequence,
-                )
-                ball_xy = _interpolate_ball_position_for_synthetic(
-                    contact_sequence.ball_positions, peak_frame,
-                )
-                synthetic_contact = _Contact(
-                    frame=peak_frame,
-                    ball_x=ball_xy[0],
-                    ball_y=ball_xy[1],
-                    velocity=0.0,
-                    direction_change_deg=0.0,
-                    player_track_id=-1,
-                    player_distance=float("inf"),
-                    court_side=(
-                        "near" if ball_xy[1] > (contact_sequence.net_y or 0.5)
-                        else "far"
-                    ),
-                    is_at_net=False,
-                    is_validated=True,
-                    confidence=float(
-                        sequence_probs[serve_idx, peak_frame]
-                    ) if 0 <= peak_frame < sequence_probs.shape[1] else 0.95,
-                    arc_fit_residual=0.0,
-                )
-                # Build a NEW ContactSequence with the synthetic contact
-                # prepended; sort to keep ordering invariant. The classifier
-                # will treat the synthetic contact as a real serve (first
-                # contact = serve rule) and re-classify everything else.
-                injected = _ContactSequence(
-                    contacts=sorted(
-                        [synthetic_contact, *contact_sequence.contacts],
-                        key=lambda c: c.frame,
-                    ),
-                    net_y=contact_sequence.net_y,
-                    rally_start_frame=contact_sequence.rally_start_frame,
-                    ball_positions=contact_sequence.ball_positions,
-                    player_positions=contact_sequence.player_positions,
-                )
-                result = action_classifier.classify_rally(
-                    injected, rally_id,
-                    team_assignments=team_assignments,
-                    classifier=learned,
-                    match_team_assignments=match_team_assignments,
-                    calibrator=calibrator,
-                    camera_height=camera_height,
-                    sequence_probs=sequence_probs,
-                )
-                # Tag the new first action (the synthesized serve) so
-                # downstream consumers know it's a synthetic prepend.
-                if result.actions:
-                    re_first = min(result.actions, key=lambda a: a.frame)
-                    if re_first.frame == peak_frame:
-                        re_first.is_synthetic = True
-                        re_first.player_track_id = -1
-
-    # Repair rules enabled at the call site:
-    #   Rule 1 — consecutive recv/dig → set (+0.8pp LOO-CV, 2026-04 ablation)
-    #   Rule 3 — duplicate serves → receive (synth+real symmetric anchor;
-    #            rule body made symmetric in 0c60b42a but call site never
-    #            updated — re-enabled 2026-05-18 with ACTION v6 bump)
-    #   Rule 4 — duplicate receives → set
-    #   Rule 6 — attack→attack same-side → first becomes set
-    #            (re-enabled 2026-05-18 with ACTION v7 bump after
-    #            trusted-31 spot-check on v4/v5 pipeline showed +91
-    #            net correct, +20pp SET, no class regresses).
-    #   Rule 8 — dig immediately after serve → receive
-    # Rules 0, 2, 5 remain disabled. Rule 0 regressed -30 on the same
-    # spot-check; Rule 5 fired only 4 times (+2 correct, noise);
-    # Rule 2 has not been re-validated since the 2026-04 ablation.
-    result.actions, _ = repair_action_sequence(
-        result.actions,
-        net_y=contact_sequence.net_y,
-        ball_positions=contact_sequence.ball_positions,
-        rally_start_frame=contact_sequence.rally_start_frame,
-        disabled_rules={0, 2, 5},
-        sequence_probs=sequence_probs,
-    )
-
-    result.actions = viterbi_decode_actions(result.actions)
-    result.actions = validate_action_sequence(result.actions, rally_id)
-
-    if match_team_assignments:
-        assign_court_side_from_teams(result.actions, match_team_assignments)
-
-    result.actions = reattribute_players(
-        result.actions, contact_sequence.contacts, reattrib_teams,
-        max_distance_ratio=1.5,
-        reid_predictions=reid_predictions,
-    )
-
-    # Dynamic-feature scorer attribution (env-flag gated; default OFF).
-    # Per-action-type GBM trained on production-matched data (pipeline
-    # frame + ballX/ballY at GT contacts). Lifts attribution accuracy by
-    # ~+15pp on user-flagged hard cases (2026-05-14). When the env flag
-    # is OFF or models are unavailable, behavior is byte-identical to
-    # the prior pipeline.
-    #
-    # Spec: docs/superpowers/specs/2026-05-14-dynamic-attribution-scorer-design.md
-    # Models: analysis/weights/dynamic_attribution_scorer/
-    _apply_dynamic_scorer_attribution(
-        result.actions, contact_sequence.contacts,
-        contact_sequence.player_positions,
-        ball_positions=contact_sequence.ball_positions,
-        team_assignments=reattrib_teams,
-    )
-
-    # Visual attribution pass (overrides proximity-based attribution)
-    if (visual_classifier is not None and visual_video_cap is not None
-            and visual_positions_json is not None):
-        from rallycut.tracking.visual_attribution import visual_reattribute
-        visual_reattribute(
-            result.actions, contact_sequence.contacts,
-            visual_positions_json, visual_video_cap,
-            visual_rally_start_frame, visual_frame_w, visual_frame_h,
-            visual_classifier, team_assignments=reattrib_teams,
-        )
-
-    # Formation-based serving team prediction. Uses player positions at
-    # rally start (not contact-based). Set as primary signal on
-    # RallyActions.serving_team. See _find_serving_team_by_formation
-    # docstring for rationale and measured accuracy.
-    #
-    # NOTE: `start_frame=0` (rally-relative), not `rally_start_frame` which
-    # is the first *ball* detection frame (~60-90 in). We want the formation
-    # BEFORE the ball is in play — when the server is still behind the
-    # baseline and the partner is at the net.
-    cfg = config if config is not None else ActionClassifierConfig()
-    if cfg.use_formation_serving_team:
-        # Determine first contact frame for adaptive window
-        first_contact_frame_val: int | None = None
-        first_contact_obj: Contact | None = None
-        if contact_sequence.contacts:
-            first_contact_frame_val = contact_sequence.contacts[0].frame
-            first_contact_obj = contact_sequence.contacts[0]
-
-        formation_team, _ = _find_serving_team_by_formation(
-            contact_sequence.player_positions,
-            start_frame=0,
-            net_y=contact_sequence.net_y,
-            team_assignments=reattrib_teams or team_assignments,
-            track_to_player=track_to_player,
-            semantic_flip=formation_semantic_flip,
-            window_frames=cfg.formation_window_frames,
-            margin=cfg.formation_margin,
-            ball_positions=contact_sequence.ball_positions,
+    with cascade_trace(rally_id) as _tr:
+        result = action_classifier.classify_rally(
+            contact_sequence, rally_id,
+            team_assignments=team_assignments,
+            classifier=learned,
+            match_team_assignments=match_team_assignments,
             calibrator=calibrator,
-            first_contact_frame=first_contact_frame_val,
-            adaptive_window=True,
-            first_contact=first_contact_obj,
+            camera_height=camera_height,
+            sequence_probs=sequence_probs,
         )
-        if formation_team is not None:
-            result.formation_serving_team = formation_team
+        _tr.snapshot("after_classify_rally", result.actions)
 
-    # MS-TCN++ sequence override — replaces non-serve action types with the
-    # model's per-frame argmax, guarded by OVERRIDE_RELATIVE_CONF_K +
-    # ATTACK_PRESERVE_RATIO + DIG_GUARD_RATIO. Runs last so it operates on
-    # the final post-reattribute action list (matching the historical CLI
-    # ordering at track_player.py:991-1001). Pass None to disable.
-    if sequence_probs is not None:
-        from rallycut.tracking.sequence_action_runtime import apply_sequence_override
-        apply_sequence_override(result, sequence_probs)
+        # v1.3 serve-peak prepend: when the first classified action is "serve"
+        # but MS-TCN++ has a strong serve-class peak earlier in the rally, the
+        # first detected contact is actually a downstream action (typically
+        # receive). Inject a synthetic Contact at the peak frame into the
+        # ContactSequence and re-run classify_rally so the existing rule engine
+        # re-classifies every contact in the new serve's context — no manual
+        # re-labeling required.
+        if result.actions and sequence_probs is not None:
+            from rallycut.tracking.serve_prepend import should_prepend_serve
 
-    if decoder_contacts is not None:
-        from rallycut.tracking.decoder_overlay import apply_decoder_labels
-        result, _overlay_stat = apply_decoder_labels(
-            result, decoder_contacts, tol_frames=3,
+            first_action = min(result.actions, key=lambda a: a.frame)
+            if first_action.action_type == ActionType.SERVE:
+                serve_idx = ACTION_TYPES.index("serve") + 1
+                faf = first_action.frame
+                if 0 <= faf < sequence_probs.shape[1]:
+                    first_action_serve_prob = float(sequence_probs[serve_idx, faf])
+                else:
+                    first_action_serve_prob = 0.0
+                peak_frame = should_prepend_serve(
+                    sequence_probs=sequence_probs,
+                    first_action_frame=faf,
+                    first_action_serve_prob=first_action_serve_prob,
+                    first_action_classifier_confidence=first_action.confidence,
+                    rally_start_frame=contact_sequence.rally_start_frame or 0,
+                )
+                if peak_frame is not None:
+                    # Build a synthetic Contact at peak_frame. Interpolate ball
+                    # position from the ball-tracker output; if the ball isn't
+                    # visible at peak_frame (off-screen server case), fall back
+                    # to the closest visible ball position within ±10 frames.
+                    from rallycut.tracking.contact_detector import (
+                        Contact as _Contact,
+                    )
+                    from rallycut.tracking.contact_detector import (
+                        ContactSequence as _ContactSequence,
+                    )
+                    ball_xy = _interpolate_ball_position_for_synthetic(
+                        contact_sequence.ball_positions, peak_frame,
+                    )
+                    synthetic_contact = _Contact(
+                        frame=peak_frame,
+                        ball_x=ball_xy[0],
+                        ball_y=ball_xy[1],
+                        velocity=0.0,
+                        direction_change_deg=0.0,
+                        player_track_id=-1,
+                        player_distance=float("inf"),
+                        court_side=(
+                            "near" if ball_xy[1] > (contact_sequence.net_y or 0.5)
+                            else "far"
+                        ),
+                        is_at_net=False,
+                        is_validated=True,
+                        confidence=float(
+                            sequence_probs[serve_idx, peak_frame]
+                        ) if 0 <= peak_frame < sequence_probs.shape[1] else 0.95,
+                        arc_fit_residual=0.0,
+                    )
+                    # Build a NEW ContactSequence with the synthetic contact
+                    # prepended; sort to keep ordering invariant. The classifier
+                    # will treat the synthetic contact as a real serve (first
+                    # contact = serve rule) and re-classify everything else.
+                    injected = _ContactSequence(
+                        contacts=sorted(
+                            [synthetic_contact, *contact_sequence.contacts],
+                            key=lambda c: c.frame,
+                        ),
+                        net_y=contact_sequence.net_y,
+                        rally_start_frame=contact_sequence.rally_start_frame,
+                        ball_positions=contact_sequence.ball_positions,
+                        player_positions=contact_sequence.player_positions,
+                    )
+                    result = action_classifier.classify_rally(
+                        injected, rally_id,
+                        team_assignments=team_assignments,
+                        classifier=learned,
+                        match_team_assignments=match_team_assignments,
+                        calibrator=calibrator,
+                        camera_height=camera_height,
+                        sequence_probs=sequence_probs,
+                    )
+                    # Tag the new first action (the synthesized serve) so
+                    # downstream consumers know it's a synthetic prepend.
+                    if result.actions:
+                        re_first = min(result.actions, key=lambda a: a.frame)
+                        if re_first.frame == peak_frame:
+                            re_first.is_synthetic = True
+                            re_first.player_track_id = -1
+            _tr.snapshot("after_serve_prepend", result.actions)
+
+        # Repair rules enabled at the call site:
+        #   Rule 1 — consecutive recv/dig → set (+0.8pp LOO-CV, 2026-04 ablation)
+        #   Rule 3 — duplicate serves → receive (synth+real symmetric anchor;
+        #            rule body made symmetric in 0c60b42a but call site never
+        #            updated — re-enabled 2026-05-18 with ACTION v6 bump)
+        #   Rule 4 — duplicate receives → set
+        #   Rule 6 — attack→attack same-side → first becomes set
+        #            (re-enabled 2026-05-18 with ACTION v7 bump after
+        #            trusted-31 spot-check on v4/v5 pipeline showed +91
+        #            net correct, +20pp SET, no class regresses).
+        #   Rule 8 — dig immediately after serve → receive
+        # Rules 0, 2, 5 remain disabled. Rule 0 regressed -30 on the same
+        # spot-check; Rule 5 fired only 4 times (+2 correct, noise);
+        # Rule 2 has not been re-validated since the 2026-04 ablation.
+        result.actions, _ = repair_action_sequence(
+            result.actions,
+            net_y=contact_sequence.net_y,
+            ball_positions=contact_sequence.ball_positions,
+            rally_start_frame=contact_sequence.rally_start_frame,
+            disabled_rules={0, 2, 5},
+            sequence_probs=sequence_probs,
         )
+        _tr.snapshot("after_repair_action_sequence", result.actions)
+
+        result.actions = viterbi_decode_actions(result.actions)
+        _tr.snapshot("after_viterbi_decode_actions", result.actions)
+
+        result.actions = validate_action_sequence(result.actions, rally_id)
+        _tr.snapshot("after_validate_action_sequence", result.actions)
+
+        if match_team_assignments:
+            assign_court_side_from_teams(result.actions, match_team_assignments)
+        _tr.snapshot("after_assign_court_side_from_teams", result.actions)
+
+        result.actions = reattribute_players(
+            result.actions, contact_sequence.contacts, reattrib_teams,
+            max_distance_ratio=1.5,
+            reid_predictions=reid_predictions,
+        )
+        _tr.snapshot("after_reattribute_players", result.actions)
+
+        # Dynamic-feature scorer attribution (env-flag gated; default OFF).
+        # Per-action-type GBM trained on production-matched data (pipeline
+        # frame + ballX/ballY at GT contacts). Lifts attribution accuracy by
+        # ~+15pp on user-flagged hard cases (2026-05-14). When the env flag
+        # is OFF or models are unavailable, behavior is byte-identical to
+        # the prior pipeline.
+        #
+        # Spec: docs/superpowers/specs/2026-05-14-dynamic-attribution-scorer-design.md
+        # Models: analysis/weights/dynamic_attribution_scorer/
+        _apply_dynamic_scorer_attribution(
+            result.actions, contact_sequence.contacts,
+            contact_sequence.player_positions,
+            ball_positions=contact_sequence.ball_positions,
+            team_assignments=reattrib_teams,
+        )
+        _tr.snapshot("after_dynamic_scorer", result.actions)
+
+        # Visual attribution pass (overrides proximity-based attribution)
+        if (visual_classifier is not None and visual_video_cap is not None
+                and visual_positions_json is not None):
+            from rallycut.tracking.visual_attribution import visual_reattribute
+            visual_reattribute(
+                result.actions, contact_sequence.contacts,
+                visual_positions_json, visual_video_cap,
+                visual_rally_start_frame, visual_frame_w, visual_frame_h,
+                visual_classifier, team_assignments=reattrib_teams,
+            )
+        _tr.snapshot("after_visual_reattribute", result.actions)
+
+        # Formation-based serving team prediction. Uses player positions at
+        # rally start (not contact-based). Set as primary signal on
+        # RallyActions.serving_team. See _find_serving_team_by_formation
+        # docstring for rationale and measured accuracy.
+        #
+        # NOTE: `start_frame=0` (rally-relative), not `rally_start_frame` which
+        # is the first *ball* detection frame (~60-90 in). We want the formation
+        # BEFORE the ball is in play — when the server is still behind the
+        # baseline and the partner is at the net.
+        cfg = config if config is not None else ActionClassifierConfig()
+        if cfg.use_formation_serving_team:
+            # Determine first contact frame for adaptive window
+            first_contact_frame_val: int | None = None
+            first_contact_obj: Contact | None = None
+            if contact_sequence.contacts:
+                first_contact_frame_val = contact_sequence.contacts[0].frame
+                first_contact_obj = contact_sequence.contacts[0]
+
+            formation_team, _ = _find_serving_team_by_formation(
+                contact_sequence.player_positions,
+                start_frame=0,
+                net_y=contact_sequence.net_y,
+                team_assignments=reattrib_teams or team_assignments,
+                track_to_player=track_to_player,
+                semantic_flip=formation_semantic_flip,
+                window_frames=cfg.formation_window_frames,
+                margin=cfg.formation_margin,
+                ball_positions=contact_sequence.ball_positions,
+                calibrator=calibrator,
+                first_contact_frame=first_contact_frame_val,
+                adaptive_window=True,
+                first_contact=first_contact_obj,
+            )
+            if formation_team is not None:
+                result.formation_serving_team = formation_team
+
+        # MS-TCN++ sequence override — replaces non-serve action types with the
+        # model's per-frame argmax, guarded by OVERRIDE_RELATIVE_CONF_K +
+        # ATTACK_PRESERVE_RATIO + DIG_GUARD_RATIO. Runs last so it operates on
+        # the final post-reattribute action list (matching the historical CLI
+        # ordering at track_player.py:991-1001). Pass None to disable.
+        if sequence_probs is not None:
+            from rallycut.tracking.sequence_action_runtime import apply_sequence_override
+            apply_sequence_override(result, sequence_probs)
+        _tr.snapshot("after_apply_sequence_override", result.actions)
+
+        if decoder_contacts is not None:
+            from rallycut.tracking.decoder_overlay import apply_decoder_labels
+            result, _overlay_stat = apply_decoder_labels(
+                result, decoder_contacts, tol_frames=3,
+            )
+        _tr.snapshot("after_apply_decoder_labels", result.actions)
+
+        _tr.snapshot("final", result.actions)
 
     return result
