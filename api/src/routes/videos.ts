@@ -525,12 +525,24 @@ router.put(
     params: z.object({ id: uuidSchema }),
     body: z.object({
       corners: z.array(calibrationCornerSchema).length(4),
-      // Optional per-video net-top y (normalized image coords, 0-1).
-      // Camera is fixed across a match → one value per video. Sent from
-      // the calibration UI's draggable net handle. Backend stores it in
-      // a dedicated column (not inside `courtCalibrationJson`) so
-      // existing readers of `courtCalibrationJson as CalibrationCorner[]`
-      // remain backward-compatible.
+      // v9 (preferred): per-endpoint net-top y at the LEFT post and the
+      // RIGHT post — pair expresses tilt. Labeling convention is in
+      // `analysis/docs/labeling/net_top_endpoints.md`. When both are
+      // present the legacy scalar `netTopY` is recomputed as (L+R)/2
+      // so older readers stay consistent.
+      netTopLeftY: z.number().min(0).max(1).optional(),
+      netTopRightY: z.number().min(0).max(1).optional(),
+      // Per-endpoint visibility flags from the labeler.
+      //   2 = clearly visible
+      //   1 = extrapolated / partial occlusion
+      //   0 = endpoint not visible in frame (skip for training)
+      netTopEndpoints: z.object({
+        leftVisibility: z.number().int().min(0).max(2),
+        rightVisibility: z.number().int().min(0).max(2),
+      }).optional(),
+      // Legacy v7/v8 single-scalar net-top. Still accepted from older
+      // clients; when received WITHOUT v9 fields, it backfills both
+      // endpoints to the same y (treats the label as horizontal).
       netTopY: z.number().min(0).max(1).optional(),
     }),
   }),
@@ -544,13 +556,55 @@ router.put(
         return res.status(404).json({ error: "Video not found" });
       }
 
+      // Resolve the three net-top fields. v9 fields take precedence; the
+      // legacy scalar is honored only as a fallback for clients that
+      // haven't been updated. Missing any of (left, right) is OK (the
+      // user may save corners-only and label the net top later).
+      const body = req.body;
+      const v9Left = body.netTopLeftY;
+      const v9Right = body.netTopRightY;
+      const v9Visibility = body.netTopEndpoints;
+      let netTopLeftY: number | undefined;
+      let netTopRightY: number | undefined;
+      let netTopScalar: number | undefined;
+
+      if (v9Left !== undefined || v9Right !== undefined) {
+        // v9 client. Use whichever endpoint(s) were provided; recompute
+        // scalar as (L+R)/2 when both are present, else just leave the
+        // scalar as the provided one (or unchanged).
+        netTopLeftY = v9Left;
+        netTopRightY = v9Right;
+        if (v9Left !== undefined && v9Right !== undefined) {
+          netTopScalar = (v9Left + v9Right) / 2;
+        } else if (v9Left !== undefined) {
+          netTopScalar = v9Left;
+        } else if (v9Right !== undefined) {
+          netTopScalar = v9Right;
+        }
+      } else if (body.netTopY !== undefined) {
+        // Pre-v9 client. Treat the scalar as a horizontal label and
+        // backfill both endpoints to the same y.
+        netTopLeftY = body.netTopY;
+        netTopRightY = body.netTopY;
+        netTopScalar = body.netTopY;
+      }
+
       await prisma.video.update({
         where: { id: req.params.id },
         data: {
           courtCalibrationJson: req.body.corners,
           courtCalibrationSource: 'manual',
-          ...(req.body.netTopY !== undefined
-            ? { courtCalibrationNetTopY: req.body.netTopY }
+          ...(netTopScalar !== undefined
+            ? { courtCalibrationNetTopY: netTopScalar }
+            : {}),
+          ...(netTopLeftY !== undefined
+            ? { courtCalibrationNetTopLeftY: netTopLeftY }
+            : {}),
+          ...(netTopRightY !== undefined
+            ? { courtCalibrationNetTopRightY: netTopRightY }
+            : {}),
+          ...(v9Visibility !== undefined
+            ? { courtCalibrationNetTopEndpointsJson: v9Visibility }
             : {}),
         },
       });

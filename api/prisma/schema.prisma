@@ -226,12 +226,28 @@ model Video {
   qualityDowngradedAt   DateTime?             @map("quality_downgraded_at")
   courtCalibrationJson    Json?                 @map("court_calibration_json")
   courtCalibrationSource  String?               @map("court_calibration_source")
-  /// User-set net-top y in normalized image coords (0-1). Camera is fixed
-  /// across a match, so this is one value per video — distinct from the
-  /// per-rally ball-trajectory `contacts.netY` estimate. Used as GT for
-  /// `estimate_net_position` and overrides downstream net-top
-  /// visualisations when present.
+  /// LEGACY user-set net-top y (one scalar per video, normalized 0-1).
+  /// Superseded by `courtCalibrationNetTopLeftY` / `courtCalibrationNetTopRightY`
+  /// (v9 SOTA workstream — see analysis/docs/labeling/net_top_endpoints.md).
+  /// Kept for backward-compat reads from older clients + older probe scripts.
+  /// On every save through the v9 endpoint, this scalar is recomputed as
+  /// (L+R)/2 so legacy readers see a consistent midpoint.
   courtCalibrationNetTopY Float?                @map("court_calibration_net_top_y")
+  /// v9: user-set net-top y at the LEFT post (normalized image coords 0-1).
+  /// Paired with `courtCalibrationNetTopRightY` to express tilt. Labeled via
+  /// the calibration UI's two independent orange handles. See
+  /// `analysis/docs/labeling/net_top_endpoints.md` for the click convention
+  /// (center of the white tape at the post, NOT antenna apex / mesh edge).
+  courtCalibrationNetTopLeftY    Float?         @map("court_calibration_net_top_left_y")
+  /// v9: user-set net-top y at the RIGHT post (normalized image coords 0-1).
+  courtCalibrationNetTopRightY   Float?         @map("court_calibration_net_top_right_y")
+  /// v9: per-endpoint visibility flags from the labeler. Schema:
+  ///   { leftVisibility: 0 | 1 | 2, rightVisibility: 0 | 1 | 2 }
+  /// where 2 = clearly visible / confident, 1 = extrapolated / partial
+  /// occlusion, 0 = endpoint not visible in frame (skip for training).
+  /// Defaults to `{leftVisibility:2, rightVisibility:2}` when both handles
+  /// are dragged.
+  courtCalibrationNetTopEndpointsJson Json?     @map("court_calibration_net_top_endpoints_json")
   qualityReportJson     Json?                 @map("quality_report_json")
   matchAnalysisJson     Json?                 @map("match_analysis_json")
   /// Ref-crop-sourced canonical pid mapping. Schema:

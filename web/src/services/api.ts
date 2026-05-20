@@ -116,6 +116,20 @@ interface ApiVideo {
   qualityReportJson?: VideoQualityReport | null;
   courtCalibrationJson?: Array<{ x: number; y: number }> | null;
   courtCalibrationNetTopY?: number | null;
+  // v9 SOTA: per-endpoint net-top GT (paired left + right y values).
+  // The legacy scalar above is now derived as (L+R)/2 on save.
+  courtCalibrationNetTopLeftY?: number | null;
+  courtCalibrationNetTopRightY?: number | null;
+  courtCalibrationNetTopEndpointsJson?: {
+    leftVisibility: 0 | 1 | 2;
+    rightVisibility: 0 | 1 | 2;
+  } | null;
+}
+
+export type NetTopEndpointVisibility = 0 | 1 | 2;
+export interface NetTopEndpoints {
+  leftVisibility: NetTopEndpointVisibility;
+  rightVisibility: NetTopEndpointVisibility;
 }
 
 interface ApiCameraKeyframe {
@@ -367,6 +381,9 @@ function extractCourtCalibrations(apiSession: ApiSession): CourtCalibrationMap {
       result[video.id] = {
         corners: video.courtCalibrationJson,
         netTopY: video.courtCalibrationNetTopY ?? undefined,
+        netTopLeftY: video.courtCalibrationNetTopLeftY ?? undefined,
+        netTopRightY: video.courtCalibrationNetTopRightY ?? undefined,
+        netTopEndpoints: video.courtCalibrationNetTopEndpointsJson ?? undefined,
       };
     }
   }
@@ -377,7 +394,13 @@ function extractCourtCalibrations(apiSession: ApiSession): CourtCalibrationMap {
 // Court calibrations extracted from session response, keyed by videoId
 export type CourtCalibrationMap = Record<
   string,
-  { corners: Array<{ x: number; y: number }>; netTopY?: number }
+  {
+    corners: Array<{ x: number; y: number }>;
+    netTopY?: number;
+    netTopLeftY?: number;
+    netTopRightY?: number;
+    netTopEndpoints?: NetTopEndpoints;
+  }
 >;
 
 export interface FetchSessionResult {
@@ -738,6 +761,9 @@ interface ApiVideoEditorResponse {
     cameraSettings?: ApiVideoCameraSettings | null;
     courtCalibrationJson?: Array<{ x: number; y: number }> | null;
     courtCalibrationNetTopY?: number | null;
+    courtCalibrationNetTopLeftY?: number | null;
+    courtCalibrationNetTopRightY?: number | null;
+    courtCalibrationNetTopEndpointsJson?: NetTopEndpoints | null;
     qualityReportJson?: VideoQualityReport | null;
   };
   allVideosSessionId: string;
@@ -768,6 +794,9 @@ export interface FetchVideoEditorResult {
   globalCameraSettings: GlobalCameraSettingsMap;
   courtCalibration: Array<{ x: number; y: number }> | null;
   courtCalibrationNetTopY: number | null;
+  courtCalibrationNetTopLeftY: number | null;
+  courtCalibrationNetTopRightY: number | null;
+  courtCalibrationNetTopEndpoints: NetTopEndpoints | null;
   qualityReportJson: VideoQualityReport | null;
 }
 
@@ -931,6 +960,9 @@ export async function fetchVideoForEditor(videoId: string): Promise<FetchVideoEd
     globalCameraSettings,
     courtCalibration: data.video.courtCalibrationJson ?? null,
     courtCalibrationNetTopY: data.video.courtCalibrationNetTopY ?? null,
+    courtCalibrationNetTopLeftY: data.video.courtCalibrationNetTopLeftY ?? null,
+    courtCalibrationNetTopRightY: data.video.courtCalibrationNetTopRightY ?? null,
+    courtCalibrationNetTopEndpoints: data.video.courtCalibrationNetTopEndpointsJson ?? null,
     qualityReportJson: data.video.qualityReportJson ?? null,
   };
 }
@@ -1802,23 +1834,37 @@ export async function submitFeedback(feedback: SubmitFeedbackRequest): Promise<F
 /**
  * Save court calibration corners for a video.
  *
- * Optional `netTopY` is the per-video net-top y in normalized image
- * coords (0-1). Camera is fixed across a match, so this is one value
- * per video — sent only when the user has dragged the net handle in
- * the calibration UI. Backend stores in a dedicated `courtCalibrationNetTopY`
- * column (separate from the `courtCalibrationJson` corners blob).
+ * v9 SOTA: prefer passing `netTopLeftY` + `netTopRightY` (one y per
+ * post — pair expresses tilt). The backend recomputes the legacy
+ * scalar as (L+R)/2 for any older consumers. The optional `netTopY`
+ * argument stays for backward compatibility with pre-v9 callers; if
+ * passed alongside `netTopLeftY`/`netTopRightY` it is ignored.
+ * Labeling convention: `analysis/docs/labeling/net_top_endpoints.md`.
  */
+export interface SaveCourtCalibrationOptions {
+  netTopLeftY?: number;
+  netTopRightY?: number;
+  netTopEndpoints?: NetTopEndpoints;
+  /** @deprecated pass netTopLeftY+netTopRightY instead. */
+  netTopY?: number;
+}
+
 export async function saveCourtCalibration(
   videoId: string,
   corners: Array<{ x: number; y: number }>,
-  netTopY?: number,
+  opts: SaveCourtCalibrationOptions = {},
 ): Promise<void> {
   const response = await fetch(`${API_BASE_URL}/v1/videos/${videoId}/court-calibration`, {
     method: 'PUT',
     headers: getHeaders('application/json'),
     body: JSON.stringify({
       corners,
-      ...(netTopY !== undefined ? { netTopY } : {}),
+      ...(opts.netTopLeftY !== undefined ? { netTopLeftY: opts.netTopLeftY } : {}),
+      ...(opts.netTopRightY !== undefined ? { netTopRightY: opts.netTopRightY } : {}),
+      ...(opts.netTopEndpoints !== undefined ? { netTopEndpoints: opts.netTopEndpoints } : {}),
+      ...(opts.netTopY !== undefined && opts.netTopLeftY === undefined && opts.netTopRightY === undefined
+        ? { netTopY: opts.netTopY }
+        : {}),
     }),
   });
 

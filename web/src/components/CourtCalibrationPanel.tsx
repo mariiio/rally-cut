@@ -30,6 +30,16 @@ const CORNER_COLORS = ['#FF6B6B', '#4ECDC4', '#45B7D1', '#96CEB4'];
 const NET_Y_COLOR = '#FF9800';
 const NET_HANDLE_RADIUS_PX = 9;
 
+// Sentinel indices for the two independent net-top handles. Distinct from
+// the corner indices (0..3); separate from each other so each handle has
+// its own y-state and the line they connect can express tilt.
+const NET_LEFT_HANDLE_INDEX = -1;
+const NET_RIGHT_HANDLE_INDEX = -2;
+// Normalized x positions of the two net-top handles. Match the convention
+// from the labeling spec (analysis/docs/labeling/net_top_endpoints.md).
+const NET_LEFT_X = 0.08;
+const NET_RIGHT_X = 0.92;
+
 // Default corner positions (normalized 0-1)
 const DEFAULT_CORNERS = [
   { x: 0.15, y: 0.85 }, // bottom-left
@@ -52,25 +62,52 @@ export function CourtCalibrationPanel({
   const [corners, setCorners] = useState(
     existingCalibration?.corners || DEFAULT_CORNERS
   );
-  // Net-top y handle position. Priority: stored calibration value →
-  // caller-provided ball-trajectory seed → 0.45 (sensible default
-  // somewhere above the typical court mid-y).
-  const [netTopY, setNetTopY] = useState<number>(
-    existingCalibration?.netTopY
-      ?? (netYSeed !== undefined && netYSeed > 0 ? netYSeed : 0.45)
+  // v9: two independent net-top y values, one per post. Priority on
+  // initial mount:
+  //   1. stored v9 endpoints (netTopLeftY, netTopRightY)
+  //   2. stored legacy scalar (netTopY) — both handles seed to it,
+  //      so an existing v7/v8 horizontal label converts cleanly
+  //   3. caller-provided ball-trajectory seed (netYSeed)
+  //   4. 0.45 sensible default
+  const initialNetY = (() => {
+    if (existingCalibration?.netTopY !== undefined) return existingCalibration.netTopY;
+    if (netYSeed !== undefined && netYSeed > 0) return netYSeed;
+    return 0.45;
+  })();
+  const [netTopLeftY, setNetTopLeftY] = useState<number>(
+    existingCalibration?.netTopLeftY ?? initialNetY
+  );
+  const [netTopRightY, setNetTopRightY] = useState<number>(
+    existingCalibration?.netTopRightY ?? initialNetY
+  );
+  // Per-endpoint visibility flags (2=visible, 1=extrapolated, 0=skip).
+  const [leftVisibility, setLeftVisibility] = useState<0 | 1 | 2>(
+    (existingCalibration?.netTopEndpoints?.leftVisibility as 0 | 1 | 2) ?? 2
+  );
+  const [rightVisibility, setRightVisibility] = useState<0 | 1 | 2>(
+    (existingCalibration?.netTopEndpoints?.rightVisibility as 0 | 1 | 2) ?? 2
   );
   const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
   const draggingIndexRef = useRef<number | null>(null);
-  // Sentinel index for the net-top handle (separate from corner indices).
-  const NET_HANDLE_INDEX = -1;
 
   const handleCancel = useCallback(() => {
     setIsCalibrating(false);
   }, [setIsCalibrating]);
 
   const handleSave = useCallback(() => {
-    saveCalibration(videoId, corners, netTopY);
-  }, [videoId, corners, netTopY, saveCalibration]);
+    saveCalibration(videoId, corners, {
+      leftY: netTopLeftY,
+      rightY: netTopRightY,
+      endpoints: { leftVisibility, rightVisibility },
+    });
+  }, [
+    videoId, corners, netTopLeftY, netTopRightY,
+    leftVisibility, rightVisibility, saveCalibration,
+  ]);
+
+  // Cycle visibility 2 → 1 → 0 → 2 on right-click of a handle.
+  const cycleVisibility = (v: 0 | 1 | 2): 0 | 1 | 2 =>
+    v === 2 ? 1 : v === 1 ? 0 : 2;
 
   const handleMouseDown = useCallback((index: number) => (e: React.MouseEvent) => {
     e.preventDefault();
@@ -88,9 +125,12 @@ export function CourtCalibrationPanel({
       const rect = containerRef.current.getBoundingClientRect();
       const y = (e.clientY - rect.top) / rect.height;
 
-      if (idx === NET_HANDLE_INDEX) {
-        // Constrain to within the video bounds
-        setNetTopY(Math.max(0, Math.min(1, y)));
+      if (idx === NET_LEFT_HANDLE_INDEX) {
+        setNetTopLeftY(Math.max(0, Math.min(1, y)));
+        return;
+      }
+      if (idx === NET_RIGHT_HANDLE_INDEX) {
+        setNetTopRightY(Math.max(0, Math.min(1, y)));
         return;
       }
 
@@ -297,31 +337,44 @@ export function CourtCalibrationPanel({
           vectorEffect="non-scaling-stroke"
         />
 
-        {/* User-set net top — a draggable horizontal line. Camera is
-            fixed across a match, so the net top is a single per-video
-            value (not per-rally). Distinct from the gold center-line
-            above (calibration's perspective net midline ON THE GROUND);
-            this is the visible NET TOP TAPE in image space. */}
+        {/* User-set net top — TWO independent draggable endpoints (v9).
+            Camera is fixed across a match so net top is one pair per
+            video. Left handle = x=NET_LEFT_X; right handle = x=NET_RIGHT_X.
+            The line between them expresses tilt (left.y ≠ right.y).
+            Distinct from the gold center-line above (perspective net
+            midline ON the ground); this is the visible NET TOP TAPE
+            in image space. Labeling: docs/labeling/net_top_endpoints.md. */}
         <line
-          x1="0"
-          y1={netTopY * 100}
-          x2="100"
-          y2={netTopY * 100}
+          x1={NET_LEFT_X * 100}
+          y1={netTopLeftY * 100}
+          x2={NET_RIGHT_X * 100}
+          y2={netTopRightY * 100}
           stroke={NET_Y_COLOR}
           strokeWidth="1"
           opacity="0.9"
           vectorEffect="non-scaling-stroke"
         />
         <text
-          x="0.6"
-          y={netTopY * 100 - 0.6}
+          x={NET_LEFT_X * 100 + 0.6}
+          y={netTopLeftY * 100 - 0.6}
           fill={NET_Y_COLOR}
           fontSize="2.1"
           fontFamily="monospace"
           fontWeight="bold"
           style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.65)', strokeWidth: 0.5 }}
         >
-          net top
+          net top L
+        </text>
+        <text
+          x={NET_RIGHT_X * 100 - 8}
+          y={netTopRightY * 100 - 0.6}
+          fill={NET_Y_COLOR}
+          fontSize="2.1"
+          fontFamily="monospace"
+          fontWeight="bold"
+          style={{ paintOrder: 'stroke', stroke: 'rgba(0,0,0,0.65)', strokeWidth: 0.5 }}
+        >
+          net top R
         </text>
       </svg>
 
@@ -346,30 +399,48 @@ export function CourtCalibrationPanel({
         />
       ))}
 
-      {/* Visible net-top handles: small circles on each side of the
-          net-top line. Constrained to vertical drag (ns-resize cursor). */}
+      {/* Visible net-top handles: two independent circles, one per
+          post. Each drags its own y. Right-click cycles visibility
+          flag 2→1→0→2 (2=clearly visible, 1=extrapolated, 0=skip). */}
       {[
-        { side: 'left' as const, leftPct: 8 },
-        { side: 'right' as const, leftPct: 92 },
-      ].map(({ side, leftPct }) => (
+        { side: 'left' as const, leftPct: NET_LEFT_X * 100, y: netTopLeftY,
+          visibility: leftVisibility, handleIdx: NET_LEFT_HANDLE_INDEX,
+          setVisibility: setLeftVisibility },
+        { side: 'right' as const, leftPct: NET_RIGHT_X * 100, y: netTopRightY,
+          visibility: rightVisibility, handleIdx: NET_RIGHT_HANDLE_INDEX,
+          setVisibility: setRightVisibility },
+      ].map(({ side, leftPct, y, visibility, handleIdx, setVisibility }) => (
         <Box
           key={`net-handle-${side}`}
-          onMouseDown={handleMouseDown(NET_HANDLE_INDEX)}
+          onMouseDown={handleMouseDown(handleIdx)}
+          onContextMenu={(e) => {
+            e.preventDefault();
+            setVisibility(cycleVisibility(visibility));
+          }}
+          title={`net top ${side} — visibility=${visibility} (right-click to cycle)`}
           sx={{
             position: 'absolute',
             left: `${leftPct}%`,
-            top: `${netTopY * 100}%`,
+            top: `${y * 100}%`,
             transform: 'translate(-50%, -50%)',
             width: NET_HANDLE_RADIUS_PX * 2,
             height: NET_HANDLE_RADIUS_PX * 2,
             borderRadius: '50%',
             border: `2px solid ${NET_Y_COLOR}`,
-            backgroundColor: 'rgba(0,0,0,0.55)',
+            backgroundColor: visibility === 2
+              ? 'rgba(0,0,0,0.55)'
+              : visibility === 1
+                ? 'rgba(255,193,7,0.55)'    // amber for extrapolated
+                : 'rgba(244,67,54,0.55)',   // red for skip
             boxShadow: '0 0 0 1px rgba(255,255,255,0.4)',
             cursor: 'ns-resize',
             '&:active': {
               cursor: 'ns-resize',
-              backgroundColor: 'rgba(0,0,0,0.75)',
+              backgroundColor: visibility === 2
+                ? 'rgba(0,0,0,0.75)'
+                : visibility === 1
+                  ? 'rgba(255,193,7,0.75)'
+                  : 'rgba(244,67,54,0.75)',
             },
           }}
         />
@@ -424,7 +495,10 @@ export function CourtCalibrationPanel({
       >
         <Typography variant="body2" sx={{ color: 'white', textAlign: 'center' }}>
           Drag the 4 corners to match the court boundaries.
-          Drag the orange handles to align the net top line with the visible net.
+          Drag the left & right orange handles INDEPENDENTLY to the
+          center of the white tape at each post.
+          Right-click a handle to mark partial-occlusion / skip
+          (amber → red).
         </Typography>
         <Stack direction="row" spacing={2} sx={{ mt: 1, justifyContent: 'center' }}>
           {CORNER_LABELS.map((label, index) => (

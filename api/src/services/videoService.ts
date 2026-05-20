@@ -1108,6 +1108,10 @@ export async function getVideoForEditor(videoId: string, userId: string) {
       cameraSettings: video.cameraSettings[0] ?? null,
       courtCalibrationJson: video.courtCalibrationJson ?? null,
       courtCalibrationNetTopY: video.courtCalibrationNetTopY ?? null,
+      courtCalibrationNetTopLeftY: video.courtCalibrationNetTopLeftY ?? null,
+      courtCalibrationNetTopRightY: video.courtCalibrationNetTopRightY ?? null,
+      courtCalibrationNetTopEndpointsJson:
+        video.courtCalibrationNetTopEndpointsJson ?? null,
       qualityReportJson: video.qualityReportJson ?? null,
     },
     allVideosSessionId: allVideosSession.id,

@@ -51,18 +51,32 @@ export interface Corner {
   y: number;
 }
 
+export interface NetTopEndpoints {
+  leftVisibility: 0 | 1 | 2;
+  rightVisibility: 0 | 1 | 2;
+}
+
 export interface CourtCalibration {
   videoId: string;
   corners: Corner[];
   /**
-   * Optional per-video net-top y in normalized image coords (0-1).
-   * Set by the user via a draggable handle in the calibration panel.
-   * Camera is fixed across a match, so this is one value per video —
-   * decoupled from the per-rally `contacts.netY` ball-trajectory
-   * estimate (which is noisy and per-rally). When present, overrides
-   * downstream net-top visualisations.
+   * LEGACY scalar net-top y (one value per video, normalized 0-1).
+   * Superseded by `netTopLeftY` + `netTopRightY` (v9 SOTA). Kept for
+   * backward-compat with older consumers; recomputed as (L+R)/2 on
+   * save when v9 endpoints are present.
    */
   netTopY?: number;
+  /**
+   * v9: per-endpoint net-top y. `netTopLeftY` is at the LEFT post
+   * (x ≈ 0.08 in normalized image coords), `netTopRightY` at the
+   * right (x ≈ 0.92). The pair expresses tilt — `netTopLeftY ===
+   * netTopRightY` means a horizontal label. Labeling convention:
+   * `analysis/docs/labeling/net_top_endpoints.md`.
+   */
+  netTopLeftY?: number;
+  netTopRightY?: number;
+  /** v9: per-endpoint visibility flags (2=visible, 1=extrapolated, 0=skip). */
+  netTopEndpoints?: NetTopEndpoints;
   savedAt: number;
 }
 
@@ -137,11 +151,25 @@ interface PlayerTrackingState {
   toggleRawTracks: () => void;
   setSelectedTrack: (trackId: number | null) => void;
   setIsCalibrating: (value: boolean) => void;
-  saveCalibration: (videoId: string, corners: Corner[], netTopY?: number) => void;
+  saveCalibration: (
+    videoId: string,
+    corners: Corner[],
+    netTop?: { leftY?: number; rightY?: number; endpoints?: NetTopEndpoints },
+  ) => void;
   clearCalibration: (videoId: string) => void;
   clearLocalCalibration: (videoId: string) => void;
   getCalibration: (videoId: string) => CourtCalibration | null;
-  hydrateCalibration: (videoId: string, corners: Corner[], netTopY?: number) => void;
+  hydrateCalibration: (
+    videoId: string,
+    corners: Corner[],
+    netTop?: {
+      leftY?: number;
+      rightY?: number;
+      endpoints?: NetTopEndpoints;
+      /** Backward-compat: legacy scalar from older API responses. */
+      legacyScalarY?: number;
+    },
+  ) => void;
   hydrateFromAutoSave: (videoId: string, corners: Corner[]) => void;
   trackPlayersForRally: (rallyId: string, videoId: string, fallbackFps?: number) => Promise<void>;
   loadPlayerTrack: (rallyId: string, fallbackFps?: number, forceRefresh?: boolean) => Promise<boolean>;
@@ -422,21 +450,38 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
         set({ isCalibrating: value });
       },
 
-      saveCalibration: (videoId: string, corners: Corner[], netTopY?: number) => {
+      saveCalibration: (videoId, corners, netTop) => {
+        const leftY = netTop?.leftY;
+        const rightY = netTop?.rightY;
+        const endpoints = netTop?.endpoints;
+        // Derive the legacy scalar locally so the in-memory calibration stays
+        // consistent with what the backend will store (the API does the same
+        // (L+R)/2 computation on its side).
+        const scalar =
+          leftY !== undefined && rightY !== undefined
+            ? (leftY + rightY) / 2
+            : leftY ?? rightY;
         set((state) => ({
           calibrations: {
             ...state.calibrations,
             [videoId]: {
               videoId,
               corners,
-              ...(netTopY !== undefined ? { netTopY } : {}),
+              ...(scalar !== undefined ? { netTopY: scalar } : {}),
+              ...(leftY !== undefined ? { netTopLeftY: leftY } : {}),
+              ...(rightY !== undefined ? { netTopRightY: rightY } : {}),
+              ...(endpoints !== undefined ? { netTopEndpoints: endpoints } : {}),
               savedAt: Date.now(),
             },
           },
           isCalibrating: false,
         }));
-        // Fire-and-forget: persist corners + optional netTopY to backend.
-        saveCourtCalibration(videoId, corners, netTopY).catch((err) => {
+        // Fire-and-forget: persist corners + v9 endpoints to backend.
+        saveCourtCalibration(videoId, corners, {
+          netTopLeftY: leftY,
+          netTopRightY: rightY,
+          netTopEndpoints: endpoints,
+        }).catch((err) => {
           console.error('[PlayerTrackingStore] Failed to save calibration to API:', err);
         });
       },
@@ -466,16 +511,32 @@ export const usePlayerTrackingStore = create<PlayerTrackingState>()(
         return get().calibrations[videoId] || null;
       },
 
-      hydrateCalibration: (videoId: string, corners: Corner[], netTopY?: number) => {
+      hydrateCalibration: (videoId, corners, netTop) => {
         // Only hydrate if not already in local store (local is authoritative cache)
         if (get().calibrations[videoId]) return;
+        const leftY = netTop?.leftY;
+        const rightY = netTop?.rightY;
+        const endpoints = netTop?.endpoints;
+        const legacyScalar = netTop?.legacyScalarY;
+        // Prefer v9 fields. Fall back to the legacy scalar for older API
+        // responses (treats it as a horizontal label, L=R=scalar) so users
+        // who labeled in the v7/v8 era still see both handles seeded.
+        const effectiveLeft = leftY ?? legacyScalar;
+        const effectiveRight = rightY ?? legacyScalar;
+        const effectiveScalar =
+          effectiveLeft !== undefined && effectiveRight !== undefined
+            ? (effectiveLeft + effectiveRight) / 2
+            : effectiveLeft ?? effectiveRight ?? legacyScalar;
         set((state) => ({
           calibrations: {
             ...state.calibrations,
             [videoId]: {
               videoId,
               corners,
-              ...(netTopY !== undefined ? { netTopY } : {}),
+              ...(effectiveScalar !== undefined ? { netTopY: effectiveScalar } : {}),
+              ...(effectiveLeft !== undefined ? { netTopLeftY: effectiveLeft } : {}),
+              ...(effectiveRight !== undefined ? { netTopRightY: effectiveRight } : {}),
+              ...(endpoints !== undefined ? { netTopEndpoints: endpoints } : {}),
               savedAt: Date.now(),
             },
           },
