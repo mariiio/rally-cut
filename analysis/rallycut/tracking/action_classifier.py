@@ -189,7 +189,14 @@ logger = logging.getLogger(__name__)
 #          chain-derived expected_team is wrong. Infrastructure
 #          retained for future experiments (helper + wiring + env
 #          flag); just default OFF.
-ACTION_PIPELINE_VERSION = "v13"
+# v14 (2026-05-20): chain-walker decision-function refactor (Sub-lever 2).
+#          Two new env flags (WALKER_BLOCK_CONDITIONAL,
+#          WALKER_BALL_TRAJECTORY_VERIFIER), both default OFF.
+#          Behavior byte-identical to v13 when both flags unset.
+#          Targets the 64 missed flips + 20 over-flips identified
+#          by probe_gt_net_crossings_2026_05_20 (commit e41bfa1c).
+#          Spec: docs/superpowers/specs/2026-05-20-chain-walker-v14-design.md
+ACTION_PIPELINE_VERSION = "v14"
 
 # Sub-lever 1 guardrail (Branch A): when chain-aware and no-chain scorer
 # picks disagree, prefer the higher-confidence one. Default OFF. Set
@@ -2775,6 +2782,96 @@ _NET_CROSSING_ACTIONS = {ActionType.SERVE, ActionType.ATTACK}
 # Same-side actions: ball stays on same side
 _SAME_SIDE_ACTIONS = {ActionType.RECEIVE, ActionType.SET, ActionType.DIG}
 
+# v14 chain-walker config + helpers (Sub-lever 2 / chain-quality rewrite).
+# Both flags default OFF; when both are off, _possession_flips_after is
+# byte-identical to the v13 inline rule (action.action_type in
+# _NET_CROSSING_ACTIONS).
+_WALKER_BLOCK_CONDITIONAL = (
+    os.environ.get("WALKER_BLOCK_CONDITIONAL", "0").lower() in ("1", "true", "yes")
+)
+_WALKER_BALL_TRAJECTORY_VERIFIER = (
+    os.environ.get("WALKER_BALL_TRAJECTORY_VERIFIER", "0").lower() in ("1", "true", "yes")
+)
+
+
+@dataclass(frozen=True)
+class ChainWalkerConfig:
+    """Knobs for _compute_expected_teams (v14)."""
+
+    block_conditional: bool = False
+    ball_trajectory_verifier: bool = False
+
+    @classmethod
+    def from_env(cls) -> ChainWalkerConfig:
+        return cls(
+            block_conditional=_WALKER_BLOCK_CONDITIONAL,
+            ball_trajectory_verifier=_WALKER_BALL_TRAJECTORY_VERIFIER,
+        )
+
+
+def _contact_side_at(
+    contacts: list[Any],
+    frame: int,
+    tol: int = 3,
+) -> str | None:
+    """Return Contact.court_side ('near'/'far') for the contact closest to
+    `frame` within ±tol frames, skipping synthetic + unknown-side contacts.
+    Returns None when no eligible contact is in range.
+    """
+    if not contacts:
+        return None
+    best: str | None = None
+    best_delta = tol + 1
+    for c in contacts:
+        if getattr(c, "is_synthetic", False):
+            continue
+        side = getattr(c, "court_side", "unknown")
+        if side not in ("near", "far"):
+            continue
+        d = abs(int(getattr(c, "frame", -(10**9))) - int(frame))
+        if d < best_delta:
+            best_delta = d
+            best = side
+    return best
+
+
+def _possession_flips_after(
+    action: Any,
+    next_action: Any | None,
+    contacts: list[Any],
+    config: ChainWalkerConfig,
+) -> bool:
+    """Whether possession flips after `action`.
+
+    v13 baseline (both flags OFF): rule_says_flip = action.action_type in
+    _NET_CROSSING_ACTIONS.
+    B.1: when action is BLOCK, use next_contact.court_side as primary signal.
+    B.2: physical court_side change overrides the rule.
+    """
+    a_type = getattr(action.action_type, "value", action.action_type)
+    a_type = str(a_type).lower()
+
+    rule_says_flip = a_type in ("serve", "attack")
+
+    # B.1: BLOCK conditional
+    if config.block_conditional and a_type == "block":
+        curr_side = _contact_side_at(contacts, action.frame)
+        next_side = (
+            _contact_side_at(contacts, next_action.frame) if next_action is not None else None
+        )
+        if curr_side and next_side:
+            rule_says_flip = curr_side != next_side
+
+    # B.2: ball-trajectory verifier (physical override)
+    if config.ball_trajectory_verifier and next_action is not None:
+        curr_side = _contact_side_at(contacts, action.frame)
+        next_side = _contact_side_at(contacts, next_action.frame)
+        if curr_side and next_side:
+            return curr_side != next_side
+
+    return rule_says_flip
+
+
 _HIGH_CONFIDENCE_GATE = 0.6
 _MEDIUM_CONFIDENCE_GATE = 0.5
 _SIDE_TO_TEAM: dict[str, int] = {"near": 0, "far": 1}
@@ -2968,6 +3065,8 @@ def _reattribute_reid(
 def _compute_expected_teams(
     actions: list[ClassifiedAction],
     team_assignments: dict[int, int],
+    contacts: list[Any] | None = None,
+    config: ChainWalkerConfig | None = None,
 ) -> list[int | None]:
     """Derive expected team for each action from serve identity + action sequence.
 
@@ -2983,6 +3082,10 @@ def _compute_expected_teams(
     or None if not determinable (no serve found or unknown action type).
     """
     expected: list[int | None] = [None] * len(actions)
+    if config is None:
+        config = ChainWalkerConfig.from_env()
+    if contacts is None:
+        contacts = []
 
     # Find serve and its team
     serve_team: int | None = None
@@ -3008,8 +3111,8 @@ def _compute_expected_teams(
 
         expected[i] = current_team
 
-        # After net-crossing actions, flip to opposite team
-        if action.action_type in _NET_CROSSING_ACTIONS:
+        next_action = actions[i + 1] if i + 1 < len(actions) else None
+        if _possession_flips_after(action, next_action, contacts, config):
             current_team = 1 - current_team
 
     return expected
@@ -3159,7 +3262,10 @@ def reattribute_players(
     # This breaks the circular dependency: instead of deriving expected_team
     # from court_side (which depends on the player being evaluated), we use
     # the server's known team + volleyball transition rules.
-    expected_teams = _compute_expected_teams(actions, team_assignments)
+    expected_teams = _compute_expected_teams(
+        actions, team_assignments,
+        contacts=list(contact_by_frame.values()),
+    )
     chain_integrity = _chain_integrity(actions)
 
     # Fallback when serve chain unavailable: map court_side to team
