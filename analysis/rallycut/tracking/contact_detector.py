@@ -2890,8 +2890,14 @@ def detect_contacts(
     # This is a strict superset of the prior rule — every previously
     # at-net contact remains at-net; we only ADD above-net contacts that
     # were previously excluded.
-    net_zone_above = 0.15
-    net_zone_below = 0.08
+    #
+    # Env-overridable for tuning sweeps without recompile. Defaults match
+    # the v6 band; v9 was re-tuned here when the cascade switched to direct
+    # tape observation. Use these env vars for A/B sweeps:
+    #   IS_AT_NET_ABOVE  (default "0.15")
+    #   IS_AT_NET_BELOW  (default "0.08")
+    net_zone_above = float(os.environ.get("IS_AT_NET_ABOVE", "0.15"))
+    net_zone_below = float(os.environ.get("IS_AT_NET_BELOW", "0.08"))
     contacts: list[Contact] = []
     prev_accepted_frame = 0  # Track ACCEPTED contacts for frames_since_last
     # Pending-rescue buffer for the seq-anchored post-loop pass (v1.2). Each
