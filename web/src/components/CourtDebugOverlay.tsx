@@ -9,7 +9,13 @@ const TEAM_A_COLOR = 'rgba(244, 67, 54, 0.85)'; // Red (near court)
 const TEAM_B_COLOR = 'rgba(33, 150, 243, 0.85)'; // Blue (far court)
 const TEAM_A_ZONE = 'rgba(244, 67, 54, 0.12)';
 const TEAM_B_ZONE = 'rgba(33, 150, 243, 0.12)';
-const SPLIT_LINE_COLOR = '#00BCD4'; // Cyan
+const SPLIT_LINE_COLOR = '#00BCD4'; // Cyan — calibration-derived court split / perspective net line
+const NET_Y_COLOR = '#FF9800'; // Orange — ball-trajectory-estimated net_y (from contact_detector)
+// At-net band geometry matches contact_detector.py v6: ball is "at net" when
+// -0.15 <= (ball.y - net_y) <= 0.08. Image y goes down, so negative delta is
+// ABOVE the net top. Used for is_at_net classification in the block rule.
+const AT_NET_ABOVE = 0.15;
+const AT_NET_BELOW = 0.08;
 
 /** Cross product of vectors (bx-ax, by-ay) and (px-ax, py-ay). Positive = left of AB. */
 function crossProduct(
@@ -88,6 +94,15 @@ function computePerspectiveNetLine(corners: Corner[]): { left: Corner; right: Co
 interface CourtDebugOverlayProps {
   corners?: Corner[];
   courtSplitY?: number;
+  /**
+   * Ball-trajectory-estimated net Y (normalized image y, 0-1).
+   * Distinct from `courtSplitY` (calibration-derived): this is what
+   * `contact_detector.estimate_net_position` produces from where the ball
+   * crosses sides, and what the `is_at_net` check uses for block
+   * classification. Rendered as an orange line + the v6 at-net band
+   * so the calibration vs. ball-traj discrepancy is visible at a glance.
+   */
+  netY?: number;
   ballPositions?: BallPosition[];
   contacts?: ContactInfo[];
   actions?: ActionInfo[];
@@ -99,6 +114,7 @@ interface CourtDebugOverlayProps {
 export function CourtDebugOverlay({
   corners,
   courtSplitY,
+  netY,
   ballPositions,
   contacts,
   actions,
@@ -195,8 +211,9 @@ export function CourtDebugOverlay({
 
   const hasCorners = corners && corners.length === 4;
   const hasSplitY = courtSplitY !== undefined && courtSplitY > 0;
+  const hasNetY = netY !== undefined && netY > 0;
 
-  if (!hasCorners && !hasSplitY) {
+  if (!hasCorners && !hasSplitY && !hasNetY) {
     return null;
   }
 
@@ -364,6 +381,58 @@ export function CourtDebugOverlay({
             </text>
           </>
         ) : null}
+
+        {/* Ball-trajectory-estimated net_y line + at-net band (orange).
+            Distinct from the cyan calibration net line above. Shows where
+            contact_detector thinks the net is, derived from where the ball
+            actually crosses sides during the rally. The translucent band
+            visualises the v6 is_at_net classification zone used by the
+            block rule. */}
+        {hasNetY && (() => {
+          const netYPct = netY! * 100;
+          const bandTopPct = Math.max(0, (netY! - AT_NET_ABOVE) * 100);
+          const bandHeightPct = (AT_NET_ABOVE + AT_NET_BELOW) * 100;
+          return (
+            <>
+              <rect
+                x="0"
+                y={bandTopPct}
+                width="100"
+                height={bandHeightPct}
+                fill={NET_Y_COLOR}
+                fillOpacity="0.08"
+              />
+              <line
+                x1="0"
+                y1={netYPct}
+                x2="100"
+                y2={netYPct}
+                stroke={NET_Y_COLOR}
+                strokeWidth="0.35"
+                strokeDasharray="0.5,0.4"
+                opacity="0.9"
+              />
+              <rect
+                x="86"
+                y={netYPct + 0.6}
+                width="13.5"
+                height="3.2"
+                rx="0.4"
+                fill="rgba(0, 0, 0, 0.6)"
+              />
+              <text
+                x="86.7"
+                y={netYPct + 3}
+                fill={NET_Y_COLOR}
+                fontSize="2.4"
+                fontFamily="monospace"
+                fontWeight="bold"
+              >
+                net_y={netY!.toFixed(3)}
+              </text>
+            </>
+          );
+        })()}
       </svg>
 
       {/* Dynamic ball side badge */}

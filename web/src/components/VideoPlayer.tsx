@@ -977,6 +977,7 @@ export function VideoPlayer() {
             <CourtDebugOverlay
               corners={activeMatchId ? calibrations[activeMatchId]?.corners : undefined}
               courtSplitY={playerTracks[currentRally._backendId]!.tracksJson!.courtSplitY}
+              netY={playerTracks[currentRally._backendId]!.tracksJson!.contacts?.netY}
               ballPositions={playerTracks[currentRally._backendId]!.tracksJson!.ballPositions}
               contacts={playerTracks[currentRally._backendId]!.tracksJson!.contacts?.contacts}
               actions={playerTracks[currentRally._backendId]!.tracksJson!.actions?.actions}
