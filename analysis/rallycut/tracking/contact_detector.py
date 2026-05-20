@@ -99,7 +99,23 @@ logger = logging.getLogger(__name__)
 #          estimate is wrong (separate net_y workstream, deferred).
 #          Plan + visual-inspection write-up:
 #          /Users/mario/.claude/plans/ultrathink-rallycut-users-mario-personal-iterative-koala.md
-CONTACT_PIPELINE_VERSION = "v6"
+#  - v7: 2026-05-20 — learned net-top regression from court-calibration
+#          corners replaces ball-trajectory midpoint as the primary net_y
+#          estimator. Source: rallycut.court.net_top_regressor M4 (ridge
+#          α=0.01 on 8 geometric features, fit on 77 user-labeled GT
+#          videos). LOO-CV on the GT corpus: median |Δ|=0.008, worst 0.034,
+#          0 videos with |Δ|>0.05. Vs the v6 ball-trajectory estimator on
+#          the same 77 videos: 3× better median, 5× better worst-case;
+#          rescues the caca/hehe/kiki-class cases where the ball-trajectory
+#          estimator put net_y 0.10-0.18 below the actual visible net top.
+#          Visually validated by overlaying predictions on real frames
+#          (probe X-M, /tmp/net_top_validation_m4/). Falls back to v6
+#          behavior (estimate_net_position from ball trajectory) when no
+#          court calibrator is supplied or it's not calibrated, so
+#          uncalibrated rallies see no behavioral change. Bench scripts:
+#          analysis/scripts/probe_X_k_net_estimator_eval.py +
+#          analysis/scripts/probe_X_l_net_top_regression.py.
+CONTACT_PIPELINE_VERSION = "v7"
 
 # Minimum confidence to treat a ball position as a real detection.
 # Ball detector confidence is bimodal: either 0.0 (no detection) or >=0.3 (confident).
@@ -2136,6 +2152,7 @@ def _prepare_candidates(
     ball_positions: list[BallPosition],
     player_positions: list[PlayerPosition] | None,
     cfg: ContactDetectionConfig,
+    court_corners: list[dict] | None = None,
 ) -> _CandidatePrep:
     """Run candidate generation + supporting state computation.
 
@@ -2143,11 +2160,22 @@ def _prepare_candidates(
     on external state (input lists are not mutated; the noise-filtered
     `ball_positions` is returned as a NEW list inside `_CandidatePrep`).
 
+    `court_corners`, when provided as a list of 4 {x, y} dicts in normalized
+    image coords, is passed to `predict_net_top_y` (rallycut.court.
+    net_top_regressor) to derive `estimated_net_y` instead of the
+    ball-trajectory midpoint. The learned regression scores LOO-CV
+    median |Δ|=0.008 / worst 0.034 vs user GT on 77 videos — vs the
+    ball-trajectory estimator's median |Δ|=0.025 / worst 0.178. The
+    ball-trajectory path remains the fallback when corners are missing
+    or malformed (`predict_net_top_y` returns None).
+
     Returns a `_CandidatePrep` with `candidate_frames=[]` for any short-
     circuit case (no velocities, <3 frames, no candidates after generators).
     Callers short-circuit on `not prep.candidate_frames`.
     """
     from scipy.signal import find_peaks
+
+    from rallycut.court.net_top_regressor import predict_net_top_y
 
     # Step 1: Pre-filter noise spikes
     if cfg.enable_noise_filter:
@@ -2155,11 +2183,16 @@ def _prepare_candidates(
             ball_positions, cfg.noise_spike_max_jump
         )
 
-    # Step 2: Estimate net position from ball trajectory.
-    # Always use ball trajectory — the external net_y (often court_split_y from
-    # player tracking) reflects where players stand, NOT where the net appears
-    # in image space. Ball trajectory extrema bracket the net more accurately.
-    estimated_net_y = estimate_net_position(ball_positions)
+    # Step 2: Estimate net position.
+    # Priority: learned regression from court calibration corners
+    # (predict_net_top_y, M4 ridge — 3× better than ball-trajectory on
+    # 77-video GT). Fall back to ball-trajectory midpoint when corners
+    # are absent or malformed.
+    estimated_net_y: float | None = None
+    if court_corners is not None:
+        estimated_net_y = predict_net_top_y(court_corners)
+    if estimated_net_y is None:
+        estimated_net_y = estimate_net_position(ball_positions)
 
     # Helper to short-circuit with empty candidate list but valid net_y.
     def _empty_prep() -> _CandidatePrep:
@@ -2671,7 +2704,17 @@ def detect_contacts(
     # `detect_contacts_via_decoder` entry point (Phase 2c) can share the
     # exact same prep. Behavior is byte-identical to the pre-refactor version
     # — guarded by `tests/integration/test_detect_contacts_snapshot.py`.
-    prep = _prepare_candidates(ball_positions, player_positions, cfg)
+    # 2026-05-20: forward calibration corners to `_prepare_candidates` so it
+    # can use the learned net-top regressor (M4) when available. Falls back
+    # to ball-trajectory estimate when calibrator is absent/uncalibrated.
+    court_corners: list[dict] | None = None
+    if court_calibrator is not None and court_calibrator.is_calibrated:
+        hr = court_calibrator.homography
+        if hr is not None:
+            court_corners = [{"x": float(x), "y": float(y)} for x, y in hr.image_corners]
+    prep = _prepare_candidates(
+        ball_positions, player_positions, cfg, court_corners=court_corners,
+    )
     if not prep.candidate_frames:
         return ContactSequence(net_y=prep.estimated_net_y)
 
