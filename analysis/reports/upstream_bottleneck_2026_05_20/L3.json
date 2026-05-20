@@ -1,0 +1,14 @@
+{
+  "n_total_wrong": 166,
+  "delta_histogram": {
+    "1": 59,
+    "0": 39,
+    "2": 27,
+    "5": 12,
+    "3": 22,
+    "4": 7
+  },
+  "mean_delta": 1.608433734939759,
+  "max_delta": 5,
+  "oracle_recoveries": 37
+}
