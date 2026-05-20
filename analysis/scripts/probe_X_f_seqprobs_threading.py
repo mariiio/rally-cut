@@ -130,7 +130,6 @@ def main() -> int:
             contacts = detect_contacts(
                 ball_positions=ball_positions,
                 player_positions=player_positions,
-                net_y=court_split_y,
                 frame_count=frame_count or None,
                 classifier=contact_classifier,
                 use_classifier=True,

@@ -75,7 +75,7 @@ def _run_pipeline(
         contact_seq = detect_contacts(
             ball_positions=bp, player_positions=pp,
             config=ContactDetectionConfig(),
-            net_y=csy, frame_count=fcount or None,
+frame_count=fcount or None,
             team_assignments=ta_int,
             sequence_probs=seq_probs,
             primary_track_ids=list(primary_raw or []) or None,

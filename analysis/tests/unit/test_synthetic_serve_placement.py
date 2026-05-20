@@ -170,7 +170,7 @@ def test_synthetic_serve_lands_at_real_frame_for_fb7f9c23() -> None:
     contact_seq = detect_contacts(
         ball_positions=bp, player_positions=pp,
         config=ContactDetectionConfig(),
-        net_y=court_split_y, frame_count=frame_count or None,
+frame_count=frame_count or None,
         team_assignments=ta_int, court_calibrator=None,
         sequence_probs=seq_probs,
         primary_track_ids=list(primary_raw or []) or None,

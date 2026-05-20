@@ -69,7 +69,6 @@ def trace_classification(rally) -> list[dict]:
     contact_seq = detect_contacts(
         ball_positions=ball_positions,
         player_positions=player_positions,
-        net_y=rally.court_split_y,
         frame_count=rally.frame_count or None,
         classifier=classifier,
     )

@@ -68,7 +68,6 @@ def _run_pipeline(
     contacts = detect_contacts(
         ball_positions=ball_positions,
         player_positions=player_positions,
-        net_y=court_split_y,
         frame_count=frame_count or None,
         classifier=classifier,
         team_assignments=match_teams,

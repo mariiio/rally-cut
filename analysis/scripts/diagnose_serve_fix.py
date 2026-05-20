@@ -225,7 +225,7 @@ def main() -> None:
 
         contact_seq = detect_contacts(
             ball_positions=ball_positions, player_positions=positions,
-            config=ContactDetectionConfig(), net_y=rally.court_split_y,
+            config=ContactDetectionConfig(), 
             frame_count=rally.frame_count or None, court_calibrator=cal,
         )
 

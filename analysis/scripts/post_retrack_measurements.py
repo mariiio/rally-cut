@@ -331,7 +331,7 @@ def measurement_3_panel_fn_candidate_pool() -> None:
             contact_seq = detect_contacts(
                 ball_positions=ball_positions,
                 player_positions=player_positions,
-                net_y=csy, frame_count=fc or None,
+frame_count=fc or None,
                 court_calibrator=cal, sequence_probs=seq_probs,
             )
 

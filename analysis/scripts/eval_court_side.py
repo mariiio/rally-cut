@@ -342,7 +342,6 @@ def main() -> None:
         contacts = detect_contacts(
             ball_positions=ball_positions,
             player_positions=player_positions,
-            net_y=rally["court_split_y"],
         )
 
         net_y = contacts.net_y

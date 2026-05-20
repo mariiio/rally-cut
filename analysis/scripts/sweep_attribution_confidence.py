@@ -79,7 +79,6 @@ def oracle_accuracy(
             ball_positions=ball_positions,
             player_positions=player_positions,
             config=cfg,
-            net_y=rally.court_split_y,
             frame_count=rally.frame_count or None,
             court_calibrator=cal,
         )

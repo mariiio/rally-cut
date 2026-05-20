@@ -914,7 +914,6 @@ def _run_threshold_sweep(
             contacts = detect_contacts(
                 ball_positions=ball_positions,
                 player_positions=player_positions,
-                net_y=rally.court_split_y,
                 frame_count=rally.frame_count or None,
                 classifier=classifier,
                 team_assignments=match_teams,
@@ -1200,7 +1199,6 @@ def main() -> None:
                 ball_positions=ball_positions,
                 player_positions=player_positions,
                 config=contact_config,
-                net_y=rally.court_split_y,
                 frame_count=rally.frame_count or None,
                 classifier=contact_classifier,
                 use_classifier=not args.no_classifier,

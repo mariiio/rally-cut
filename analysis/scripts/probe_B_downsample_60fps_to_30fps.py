@@ -164,7 +164,6 @@ def main() -> int:
             contacts_native = detect_contacts(
                 ball_positions=ball_native,
                 player_positions=players_native,
-                net_y=court_split_y,
                 frame_count=frame_count or None,
                 team_assignments=match_teams_by_rally.get(rid_s),
                 sequence_probs=seq_native,
@@ -185,7 +184,6 @@ def main() -> int:
             contacts_down = detect_contacts(
                 ball_positions=ball_down,
                 player_positions=players_down,
-                net_y=court_split_y,
                 frame_count=(frame_count or 0) // 2 or None,
                 team_assignments=match_teams_by_rally.get(rid_s),
                 sequence_probs=seq_down,

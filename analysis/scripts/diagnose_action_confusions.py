@@ -108,7 +108,6 @@ def main() -> None:
         contacts = detect_contacts(
             ball_positions=ball_positions,
             player_positions=player_positions,
-            net_y=rally.court_split_y,
             frame_count=rally.frame_count or None,
             court_calibrator=calibrators.get(rally.video_id),
         )

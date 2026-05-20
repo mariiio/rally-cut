@@ -128,7 +128,6 @@ def evaluate_config(
             ball_positions=ball_positions,
             player_positions=player_positions,
             config=config,
-            net_y=rally.court_split_y,
             frame_count=rally.frame_count or None,
             classifier=classifier,
             use_classifier=use_classifier,

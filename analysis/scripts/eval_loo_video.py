@@ -222,7 +222,6 @@ def _eval_rally(
             ball_positions=pre.ball_positions,
             player_positions=pre.player_positions,
             config=contact_cfg,
-            net_y=rally.court_split_y,
             frame_count=rally.frame_count or None,
             classifier=contact_clf,
             use_classifier=True,

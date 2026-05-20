@@ -146,7 +146,6 @@ def _detect_for_rally(rally_id: str) -> dict:
     seq = detect_contacts(
         ball_positions=ball_positions,
         player_positions=player_positions,
-        net_y=rally.court_split_y,
         frame_count=rally.frame_count,
         sequence_probs=sequence_probs,
     )

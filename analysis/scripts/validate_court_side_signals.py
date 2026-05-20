@@ -160,7 +160,6 @@ def main() -> None:
             ball_positions=ball_positions,
             player_positions=player_positions,
             config=ContactDetectionConfig(),
-            net_y=rally.court_split_y,
             frame_count=rally.frame_count or None,
             court_calibrator=cal,
         )
@@ -387,7 +386,6 @@ def main() -> None:
                 for pp in (rally.positions_json or [])
             ],
             config=ContactDetectionConfig(),
-            net_y=rally.court_split_y,
             frame_count=rally.frame_count or None,
         )
         net_y = contact_seq.net_y
@@ -619,7 +617,6 @@ def main() -> None:
             ball_positions=ball_positions,
             player_positions=positions,
             config=ContactDetectionConfig(),
-            net_y=rally.court_split_y,
             frame_count=rally.frame_count or None,
         )
         contacts = contact_seq.contacts

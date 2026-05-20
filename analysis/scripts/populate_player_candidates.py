@@ -145,7 +145,6 @@ def main() -> None:
         contact_seq = detect_contacts(
             ball_positions=ball_positions,
             player_positions=player_positions,
-            net_y=court_split_y,
             frame_count=frame_count,
             team_assignments=team_assignments,
             court_calibrator=calibrator,

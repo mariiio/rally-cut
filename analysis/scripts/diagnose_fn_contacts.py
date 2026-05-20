@@ -161,7 +161,6 @@ def _get_all_candidates_with_scores(
         normal_result = detect_contacts(
             ball_positions=ball_positions,
             player_positions=player_positions,
-            net_y=net_y,
             frame_count=frame_count,
             use_classifier=False,
         )
@@ -179,7 +178,6 @@ def _get_all_candidates_with_scores(
             ball_positions=ball_positions,
             player_positions=player_positions,
             config=permissive_cfg,
-            net_y=net_y,
             frame_count=frame_count,
             use_classifier=False,
         )
@@ -195,7 +193,6 @@ def _get_all_candidates_with_scores(
     permissive_result = detect_contacts(
         ball_positions=ball_positions,
         player_positions=player_positions,
-        net_y=net_y,
         frame_count=frame_count,
         classifier=permissive_clf,
         use_classifier=True,
@@ -205,7 +202,6 @@ def _get_all_candidates_with_scores(
     normal_result = detect_contacts(
         ball_positions=ball_positions,
         player_positions=player_positions,
-        net_y=net_y,
         frame_count=frame_count,
         classifier=classifier,
         use_classifier=True,
@@ -688,7 +684,6 @@ def main() -> None:
             contacts = detect_contacts(
                 ball_positions=ball_positions,
                 player_positions=player_positions,
-                net_y=rally.court_split_y,
                 frame_count=rally.frame_count or None,
                 classifier=classifier,
                 use_classifier=True,

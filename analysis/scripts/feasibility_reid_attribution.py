@@ -454,7 +454,6 @@ def evaluate_contacts_for_video(
             ball_positions=ball_positions,
             player_positions=player_positions,
             config=ContactDetectionConfig(),
-            net_y=rally.court_split_y,
             frame_count=rally.frame_count or None,
             court_calibrator=cal,
         )
@@ -779,7 +778,6 @@ def _evaluate_finetuned_for_video(
             ball_positions=ball_positions,
             player_positions=player_positions,
             config=ContactDetectionConfig(),
-            net_y=rally.court_split_y,
             frame_count=rally.frame_count or None,
             court_calibrator=cal,
         )

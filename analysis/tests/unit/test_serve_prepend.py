@@ -219,7 +219,7 @@ class TestPrependIntegration:
         contact_seq = detect_contacts(
             ball_positions=r["bp"], player_positions=r["pp"],
             config=ContactDetectionConfig(),
-            net_y=r["csy"], frame_count=r["fcount"] or None,
+frame_count=r["fcount"] or None,
             team_assignments=r["ta_int"],
             sequence_probs=seq,
             primary_track_ids=r["primary_raw"] or None,
@@ -266,7 +266,7 @@ class TestPrependIntegration:
         contact_seq = detect_contacts(
             ball_positions=r["bp"], player_positions=r["pp"],
             config=ContactDetectionConfig(),
-            net_y=r["csy"], frame_count=r["fcount"] or None,
+frame_count=r["fcount"] or None,
             team_assignments=r["ta_int"],
             sequence_probs=seq,
             primary_track_ids=r["primary_raw"] or None,

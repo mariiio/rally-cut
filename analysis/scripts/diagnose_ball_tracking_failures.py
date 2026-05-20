@@ -430,7 +430,6 @@ def _find_ball_dropout_fns(rally: RallyData, classifier, tolerance_frames: int) 
         contacts = detect_contacts(
             ball_positions=ball_positions,
             player_positions=player_positions,
-            net_y=rally.court_split_y,
             frame_count=rally.frame_count or None,
             classifier=classifier,
             use_classifier=True,

@@ -361,7 +361,6 @@ def main() -> int:
                 cs = detect_contacts(
                     ball_positions=ball_positions,
                     player_positions=player_positions,
-                    net_y=data["court_split_y"],
                     frame_count=data["frame_count"] or None,
                     court_calibrator=calibrators.get(data["video_id"]),
                     team_assignments=match_teams_by_rally.get(rid),

@@ -86,7 +86,6 @@ def analyze_rallies(rally_id: str | None = None) -> list[ContactWithContext]:
         contact_seq = detect_contacts(
             ball_positions=ball_positions,
             player_positions=player_positions,
-            net_y=rally.court_split_y,
             frame_count=rally.frame_count or None,
         )
 

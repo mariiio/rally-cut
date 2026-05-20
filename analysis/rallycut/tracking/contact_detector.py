@@ -2646,7 +2646,6 @@ def detect_contacts(
     ball_positions: list[BallPosition],
     player_positions: list[PlayerPosition] | None = None,
     config: ContactDetectionConfig | None = None,
-    net_y: float | None = None,  # deprecated: ignored, kept for caller compat
     frame_count: int | None = None,
     classifier: ContactClassifier | None = None,
     use_classifier: bool = True,
@@ -2673,9 +2672,6 @@ def detect_contacts(
         ball_positions: Ball tracking positions.
         player_positions: Player tracking positions (optional but recommended).
         config: Detection configuration.
-        net_y: Deprecated — ignored. Net position is always estimated from ball
-            trajectory (court_split_y from player tracking is not an accurate
-            proxy for the net's image-space position).
         frame_count: Total rally frames. If provided, candidates beyond this frame
             are suppressed (post-rally ball pickup/warmdown).
         classifier: Optional trained ContactClassifier. When provided, replaces the

@@ -170,7 +170,6 @@ def investigate_rally(
         ball_positions=ball_positions,
         player_positions=player_positions,
         config=ContactDetectionConfig(),
-        net_y=rally.court_split_y,
         frame_count=rally.frame_count or None,
         court_calibrator=calibrator,
     )

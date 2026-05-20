@@ -249,7 +249,6 @@ def main() -> None:
                 ball_positions=bp,
                 player_positions=pp,
                 config=ContactDetectionConfig(),
-                net_y=csy,
                 frame_count=fcount or None,
                 team_assignments=ta_int,
                 sequence_probs=seq,

@@ -178,7 +178,6 @@ def main() -> None:
                     ball_positions=pre.ball_positions,
                     player_positions=pre.player_positions,
                     config=cfg,
-                    net_y=rally.court_split_y,
                     frame_count=rally.frame_count or None,
                     classifier=contact_clf,
                     use_classifier=True,

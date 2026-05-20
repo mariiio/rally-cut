@@ -102,7 +102,6 @@ def run_pipeline(
             ball_positions=ball_positions,
             player_positions=player_positions if player_positions else None,
             config=config,
-            net_y=court_split_y,
             frame_count=rally_frame_count,
         )
 

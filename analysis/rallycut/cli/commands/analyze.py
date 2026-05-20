@@ -156,7 +156,6 @@ def classify_actions(
         ball_positions=ball_positions,
         player_positions=player_positions if player_positions else None,
         config=contact_cfg,
-        net_y=court_split_y,
         frame_count=data.get("frameCount"),
         team_assignments=team_assignments,
         net_line=net_line,
@@ -365,7 +364,6 @@ def rank_highlights(
         contact_cfg = ContactDetectionConfig()
         contact_seq = detect_contacts(
             ball_positions, player_positions or None, config=contact_cfg,
-            net_y=court_split_y,
             frame_count=data.get("frameCount"),
             team_assignments=ta,
             net_line=net_line_2,
