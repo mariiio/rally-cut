@@ -4083,7 +4083,8 @@ def classify_rally_actions(
                         if re_first.frame == peak_frame:
                             re_first.is_synthetic = True
                             re_first.player_track_id = -1
-            _tr.snapshot("after_serve_prepend", result.actions)
+
+        _tr.snapshot("after_serve_prepend", result.actions)
 
         # Repair rules enabled at the call site:
         #   Rule 1 — consecutive recv/dig → set (+0.8pp LOO-CV, 2026-04 ablation)
