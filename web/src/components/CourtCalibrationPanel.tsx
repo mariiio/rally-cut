@@ -286,9 +286,10 @@ export function CourtCalibrationPanel({
 
         {/* Ball-trajectory-estimated net_y line + the v6 at-net band.
             Distinct from the gold calibration center-line above: this is
-            where contact_detector.estimate_net_position thinks the net top
-            is, derived from where the ball actually crossed sides during
-            the rally. Translucent orange band = -0.15 above .. +0.08 below
+            where contact_detector.estimate_net_position thinks the NET TOP
+            TAPE is, derived from where the ball crossed sides during the
+            rally (the ball bottoms out at net-top height as it passes
+            over). Translucent orange band = -0.15 above .. +0.08 below
             net_y = the asymmetric is_at_net zone used by the block rule. */}
         {netY !== undefined && netY > 0 && (
           <>
@@ -298,7 +299,17 @@ export function CourtCalibrationPanel({
               width="100"
               height={(AT_NET_ABOVE + AT_NET_BELOW) * 100}
               fill={NET_Y_COLOR}
-              fillOpacity="0.08"
+              fillOpacity="0.15"
+            />
+            {/* Dark backing stroke for contrast against bright frames */}
+            <line
+              x1="0"
+              y1={netY * 100}
+              x2="100"
+              y2={netY * 100}
+              stroke="rgba(0, 0, 0, 0.7)"
+              strokeWidth="4"
+              vectorEffect="non-scaling-stroke"
             />
             <line
               x1="0"
@@ -306,28 +317,26 @@ export function CourtCalibrationPanel({
               x2="100"
               y2={netY * 100}
               stroke={NET_Y_COLOR}
-              strokeWidth="0.35"
-              strokeDasharray="0.5,0.4"
-              opacity="0.95"
+              strokeWidth="2"
               vectorEffect="non-scaling-stroke"
             />
             <rect
-              x="84"
-              y={netY * 100 + 0.6}
-              width="15"
-              height="3.2"
+              x="78"
+              y={netY * 100 - 4.5}
+              width="21"
+              height="3.5"
               rx="0.4"
-              fill="rgba(0, 0, 0, 0.65)"
+              fill="rgba(0, 0, 0, 0.8)"
             />
             <text
-              x="84.7"
-              y={netY * 100 + 3}
+              x="78.7"
+              y={netY * 100 - 1.7}
               fill={NET_Y_COLOR}
-              fontSize="2.4"
+              fontSize="2.6"
               fontFamily="monospace"
               fontWeight="bold"
             >
-              net_y={netY.toFixed(3)}
+              net top y={netY.toFixed(3)}
             </text>
           </>
         )}

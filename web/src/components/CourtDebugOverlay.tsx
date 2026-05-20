@@ -384,10 +384,10 @@ export function CourtDebugOverlay({
 
         {/* Ball-trajectory-estimated net_y line + at-net band (orange).
             Distinct from the cyan calibration net line above. Shows where
-            contact_detector thinks the net is, derived from where the ball
-            actually crosses sides during the rally. The translucent band
-            visualises the v6 is_at_net classification zone used by the
-            block rule. */}
+            contact_detector thinks the NET TOP TAPE is, derived from where
+            the ball crosses sides during the rally (ball bottoms out at
+            net-top height as it passes over). Translucent band = v6
+            is_at_net classification zone used by the block rule. */}
         {hasNetY && (() => {
           const netYPct = netY! * 100;
           const bandTopPct = Math.max(0, (netY! - AT_NET_ABOVE) * 100);
@@ -400,7 +400,17 @@ export function CourtDebugOverlay({
                 width="100"
                 height={bandHeightPct}
                 fill={NET_Y_COLOR}
-                fillOpacity="0.08"
+                fillOpacity="0.15"
+              />
+              {/* Dark backing stroke for contrast against bright frames */}
+              <line
+                x1="0"
+                y1={netYPct}
+                x2="100"
+                y2={netYPct}
+                stroke="rgba(0, 0, 0, 0.7)"
+                strokeWidth="4"
+                vectorEffect="non-scaling-stroke"
               />
               <line
                 x1="0"
@@ -408,27 +418,26 @@ export function CourtDebugOverlay({
                 x2="100"
                 y2={netYPct}
                 stroke={NET_Y_COLOR}
-                strokeWidth="0.35"
-                strokeDasharray="0.5,0.4"
-                opacity="0.9"
+                strokeWidth="2"
+                vectorEffect="non-scaling-stroke"
               />
               <rect
-                x="86"
-                y={netYPct + 0.6}
-                width="13.5"
-                height="3.2"
+                x="78"
+                y={netYPct - 4.5}
+                width="21"
+                height="3.5"
                 rx="0.4"
-                fill="rgba(0, 0, 0, 0.6)"
+                fill="rgba(0, 0, 0, 0.8)"
               />
               <text
-                x="86.7"
-                y={netYPct + 3}
+                x="78.7"
+                y={netYPct - 1.7}
                 fill={NET_Y_COLOR}
-                fontSize="2.4"
+                fontSize="2.6"
                 fontFamily="monospace"
                 fontWeight="bold"
               >
-                net_y={netY!.toFixed(3)}
+                net top y={netY!.toFixed(3)}
               </text>
             </>
           );
