@@ -2853,21 +2853,31 @@ def _possession_flips_after(
 
     rule_says_flip = a_type in ("serve", "attack")
 
-    # B.1: BLOCK conditional
+    # B.1: BLOCK conditional — next-contact court_side signal.
+    # Degrades to rule when next_action is synthetic (interpolated
+    # position may not reflect reality).
     if config.block_conditional and a_type == "block":
-        curr_side = _contact_side_at(contacts, action.frame)
-        next_side = (
-            _contact_side_at(contacts, next_action.frame) if next_action is not None else None
-        )
-        if curr_side and next_side:
-            rule_says_flip = curr_side != next_side
+        next_synthetic = getattr(next_action, "is_synthetic", False) if next_action else False
+        if not next_synthetic:
+            curr_side = _contact_side_at(contacts, action.frame)
+            next_side = (
+                _contact_side_at(contacts, next_action.frame) if next_action is not None else None
+            )
+            if curr_side and next_side:
+                rule_says_flip = curr_side != next_side
 
-    # B.2: ball-trajectory verifier (physical override)
+    # B.2: ball-trajectory verifier (physical override).
+    # Degrades to rule when either action is synthetic, because the
+    # synthetic contact's court_side is derived from an interpolated ball
+    # position and may not reflect reality.
     if config.ball_trajectory_verifier and next_action is not None:
-        curr_side = _contact_side_at(contacts, action.frame)
-        next_side = _contact_side_at(contacts, next_action.frame)
-        if curr_side and next_side:
-            return curr_side != next_side
+        action_synthetic = getattr(action, "is_synthetic", False)
+        next_synthetic = getattr(next_action, "is_synthetic", False)
+        if not action_synthetic and not next_synthetic:
+            curr_side = _contact_side_at(contacts, action.frame)
+            next_side = _contact_side_at(contacts, next_action.frame)
+            if curr_side and next_side:
+                return curr_side != next_side
 
     return rule_says_flip
 

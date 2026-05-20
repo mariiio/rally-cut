@@ -11,27 +11,6 @@ from rallycut.tracking.action_classifier import (
 from rallycut.tracking.contact_detector import Contact
 
 
-def _make_contact(frame: int, side: str, is_synthetic: bool = False) -> Contact:
-    c = Contact(
-        frame=frame,
-        ball_x=0.5,
-        ball_y=0.5 if side == "near" else 0.3,
-        velocity=0.0,
-        direction_change_deg=0.0,
-        court_side=side,
-        is_at_net=False,
-        confidence=0.8,
-        is_validated=True,
-        player_track_id=1,
-        arc_fit_residual=0.0,
-        player_distance=0.05,
-    )
-    # Attach is_synthetic as a dynamic attribute since Contact doesn't have it natively.
-    # _contact_side_at uses getattr(c, 'is_synthetic', False) so this works.
-    object.__setattr__(c, "_is_synthetic_override", is_synthetic)
-    return c
-
-
 # Monkey-patch is_synthetic as a property-like override via a wrapper
 @dataclass
 class _ContactWithSynthetic:
@@ -159,3 +138,34 @@ def test_contact_side_at_skips_synthetic_contacts() -> None:
     ]
     # Within ±3 of 100, synthetic skipped → falls through to "far" at 102
     assert _contact_side_at(contacts, 100) == "far"
+
+
+def test_b2_degrades_when_action_is_synthetic() -> None:
+    """When action.is_synthetic is True, B.2 falls back to the rule."""
+    cfg = ChainWalkerConfig(block_conditional=False, ball_trajectory_verifier=True)
+    # Real-shaped contacts (no synthetic flag), but action is_synthetic=True
+    contacts = [_make_contact_obj(100, "near"), _make_contact_obj(130, "far")]
+    a = _FakeAction("set", 100, is_synthetic=True)
+    nxt = _FakeAction("attack", 130)
+    # B.2 would normally override (sides differ → flip), but action is
+    # synthetic → fall back to v13 rule (set stays).
+    assert _possession_flips_after(a, nxt, contacts, cfg) is False
+
+
+def test_b2_degrades_when_next_action_is_synthetic() -> None:
+    """When next_action.is_synthetic is True, B.2 falls back to the rule."""
+    cfg = ChainWalkerConfig(block_conditional=False, ball_trajectory_verifier=True)
+    contacts = [_make_contact_obj(100, "near"), _make_contact_obj(130, "far")]
+    a = _FakeAction("set", 100)
+    nxt = _FakeAction("attack", 130, is_synthetic=True)
+    assert _possession_flips_after(a, nxt, contacts, cfg) is False
+
+
+def test_b1_degrades_when_next_action_is_synthetic() -> None:
+    """When next_action is synthetic, B.1 falls back to v13 rule (block stays)."""
+    cfg = ChainWalkerConfig(block_conditional=True, ball_trajectory_verifier=False)
+    contacts = [_make_contact_obj(100, "near"), _make_contact_obj(130, "far")]
+    a = _FakeAction("block", 100)
+    nxt = _FakeAction("attack", 130, is_synthetic=True)
+    # Sides differ, but next is synthetic → fall back to v13 (block stays)
+    assert _possession_flips_after(a, nxt, contacts, cfg) is False
