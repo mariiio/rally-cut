@@ -24,6 +24,7 @@ from rallycut.tracking.pose_attribution.features import KPT_LEFT_WRIST, KPT_RIGH
 if TYPE_CHECKING:
     from rallycut.court.calibration import CourtCalibrator
     from rallycut.court.net_line_estimator import NetLine
+    from rallycut.court.net_top_keypoint_reader import NetTopLine
     from rallycut.tracking.ball_tracker import BallPosition
     from rallycut.tracking.contact_classifier import ContactClassifier
     from rallycut.tracking.player_tracker import PlayerPosition
@@ -2176,6 +2177,7 @@ def _prepare_candidates(
     cfg: ContactDetectionConfig,
     court_corners: list[dict] | None = None,
     net_line: NetLine | None = None,
+    net_top_line: NetTopLine | None = None,
 ) -> _CandidatePrep:
     """Run candidate generation + supporting state computation.
 
@@ -2183,18 +2185,20 @@ def _prepare_candidates(
     on external state (input lists are not mutated; the noise-filtered
     `ball_positions` is returned as a NEW list inside `_CandidatePrep`).
 
-    `estimated_net_y` is derived in priority order:
-      1. `net_line` midpoint — `(top_left_xy.y + top_right_xy.y) / 2`,
+    `estimated_net_y` is derived in priority order (v9 SOTA cascade):
+      1. `net_top_line` midpoint — `(top_left_xy.y + top_right_xy.y) / 2`,
+         from `net_top_keypoint_reader.read_net_top` (direct keypoint
+         observation from the 8-kpt court model). Used when provided
+         AND no `"sanity_failed"` warning. Direct image observation of
+         the visible net tape — no geometry inference.
+      2. `net_line` midpoint — `(top_left_xy.y + top_right_xy.y) / 2`,
          from `estimate_net_line` (solvePnP via the 6-keypoint court
-         model). Used when `net_line` is provided AND its warnings
-         don't include `"sanity_failed"`. Probe N1 on 77 user-GT
-         videos: med |Δ|=0.009, worst 0.047, zero |Δ|>0.05.
-      2. `court_corners` M4 ridge — `predict_net_top_y(court_corners)`.
-         Used when no NetLine but corners exist. Same probe: med 0.008,
-         worst 0.222 (one wide-angle camera failure NLE rescues).
-      3. `estimate_net_position(ball_positions)` — v6 ball-trajectory
-         midpoint. Final fallback when neither NetLine nor corners are
-         available.
+         model). v8 fallback. Probe N1: med |Δ|=0.009, worst 0.047.
+      3. `court_corners` M4 ridge — `predict_net_top_y(court_corners)`.
+         v7 fallback when no learned-pose net-top output is available.
+         Same probe: med 0.008, worst 0.222 (yaya-class wide-angle).
+      4. `estimate_net_position(ball_positions)` — v6 ball-trajectory
+         midpoint. Final fallback when no calibration data exists.
 
     Returns a `_CandidatePrep` with `candidate_frames=[]` for any short-
     circuit case (no velocities, <3 frames, no candidates after generators).
@@ -2210,11 +2214,22 @@ def _prepare_candidates(
             ball_positions, cfg.noise_spike_max_jump
         )
 
-    # Step 2: Estimate net position. See docstring above for the priority
-    # order. NLE first (when usable); falls through to M4 (corners-only
-    # ridge), then to the v6 ball-trajectory midpoint.
+    # Step 2: Estimate net position. See docstring above for the v9 SOTA
+    # cascade. net_top_line (8-kpt direct observation) first, then
+    # net_line (solvePnP), then M4 (corners ridge), then v6 ball-traj.
     estimated_net_y: float | None = None
-    if net_line is not None and "sanity_failed" not in net_line.warnings:
+    if (
+        net_top_line is not None
+        and "sanity_failed" not in net_top_line.warnings
+    ):
+        estimated_net_y = (
+            net_top_line.top_left_xy[1] + net_top_line.top_right_xy[1]
+        ) / 2.0
+    if (
+        estimated_net_y is None
+        and net_line is not None
+        and "sanity_failed" not in net_line.warnings
+    ):
         estimated_net_y = (
             net_line.top_left_xy[1] + net_line.top_right_xy[1]
         ) / 2.0
@@ -2652,6 +2667,7 @@ def detect_contacts(
     team_assignments: dict[int, int] | None = None,
     court_calibrator: CourtCalibrator | None = None,
     net_line: NetLine | None = None,
+    net_top_line: NetTopLine | None = None,
     sequence_probs: np.ndarray | None = None,
     enable_rescue: bool = False,
     primary_track_ids: list[int] | None = None,
@@ -2692,6 +2708,14 @@ def detect_contacts(
             to the v6 ball-trajectory midpoint. Callers that have a
             video path should compute it once per video and pass the
             cached result to every rally in that video.
+        net_top_line: Optional precomputed `NetTopLine` from
+            `rallycut.court.net_top_keypoint_reader.read_net_top`. When
+            provided AND no sanity-failed warning, the L/R top-y
+            midpoint TAKES PRIORITY over `net_line` (v9 — direct
+            keypoint observation of the visible net top; no geometry
+            inference). Same cache discipline as `net_line` — compute
+            once per video, share across rallies. Falls back to
+            `net_line` → M4 → v6 cascade.
         sequence_probs: MS-TCN++ per-frame action probabilities, shape
             (NUM_CLASSES, T). When provided and `cfg.enable_sequence_recovery`
             is True, the main classifier loop rescues trajectory candidates
@@ -2754,6 +2778,7 @@ def detect_contacts(
         ball_positions, player_positions, cfg,
         court_corners=court_corners,
         net_line=net_line,
+        net_top_line=net_top_line,
     )
     if not prep.candidate_frames:
         return ContactSequence(net_y=prep.estimated_net_y)

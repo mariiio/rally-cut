@@ -2,15 +2,18 @@
 """Train YOLO-pose model for court keypoint detection.
 
 Fine-tunes a YOLO-pose model (COCO person-pose pretrained) on beach volleyball
-court keypoints. Predicts 6 keypoints:
-  0: near-left, 1: near-right, 2: far-right, 3: far-left (corners)
-  4: center-left, 5: center-right (net-sideline intersections)
+court keypoints. Output: 8 keypoints (v9 SOTA):
+  0: near-left, 1: near-right, 2: far-right, 3: far-left  (corners)
+  4: center-left, 5: center-right  (net-base sideline intersections)
+  6: net-top-left, 7: net-top-right  (net-top tape at each post)
 
-Requires dataset exported by export_court_keypoint_dataset.py.
+Requires dataset exported by export_court_keypoint_dataset.py. The
+`kpt_shape` and `flip_idx` come from the dataset YAML — this training
+script is keypoint-count-agnostic.
 
 Usage:
     uv run python scripts/train_court_keypoint_model.py
-    uv run python scripts/train_court_keypoint_model.py --data datasets/court_keypoints_v3/court_keypoints.yaml
+    uv run python scripts/train_court_keypoint_model.py --data datasets/court_keypoints_v6/court_keypoints.yaml
     uv run python scripts/train_court_keypoint_model.py --epochs 200
     uv run python scripts/train_court_keypoint_model.py --no-freeze  # Train full model
 """

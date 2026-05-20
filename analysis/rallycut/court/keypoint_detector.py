@@ -1,8 +1,13 @@
 """Court keypoint detection using YOLO11s-pose.
 
-Detects 6 court keypoints from video frames using a fine-tuned YOLO-pose model:
-  - 4 corners: near-left, near-right, far-right, far-left
-  - 2 center points: center-left, center-right (net-sideline intersections)
+Detects court keypoints from video frames using a fine-tuned YOLO-pose
+model. Supports 4, 6, or 8 keypoint output depending on the loaded
+model:
+  - 4 corners (always): near-left, near-right, far-right, far-left
+  - 2 center points (6-kpt+): center-left, center-right (net-sideline
+    intersections — net BASE on the ground plane)
+  - 2 net-top points (8-kpt, v9 SOTA): net-top-left, net-top-right
+    (the visible net-top tape at each post, image-space)
 
 Handles off-screen near corners via bottom padding (same as training).
 Center points are always visible in-frame and enable near-corner refinement
@@ -31,6 +36,8 @@ logger = logging.getLogger(__name__)
 
 CORNER_NAMES = ["near-left", "near-right", "far-right", "far-left"]
 CENTER_NAMES = ["center-left", "center-right"]
+# v9 (8-kpt model): net-top tape at the left + right posts.
+NET_TOP_NAMES = ["net-top-left", "net-top-right"]
 
 
 @dataclass
@@ -111,6 +118,10 @@ class FrameKeypoints:
     kpt_confidences: list[float]  # per-corner visibility/confidence (4 values)
     center_points: list[dict[str, float]] | None = None  # 2 center points [{x, y}] (6-kpt model)
     center_confidences: list[float] | None = None  # per-center-point confidence (2 values)
+    # v9 (8-kpt model): net-top tape at each post in image space.
+    # `net_top_points[0]` = net-top-left, `net_top_points[1]` = net-top-right.
+    net_top_points: list[dict[str, float]] | None = None
+    net_top_confidences: list[float] | None = None
 
 
 class CourtKeypointDetector:
@@ -343,8 +354,8 @@ class CourtKeypointDetector:
         kpt_conf = kpts.conf.cpu().numpy()[0] if kpts.conf is not None else np.ones(len(kpt_xy))
 
         n_kpts = len(kpt_xy)
-        if n_kpts not in (4, 6):
-            logger.warning(f"Expected 4 or 6 keypoints, got {n_kpts}")
+        if n_kpts not in (4, 6, 8):
+            logger.warning(f"Expected 4, 6, or 8 keypoints, got {n_kpts}")
             return None
 
         padded_h, padded_w = padded.shape[:2]
@@ -366,10 +377,10 @@ class CourtKeypointDetector:
             corners.append({"x": round(x_norm, 6), "y": round(y_orig, 6)})
             kpt_confidences.append(kc)
 
-        # Extract center points from 6-keypoint model
+        # Extract center points from 6-kpt or 8-kpt model.
         center_points: list[dict[str, float]] | None = None
         center_confidences: list[float] | None = None
-        if n_kpts == 6:
+        if n_kpts >= 6:
             center_points = []
             center_confidences = []
             for i in range(4, 6):
@@ -383,12 +394,31 @@ class CourtKeypointDetector:
                 center_points.append({"x": round(x_norm, 6), "y": round(y_orig, 6)})
                 center_confidences.append(kc)
 
+        # Extract net-top points from 8-kpt model (v9 SOTA).
+        net_top_points: list[dict[str, float]] | None = None
+        net_top_confidences: list[float] | None = None
+        if n_kpts == 8:
+            net_top_points = []
+            net_top_confidences = []
+            for i in range(6, 8):
+                x_px, y_px = float(kpt_xy[i][0]), float(kpt_xy[i][1])
+                kc = float(kpt_conf[i])
+
+                x_norm = x_px / padded_w
+                y_norm = y_px / padded_h
+                y_orig = y_norm * (1.0 + self._pad_ratio)
+
+                net_top_points.append({"x": round(x_norm, 6), "y": round(y_orig, 6)})
+                net_top_confidences.append(kc)
+
         return FrameKeypoints(
             corners=corners,
             confidence=best_conf,
             kpt_confidences=kpt_confidences,
             center_points=center_points,
             center_confidences=center_confidences,
+            net_top_points=net_top_points,
+            net_top_confidences=net_top_confidences,
         )
 
     # Max extrapolation beyond [0, 1] range for near corners.

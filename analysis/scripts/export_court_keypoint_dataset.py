@@ -40,12 +40,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 logger = logging.getLogger(__name__)
 
 KEYPOINT_NAMES = [
-    "near-left", "near-right", "far-right", "far-left",  # corners
-    "center-left", "center-right",  # net-sideline intersections
+    "near-left", "near-right", "far-right", "far-left",  # corners (0..3)
+    "center-left", "center-right",  # net-base (sideline x net) (4..5)
+    "net-top-left", "net-top-right",  # net-top tape at the posts (6..7) — v9 SOTA
 ]
 
-# Horizontal flip swaps left/right pairs
-FLIP_IDX = [1, 0, 3, 2, 5, 4]
+# Horizontal flip swaps left/right pairs (corners + centers + net-tops).
+FLIP_IDX = [1, 0, 3, 2, 5, 4, 7, 6]
 
 # Court dimensions for net intersection computation
 COURT_WIDTH = 8.0   # meters
@@ -107,11 +108,21 @@ def compute_net_intersections(
 
 
 def load_calibrated_videos() -> list[dict[str, Any]]:
-    """Load all videos with court calibration from the DB."""
+    """Load all videos with court calibration from the DB.
+
+    v9 SOTA: also fetches per-endpoint net-top GT (left_y, right_y,
+    visibility). Videos without v9 net-top labels are still loaded so
+    keypoints 0..5 (corners + center) train as before; net-top
+    keypoints fall through to visibility=0 (the trainer treats them
+    as missing data, not as wrong labels).
+    """
     from rallycut.evaluation.db import get_connection
 
     query = """
-        SELECT id, court_calibration_json, width, height, s3_key, content_hash
+        SELECT id, court_calibration_json, width, height, s3_key, content_hash,
+               court_calibration_net_top_left_y,
+               court_calibration_net_top_right_y,
+               court_calibration_net_top_endpoints_json
         FROM videos
         WHERE court_calibration_json IS NOT NULL
           AND deleted_at IS NULL
@@ -122,9 +133,13 @@ def load_calibrated_videos() -> list[dict[str, Any]]:
         with conn.cursor() as cur:
             cur.execute(query)
             for row in cur.fetchall():
-                vid_id, cal_json, width, height, s3_key, content_hash = row
+                (
+                    vid_id, cal_json, width, height, s3_key, content_hash,
+                    net_top_left_y, net_top_right_y, endpoints_json,
+                ) = row
                 if not isinstance(cal_json, list) or len(cal_json) != 4:
                     continue
+                vis = endpoints_json if isinstance(endpoints_json, dict) else {}
                 videos.append({
                     "id": str(vid_id),
                     "corners": cal_json,
@@ -132,6 +147,12 @@ def load_calibrated_videos() -> list[dict[str, Any]]:
                     "height": height or 1080,
                     "s3_key": s3_key,
                     "content_hash": content_hash,
+                    "net_top_left_y": net_top_left_y,
+                    "net_top_right_y": net_top_right_y,
+                    "net_top_left_vis": int(vis.get("leftVisibility", 0))
+                        if net_top_left_y is not None else 0,
+                    "net_top_right_vis": int(vis.get("rightVisibility", 0))
+                        if net_top_right_y is not None else 0,
                 })
 
     return videos
@@ -189,14 +210,25 @@ def keypoints_to_yolo_pose(
     keypoints_raw: list[dict[str, float]],
     orig_height: int,
     pad_ratio: float,
+    *,
+    explicit_visibility: list[int] | None = None,
 ) -> str | None:
-    """Convert 6 court keypoints to YOLO-pose annotation format.
+    """Convert N court keypoints to YOLO-pose annotation format.
 
     Args:
-        keypoints_raw: 6 keypoints [{x, y}] in normalized coords (may exceed [0,1]).
-            Order: near-left, near-right, far-right, far-left, center-left, center-right.
+        keypoints_raw: N keypoints [{x, y}] in normalized coords (may exceed [0,1]).
+            For the v9 8-keypoint corpus the order is:
+              0: near-left, 1: near-right, 2: far-right, 3: far-left
+              4: center-left, 5: center-right
+              6: net-top-left, 7: net-top-right
         orig_height: Original image height before padding.
         pad_ratio: Bottom padding ratio applied.
+        explicit_visibility: Optional per-keypoint visibility override
+            (one int per keypoint, length must match keypoints_raw).
+            Used for keypoints whose visibility comes from the user
+            labeler (net-top 6/7: 2=visible, 1=extrapolated, 0=skip)
+            rather than from coordinate geometry. When None, falls
+            back to geometric visibility (the legacy 6-keypoint path).
 
     Returns:
         YOLO-pose format string, or None if annotation is invalid.
@@ -205,29 +237,45 @@ def keypoints_to_yolo_pose(
     # Original y was normalized to orig_height, new total is orig_height * (1 + pad_ratio)
     scale_y = 1.0 / (1.0 + pad_ratio)
 
+    if explicit_visibility is not None and len(explicit_visibility) != len(keypoints_raw):
+        raise ValueError(
+            f"explicit_visibility length {len(explicit_visibility)} != "
+            f"keypoints length {len(keypoints_raw)}"
+        )
+
     keypoints = []
-    for kp in keypoints_raw:
+    for idx, kp in enumerate(keypoints_raw):
         x = kp["x"]
         y = kp["y"] * scale_y  # Rescale to padded image
 
-        # Determine visibility
-        # scale_y marks boundary between original image and padding in padded coords
-        # 2 = visible (in original image), 1 = occluded (in padding zone), 0 = off-canvas
-        if 0 <= x <= 1 and 0 <= y <= scale_y:
-            vis = 2
-        elif 0 <= x <= 1 and y <= 1.0:
-            vis = 1  # In padded area
+        if explicit_visibility is not None:
+            # Caller-supplied visibility (user labeler for net-top kp).
+            # Still clamp coords because the trainer expects [0,1].
+            vis = explicit_visibility[idx]
         else:
-            vis = 0  # Beyond padded canvas
+            # Geometric visibility — legacy 6-keypoint path.
+            # scale_y marks boundary between original image and padding in padded coords
+            # 2 = visible (in original image), 1 = occluded (in padding zone), 0 = off-canvas
+            if 0 <= x <= 1 and 0 <= y <= scale_y:
+                vis = 2
+            elif 0 <= x <= 1 and y <= 1.0:
+                vis = 1  # In padded area
+            else:
+                vis = 0  # Beyond padded canvas
 
         # Clamp to [0, 1] for YOLO format
         x_clamped = max(0.0, min(1.0, x))
         y_clamped = max(0.0, min(1.0, y))
         keypoints.append((x_clamped, y_clamped, vis))
 
-    # Compute bounding box from ALL keypoints (in padded space)
-    xs = [kp["x"] for kp in keypoints_raw]
-    ys = [kp["y"] * scale_y for kp in keypoints_raw]
+    # Compute bounding box from VISIBLE keypoints only (in padded space).
+    # Including invisible kp (vis=0) would drag the bbox off the actual
+    # court extents on videos where net-top labels are missing.
+    visible_idxs = [i for i, kp in enumerate(keypoints) if kp[2] > 0]
+    if not visible_idxs:
+        return None
+    xs = [keypoints_raw[i]["x"] for i in visible_idxs]
+    ys = [keypoints_raw[i]["y"] * scale_y for i in visible_idxs]
 
     # Clamp bbox to [0, 1]
     x_min = max(0.0, min(xs))
@@ -379,17 +427,57 @@ def main() -> None:
         # Extract frames
         frames = extract_frames(video_path, args.frames_per_video, args.seed + vi)
 
-        # Compute net-sideline intersection points from GT corners
+        # Compute net-sideline intersection points from GT corners (kp 4, 5).
+        # These are the net BASE positions on the ground plane.
         center_left, center_right = compute_net_intersections(corners)
-        all_keypoints = corners + [center_left, center_right]  # 6 keypoints
+        # v9: net-TOP keypoints (kp 6, 7) sit at the SAME x as the
+        # base centers (net posts are vertical in court space), with the
+        # user-labeled y. Visibility is the user labeler's flag — 0
+        # when this video has no v9 label or the labeler marked it
+        # not-visible, in which case the trainer treats kp 6/7 as
+        # missing data and keypoints 0..5 train as before.
+        net_top_left_y = video.get("net_top_left_y")
+        net_top_right_y = video.get("net_top_right_y")
+        net_top_left = {
+            "x": center_left["x"],
+            "y": net_top_left_y if net_top_left_y is not None else 0.0,
+        }
+        net_top_right = {
+            "x": center_right["x"],
+            "y": net_top_right_y if net_top_right_y is not None else 0.0,
+        }
+        all_keypoints = corners + [center_left, center_right, net_top_left, net_top_right]
 
         exported = 0
         for fi, frame in enumerate(frames):
             # Pad frame
             padded = pad_frame_bottom(frame, args.pad_ratio)
 
+            # Build the explicit-visibility list. For kp 0..5 (None), we
+            # let `keypoints_to_yolo_pose` compute geometric visibility
+            # at the same time it would have. Easiest path: compute the
+            # geometric visibility for kp 0..5 once via a dry pre-pass,
+            # then assemble the full 8-element list.
+            scale_y = 1.0 / (1.0 + args.pad_ratio)
+            geometric_vis: list[int] = []
+            for kp in all_keypoints[:6]:
+                x, y = kp["x"], kp["y"] * scale_y
+                if 0 <= x <= 1 and 0 <= y <= scale_y:
+                    geometric_vis.append(2)
+                elif 0 <= x <= 1 and y <= 1.0:
+                    geometric_vis.append(1)
+                else:
+                    geometric_vis.append(0)
+            explicit_vis: list[int] = geometric_vis + [
+                int(video.get("net_top_left_vis", 0)),
+                int(video.get("net_top_right_vis", 0)),
+            ]
+
             # Create annotation
-            label = keypoints_to_yolo_pose(all_keypoints, frame.shape[0], args.pad_ratio)
+            label = keypoints_to_yolo_pose(
+                all_keypoints, frame.shape[0], args.pad_ratio,
+                explicit_visibility=explicit_vis,
+            )
             if label is None:
                 total_skipped += 1
                 continue
@@ -444,8 +532,8 @@ path: {args.output_dir.resolve()}
 train: images/train
 val: images/val
 
-kpt_shape: [6, 3]  # 6 keypoints, 3 dims (x, y, visibility)
-flip_idx: {FLIP_IDX}  # left<->right pairs: NL-NR, FL-FR, CL-CR
+kpt_shape: [8, 3]  # 8 keypoints (v9 SOTA), 3 dims (x, y, visibility)
+flip_idx: {FLIP_IDX}  # left<->right pairs: NL-NR, FL-FR, CL-CR, NTL-NTR
 
 names:
   0: court
