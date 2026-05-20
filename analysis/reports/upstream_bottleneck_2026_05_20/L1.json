@@ -1,0 +1,406 @@
+{
+  "n_total_wrong": 166,
+  "n_l1_failures": 39,
+  "by_category": {
+    "long_gap_gt_10": 35,
+    "short_gap_le_10": 4
+  },
+  "oracle_recoveries": 19,
+  "realistic_recoveries": {
+    "widen_pm10": 4,
+    "widen_pm15": 11,
+    "interpolate_short_gap": 1
+  },
+  "failures": [
+    {
+      "rally_id": "2e8b3ce2-6396-4d1b-bf1b-77e384180bea",
+      "video": "gugu",
+      "action_frame": 183,
+      "action_type": "set",
+      "pipeline_pid": 2,
+      "gt_pid": 4,
+      "category": "long_gap_gt_10",
+      "min_gap": 12
+    },
+    {
+      "rally_id": "fb6e37bf-0f0d-4c38-a8c0-3a5f81e2998d",
+      "video": "wawa",
+      "action_frame": 446,
+      "action_type": "attack",
+      "pipeline_pid": 2,
+      "gt_pid": 4,
+      "category": "long_gap_gt_10",
+      "min_gap": 13
+    },
+    {
+      "rally_id": "cbf17cce-7899-4fda-8807-23abeb76fc23",
+      "video": "yeye",
+      "action_frame": 300,
+      "action_type": "dig",
+      "pipeline_pid": 1,
+      "gt_pid": 2,
+      "category": "long_gap_gt_10",
+      "min_gap": 25
+    },
+    {
+      "rally_id": "047c5e5f-6c57-4b02-a5ae-7700dd72910f",
+      "video": "papa",
+      "action_frame": 93,
+      "action_type": "receive",
+      "pipeline_pid": 2,
+      "gt_pid": 3,
+      "category": "long_gap_gt_10",
+      "min_gap": 62
+    },
+    {
+      "rally_id": "6022138d-db87-465e-892d-aa58ea4e9d6f",
+      "video": "juju",
+      "action_frame": 124,
+      "action_type": "receive",
+      "pipeline_pid": 101,
+      "gt_pid": 4,
+      "category": "long_gap_gt_10",
+      "min_gap": 19
+    },
+    {
+      "rally_id": "6022138d-db87-465e-892d-aa58ea4e9d6f",
+      "video": "juju",
+      "action_frame": 217,
+      "action_type": "attack",
+      "pipeline_pid": 1,
+      "gt_pid": 4,
+      "category": "long_gap_gt_10",
+      "min_gap": 32
+    },
+    {
+      "rally_id": "bc9345c1-2655-4d40-8152-45ab8cd6d81b",
+      "video": "gigi",
+      "action_frame": 112,
+      "action_type": "serve",
+      "pipeline_pid": 1,
+      "gt_pid": 2,
+      "category": "long_gap_gt_10",
+      "min_gap": 84
+    },
+    {
+      "rally_id": "44351174-40f0-4cde-aa88-b4a7ded8193b",
+      "video": "koko",
+      "action_frame": 128,
+      "action_type": "receive",
+      "pipeline_pid": 4,
+      "gt_pid": 1,
+      "category": "long_gap_gt_10",
+      "min_gap": 75
+    },
+    {
+      "rally_id": "2cb28662-ea49-4c0c-b34d-11d165b3ac0f",
+      "video": "koko",
+      "action_frame": 697,
+      "action_type": "attack",
+      "pipeline_pid": 4,
+      "gt_pid": 2,
+      "category": "long_gap_gt_10",
+      "min_gap": 162
+    },
+    {
+      "rally_id": "2cb28662-ea49-4c0c-b34d-11d165b3ac0f",
+      "video": "koko",
+      "action_frame": 846,
+      "action_type": "dig",
+      "pipeline_pid": 3,
+      "gt_pid": 1,
+      "category": "long_gap_gt_10",
+      "min_gap": 24
+    },
+    {
+      "rally_id": "89590b77-63c3-4192-8bf9-fda19df56932",
+      "video": "koko",
+      "action_frame": 114,
+      "action_type": "serve",
+      "pipeline_pid": -1,
+      "gt_pid": 3,
+      "category": "long_gap_gt_10",
+      "min_gap": 16
+    },
+    {
+      "rally_id": "86c77c1a-271d-41c1-bf3d-9d5db1ea2caf",
+      "video": "koko",
+      "action_frame": 149,
+      "action_type": "serve",
+      "pipeline_pid": 1,
+      "gt_pid": 2,
+      "category": "long_gap_gt_10",
+      "min_gap": 35
+    },
+    {
+      "rally_id": "72c8229b-2993-4310-9b61-cd6162cc27fa",
+      "video": "gigi",
+      "action_frame": 95,
+      "action_type": "serve",
+      "pipeline_pid": 1,
+      "gt_pid": 2,
+      "category": "long_gap_gt_10",
+      "min_gap": 48
+    },
+    {
+      "rally_id": "71a3a742-b51d-4706-927f-b2f257aa84ad",
+      "video": "koko",
+      "action_frame": 118,
+      "action_type": "receive",
+      "pipeline_pid": 1,
+      "gt_pid": 3,
+      "category": "long_gap_gt_10",
+      "min_gap": 32
+    },
+    {
+      "rally_id": "5447e090-a258-4773-bdf2-1f3387fa698c",
+      "video": "moma",
+      "action_frame": 86,
+      "action_type": "receive",
+      "pipeline_pid": 2,
+      "gt_pid": 3,
+      "category": "long_gap_gt_10",
+      "min_gap": 36
+    },
+    {
+      "rally_id": "79ecfb2d-ac7c-46df-9ef7-c07dc117bc2f",
+      "video": "cece",
+      "action_frame": 88,
+      "action_type": "serve",
+      "pipeline_pid": 2,
+      "gt_pid": 1,
+      "category": "short_gap_le_10",
+      "min_gap": 6
+    },
+    {
+      "rally_id": "d0d64de1-b63e-4fff-8b13-cb0e2ed1a09d",
+      "video": "cuco",
+      "action_frame": 40,
+      "action_type": "serve",
+      "pipeline_pid": 1,
+      "gt_pid": 2,
+      "category": "long_gap_gt_10",
+      "min_gap": 50
+    },
+    {
+      "rally_id": "4c993a75-1bca-4589-b15d-8f6126401123",
+      "video": "mumu",
+      "action_frame": 61,
+      "action_type": "serve",
+      "pipeline_pid": 2,
+      "gt_pid": 3,
+      "category": "long_gap_gt_10",
+      "min_gap": 24
+    },
+    {
+      "rally_id": "a0aba15e-06e9-4502-8d89-b1cf2d80a908",
+      "video": "kiki",
+      "action_frame": 776,
+      "action_type": "dig",
+      "pipeline_pid": 2,
+      "gt_pid": 3,
+      "category": "long_gap_gt_10",
+      "min_gap": 56
+    },
+    {
+      "rally_id": "a0aba15e-06e9-4502-8d89-b1cf2d80a908",
+      "video": "kiki",
+      "action_frame": 867,
+      "action_type": "set",
+      "pipeline_pid": 1,
+      "gt_pid": 4,
+      "category": "long_gap_gt_10",
+      "min_gap": 103
+    },
+    {
+      "rally_id": "248aaf83-2c48-4570-887a-8144a7cfe3d7",
+      "video": "toto",
+      "action_frame": 59,
+      "action_type": "serve",
+      "pipeline_pid": -1,
+      "gt_pid": 4,
+      "category": "long_gap_gt_10",
+      "min_gap": 14
+    },
+    {
+      "rally_id": "248aaf83-2c48-4570-887a-8144a7cfe3d7",
+      "video": "toto",
+      "action_frame": 371,
+      "action_type": "dig",
+      "pipeline_pid": 1,
+      "gt_pid": 4,
+      "category": "long_gap_gt_10",
+      "min_gap": 14
+    },
+    {
+      "rally_id": "9e515aaf-66fc-4893-a434-73d58dc1edc7",
+      "video": "kuku",
+      "action_frame": 353,
+      "action_type": "set",
+      "pipeline_pid": 1,
+      "gt_pid": 3,
+      "category": "long_gap_gt_10",
+      "min_gap": 29
+    },
+    {
+      "rally_id": "73501ab3-9e6f-4347-ad94-b487efacb5e1",
+      "video": "kuku",
+      "action_frame": 254,
+      "action_type": "receive",
+      "pipeline_pid": 3,
+      "gt_pid": 2,
+      "category": "long_gap_gt_10",
+      "min_gap": 132
+    },
+    {
+      "rally_id": "bbb22a1a-0079-4172-9605-2cd34d2999b3",
+      "video": "mimi",
+      "action_frame": 78,
+      "action_type": "serve",
+      "pipeline_pid": -1,
+      "gt_pid": 2,
+      "category": "long_gap_gt_10",
+      "min_gap": 12
+    },
+    {
+      "rally_id": "c3b31af2-41ba-49f3-9f18-917a4fd9d924",
+      "video": "mimi",
+      "action_frame": 47,
+      "action_type": "serve",
+      "pipeline_pid": -1,
+      "gt_pid": 4,
+      "category": "long_gap_gt_10",
+      "min_gap": 47
+    },
+    {
+      "rally_id": "77026e92-1322-4f44-8f0c-5566b6bcde52",
+      "video": "keke",
+      "action_frame": 288,
+      "action_type": "attack",
+      "pipeline_pid": 1,
+      "gt_pid": 3,
+      "category": "short_gap_le_10",
+      "min_gap": 10
+    },
+    {
+      "rally_id": "e5327806-ad8e-407f-af27-e7b10b3db5dc",
+      "video": "meme",
+      "action_frame": 187,
+      "action_type": "attack",
+      "pipeline_pid": 4,
+      "gt_pid": 1,
+      "category": "long_gap_gt_10",
+      "min_gap": 11
+    },
+    {
+      "rally_id": "0c58108f-05d5-44b1-a23b-5a7a34b83cfd",
+      "video": "koko",
+      "action_frame": 122,
+      "action_type": "serve",
+      "pipeline_pid": 4,
+      "gt_pid": 2,
+      "category": "long_gap_gt_10",
+      "min_gap": 63
+    },
+    {
+      "rally_id": "f373c7c1-0577-4ae9-9e3d-eb787fcd7590",
+      "video": "mumu",
+      "action_frame": 69,
+      "action_type": "serve",
+      "pipeline_pid": 2,
+      "gt_pid": 3,
+      "category": "long_gap_gt_10",
+      "min_gap": 23
+    },
+    {
+      "rally_id": "ea6059d2-5e7c-45f9-9e19-9968757062c3",
+      "video": "kiki",
+      "action_frame": 548,
+      "action_type": "set",
+      "pipeline_pid": 2,
+      "gt_pid": 3,
+      "category": "long_gap_gt_10",
+      "min_gap": 64
+    },
+    {
+      "rally_id": "5b23ee5f-00aa-463a-a3dd-d7c49fa6fd39",
+      "video": "caco",
+      "action_frame": 51,
+      "action_type": "serve",
+      "pipeline_pid": 1,
+      "gt_pid": 3,
+      "category": "long_gap_gt_10",
+      "min_gap": 44
+    },
+    {
+      "rally_id": "fcbd34b5-32ca-4492-b1aa-3b26a17eae3f",
+      "video": "pepe",
+      "action_frame": 68,
+      "action_type": "serve",
+      "pipeline_pid": -1,
+      "gt_pid": 1,
+      "category": "long_gap_gt_10",
+      "min_gap": 57
+    },
+    {
+      "rally_id": "a43fb033-44fc-42bf-98d2-af34d5d6a9bb",
+      "video": "pepe",
+      "action_frame": 252,
+      "action_type": "attack",
+      "pipeline_pid": 4,
+      "gt_pid": 1,
+      "category": "short_gap_le_10",
+      "min_gap": 10
+    },
+    {
+      "rally_id": "861054de-846e-4977-9084-5400863b8e9c",
+      "video": "kuku",
+      "action_frame": 782,
+      "action_type": "dig",
+      "pipeline_pid": 1,
+      "gt_pid": 4,
+      "category": "short_gap_le_10",
+      "min_gap": 6
+    },
+    {
+      "rally_id": "a11d3733-b1a4-4dc6-bf08-0b6ba27ff510",
+      "video": "gaga",
+      "action_frame": 292,
+      "action_type": "set",
+      "pipeline_pid": 2,
+      "gt_pid": 4,
+      "category": "long_gap_gt_10",
+      "min_gap": 22
+    },
+    {
+      "rally_id": "19089729-0162-47b7-94f0-b401231a3d44",
+      "video": "gaga",
+      "action_frame": 89,
+      "action_type": "serve",
+      "pipeline_pid": 1,
+      "gt_pid": 3,
+      "category": "long_gap_gt_10",
+      "min_gap": 32
+    },
+    {
+      "rally_id": "1e38daab-c435-4298-8788-cafb19c18171",
+      "video": "titi",
+      "action_frame": 83,
+      "action_type": "receive",
+      "pipeline_pid": 2,
+      "gt_pid": 1,
+      "category": "long_gap_gt_10",
+      "min_gap": 19
+    },
+    {
+      "rally_id": "4c0f4c83-28e2-48a6-a0db-45a2970f54ed",
+      "video": "yeye",
+      "action_frame": 277,
+      "action_type": "set",
+      "pipeline_pid": 3,
+      "gt_pid": 1,
+      "category": "long_gap_gt_10",
+      "min_gap": 11
+    }
+  ]
+}
