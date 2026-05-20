@@ -165,6 +165,15 @@ def main() -> int:
         results[action] = {"n_contacts": len(rows)}
         for frac in FRACTIONS:
             n = max(int(len(rows) * frac), 5)
+            if n < 10:
+                # Single-fraction guard for actions like BLOCK (n=26) where
+                # smaller fractions become measurement noise rather than signal.
+                results[action][f"frac_{frac}"] = float("nan")
+                print(f"  {action} frac={frac}: n_rows={n} too small, recording NaN",
+                      flush=True)
+                continue
+            # Re-seed each fraction so subsets are nested
+            # (25% ⊆ 50% ⊆ 75% ⊆ 100%) — supports learning-curve interpretation.
             rng = np.random.default_rng(42)
             sub = rng.choice(len(rows), size=n, replace=False)
             rows_sub = [rows[i] for i in sub]
