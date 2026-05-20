@@ -367,8 +367,6 @@ def main() -> None:
         except Exception as e:
             errors += 1
             print(f"  ERROR {rally_id[:8]}: {e}")
-            import traceback as _tb_debug
-            _tb_debug.print_exc()
 
     elapsed = time.monotonic() - t_start
     print(f"\nDone: {updated} updated, {skipped} skipped, {errors} errors ({elapsed:.1f}s)")

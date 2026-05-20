@@ -196,7 +196,14 @@ logger = logging.getLogger(__name__)
 #          Targets the 64 missed flips + 20 over-flips identified
 #          by probe_gt_net_crossings_2026_05_20 (commit e41bfa1c).
 #          Spec: docs/superpowers/specs/2026-05-20-chain-walker-v14-design.md
-ACTION_PIPELINE_VERSION = "v14"
+# v15 (2026-05-20): Sub-lever 2 A/B verdict. WALKER_BLOCK_CONDITIONAL
+#          default flipped ON (delivers +2 attribution / 0 protected-
+#          video regressions on trusted-31 A/B). WALKER_BALL_TRAJECTORY_VERIFIER
+#          stays default OFF (A/B: -11 attribution, regresses 3 of 5
+#          protected videos — production Contact.court_side is too noisy
+#          near the net for physical-truth override). v15 production
+#          behavior = v13 + BLOCK conditional flip.
+ACTION_PIPELINE_VERSION = "v15"
 
 # Sub-lever 1 guardrail (Branch A): when chain-aware and no-chain scorer
 # picks disagree, prefer the higher-confidence one. Default OFF. Set
@@ -2787,7 +2794,7 @@ _SAME_SIDE_ACTIONS = {ActionType.RECEIVE, ActionType.SET, ActionType.DIG}
 # byte-identical to the v13 inline rule (action.action_type in
 # _NET_CROSSING_ACTIONS).
 _WALKER_BLOCK_CONDITIONAL = (
-    os.environ.get("WALKER_BLOCK_CONDITIONAL", "0").lower() in ("1", "true", "yes")
+    os.environ.get("WALKER_BLOCK_CONDITIONAL", "1").lower() in ("1", "true", "yes")
 )
 _WALKER_BALL_TRAJECTORY_VERIFIER = (
     os.environ.get("WALKER_BALL_TRAJECTORY_VERIFIER", "0").lower() in ("1", "true", "yes")
